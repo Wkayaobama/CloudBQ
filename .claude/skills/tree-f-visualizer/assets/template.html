@@ -1,0 +1,219 @@
+<title>__TITLE__</title>
+<style>
+/* Layout: console-style listing on the left (its own horizontal scroll), sticky details panel on the right; stacks at phone width. */
+:root {
+  --bg: #f4f6f9; --panel: #ffffff; --fg: #1b2430; --muted: #5b6878; --line: #d6dde6; --accent: #2456a6; --accent-fg: #ffffff;
+  --glyph: #8b98a8; --hover: #e9eef5; --sel: #dfe8f7;
+  --par-parallel: #e2f0d9; --par-conditional: #fff2cc; --par-divergent: #f8cbad; --par-fg: #1b2430;
+  --st-new: #1f8a4c; --st-modify: #b7791f; --st-proposed: #7a6ff0;
+  --mono: "Cascadia Mono", "Consolas", "SF Mono", ui-monospace, Menlo, monospace;
+  --sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a4b3; --line: #2a3442; --accent: #7aa7ff; --accent-fg: #0f141b;
+  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247;
+  --par-parallel: #244a2c; --par-conditional: #5a4a12; --par-divergent: #6a3419; --par-fg: #e4e9f0;
+  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a4b3; --line: #2a3442; --accent: #7aa7ff; --accent-fg: #0f141b;
+  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247;
+  --par-parallel: #244a2c; --par-conditional: #5a4a12; --par-divergent: #6a3419; --par-fg: #e4e9f0;
+  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; }
+.wrap { max-width: 1400px; margin: 0 auto; padding-block: 16px 32px; padding-inline: 16px; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+header h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
+header .counts { color: var(--muted); font-variant-numeric: tabular-nums; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-right: 2px; }
+button.chip { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+button.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.chip:focus-visible, button.btn:focus-visible, .row:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input#q { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); min-width: 180px; }
+button.btn { font: inherit; font-size: 13px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } .details { position: static; } }
+.listing { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; min-width: 0; }
+.listing pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.5; white-space: pre; }
+.hdr { color: var(--muted); }
+.row { display: inline; cursor: pointer; border-radius: 3px; padding-inline: 2px; }
+.row:hover { background: var(--hover); }
+.row.selected { background: var(--sel); }
+.g { color: var(--glyph); }
+.dir .nm { font-weight: 650; }
+.nm.proposed { font-style: italic; border-bottom: 1px dashed var(--st-proposed); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; border: 1px solid transparent; }
+.dot.Parallel { background: var(--par-parallel); border-color: #7fb069; } .dot.Conditional { background: var(--par-conditional); border-color: #d6b24a; } .dot.Divergent { background: var(--par-divergent); border-color: #e08a5a; }
+.dot.none { background: transparent; border-color: var(--line); }
+.st { margin-left: 8px; font-size: 11px; color: var(--muted); }
+.st.new { color: var(--st-new); } .st.modify { color: var(--st-modify); } .st.proposed { color: var(--st-proposed); }
+.fold { color: var(--muted); }
+.details { position: sticky; top: env(safe-area-inset-top, 0px); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.details h2 { margin: 0 0 6px; font-size: 14px; font-family: var(--mono); word-break: break-all; }
+.details .empty { color: var(--muted); }
+dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; margin: 10px 0 0; }
+dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pill { display: inline-block; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: 600; color: var(--par-fg); }
+.pill.Parallel { background: var(--par-parallel); } .pill.Conditional { background: var(--par-conditional); } .pill.Divergent { background: var(--par-divergent); }
+.pill.status { background: var(--hover); color: var(--fg); }
+.pill.status.new { color: var(--st-new); } .pill.status.modify { color: var(--st-modify); } .pill.status.proposed { color: var(--st-proposed); border: 1px dashed var(--st-proposed); background: transparent; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; align-items: center; }
+.legend .dot { margin-right: 4px; }
+.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+code { font-family: var(--mono); font-size: 12.5px; }
+textarea.sr { position: absolute; left: -9999px; top: 0; }
+@media (prefers-reduced-motion: no-preference) { .row { transition: background 80ms linear; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1 id="title">__TITLE__</h1>
+    <span class="counts" id="counts"></span>
+  </header>
+  <div class="toolbar">
+    <div class="group" id="scenarios"><span class="lbl">Scenario</span></div>
+    <div class="group" id="statuses"><span class="lbl">Status</span></div>
+    <div class="group"><input id="q" type="search" placeholder="Filter paths…" aria-label="Filter paths"></div>
+    <div class="group"><button class="btn" id="copy" type="button">Copy as tree /f</button><button class="chip" id="expand" type="button">Expand all</button><button class="chip" id="collapse" type="button">Collapse dirs</button></div>
+  </div>
+  <div class="main">
+    <section class="listing" aria-label="Directory listing"><pre id="tree"></pre></section>
+    <aside class="details" id="details" aria-live="polite"><div class="empty">Select a file or folder to see its role, layer, status and parity.</div></aside>
+  </div>
+  <div class="legend" id="legend">
+    <span><i class="dot Parallel"></i>Parallel — same mechanism, same result</span>
+    <span><i class="dot Conditional"></i>Conditional — same result under a stated condition</span>
+    <span><i class="dot Divergent"></i>Divergent — different mechanism, remediation makes it equivalent</span>
+    <span><i class="nm proposed">proposed</i> — not on disk yet</span>
+  </div>
+  <textarea class="sr" id="clip" aria-hidden="true" tabindex="-1"></textarea>
+</div>
+
+<script>
+(() => {
+  const M = /*__MANIFEST__*/;
+  const $ = (s) => document.querySelector(s);
+  const scenarioIds = Object.keys(M.scenarios || {});
+  const state = { scenario: M.scenario_filter || 'all', statuses: new Set(M.statuses), q: '', selected: null, collapsed: new Set() };
+  try { const s = localStorage.getItem('treef.scenario'); if (s && (s === 'all' || scenarioIds.includes(s))) state.scenario = s; } catch (e) {}
+
+  // ---- filtering -----------------------------------------------------------------------------
+  const matches = (n) => {
+    const a = n.ann || {};
+    const stOk = state.statuses.has(a.status || 'existing');
+    const scOk = state.scenario === 'all' || (a.scenarios || []).includes(state.scenario);
+    const qOk = !state.q || n.path.toLowerCase().includes(state.q);
+    return stOk && scOk && qOk;
+  };
+  const prune = (n) => {
+    if (n.kind === 'dir') {
+      const kids = (n.children || []).map(prune).filter(Boolean);
+      const own = matches(n) && (state.scenario === 'all' || n.ann);
+      if (kids.length || own) return Object.assign({}, n, { children: kids });
+      return null;
+    }
+    return matches(n) ? n : null;
+  };
+  const view = () => { const t = prune(M.tree); return t || Object.assign({}, M.tree, { children: [] }); };
+
+  // ---- tree /f text (same algorithm as scripts/tree_f.py) --------------------------------------
+  const ascii = (t) => {
+    const out = [`Folder PATH listing for volume ${M.volume}`, `Volume serial number is ${M.serial}`, M.root_label];
+    const emit = (d, prefix) => {
+      const kids = d.children || [], files = kids.filter(k => k.kind !== 'dir'), dirs = kids.filter(k => k.kind === 'dir');
+      const col = dirs.length ? '│   ' : '    ';
+      for (const f of files) out.push(prefix + col + f.name);
+      if (dirs.length) {
+        if (files.length) out.push(prefix + '│');
+        dirs.forEach((sub, i) => { const last = i === dirs.length - 1; out.push(prefix + (last ? '└───' : '├───') + sub.name); emit(sub, prefix + (last ? '    ' : '│   ')); });
+      } else out.push(prefix.replace(/\s+$/, ''));
+    };
+    emit(t, '');
+    return out.join('\n') + '\n';
+  };
+
+  // ---- rendering ---------------------------------------------------------------------------------
+  const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const nameHtml = (n) => {
+    const a = n.ann || {}; const st = a.status || 'existing'; const proposed = n.exists === false || st === 'proposed';
+    const dot = a.parity ? `<i class="dot ${a.parity}" title="${a.parity}"></i>` : (n.ann ? '<i class="dot none"></i>' : '');
+    const tag = st !== 'existing' ? `<span class="st ${st}">${st}</span>` : '';
+    return `${dot}<span class="nm${proposed ? ' proposed' : ''}">${esc(n.name)}</span>${tag}`;
+  };
+  const render = () => {
+    const t = view(); const pre = $('#tree'); const rows = [];
+    rows.push(`<span class="hdr">Folder PATH listing for volume ${esc(M.volume)}\nVolume serial number is ${esc(M.serial)}</span>\n`);
+    rows.push(`<span class="row dir${state.selected === t.path ? ' selected' : ''}" data-path="${esc(t.path)}" tabindex="0">${esc(M.root_label)}</span>\n`);
+    const emit = (d, prefix) => {
+      const kids = d.children || [], files = kids.filter(k => k.kind !== 'dir'), dirs = kids.filter(k => k.kind === 'dir');
+      const col = dirs.length ? '│   ' : '    ';
+      for (const f of files) rows.push(`<span class="g">${esc(prefix + col)}</span><span class="row file${state.selected === f.path ? ' selected' : ''}" data-path="${esc(f.path)}" tabindex="0">${nameHtml(f)}</span>\n`);
+      if (dirs.length) {
+        if (files.length) rows.push(`<span class="g">${esc(prefix + '│')}</span>\n`);
+        dirs.forEach((sub, i) => {
+          const last = i === dirs.length - 1; const folded = state.collapsed.has(sub.path);
+          const n = (sub.children || []).length;
+          rows.push(`<span class="g">${esc(prefix + (last ? '└───' : '├───'))}</span><span class="row dir${state.selected === sub.path ? ' selected' : ''}" data-path="${esc(sub.path)}" tabindex="0">${nameHtml(sub)}${folded ? ` <span class="fold">[+${n}]</span>` : ''}</span>\n`);
+          if (!folded) emit(sub, prefix + (last ? '    ' : '│   '));
+          else rows.push(`<span class="g">${esc((prefix + (last ? '    ' : '│   ')).replace(/\s+$/, ''))}</span>\n`);
+        });
+      } else rows.push(`<span class="g">${esc(prefix.replace(/\s+$/, ''))}</span>\n`);
+    };
+    emit(t, '');
+    pre.innerHTML = rows.join('');
+    const c = M.counts; const lab = state.scenario === 'all' ? 'all scenarios' : `scenario ${state.scenario}`;
+    $('#counts').textContent = `${c.dirs} folders · ${c.files} files · ${c.annotated} annotated · ${c.proposed} proposed · showing ${lab}`;
+    renderDetails();
+  };
+  const find = (path, n = M.tree) => { if (n.path === path) return n; for (const c of (n.children || [])) { const r = find(path, c); if (r) return r; } return null; };
+  const renderDetails = () => {
+    const box = $('#details'); const n = state.selected !== null ? find(state.selected) : null;
+    if (!n) { box.innerHTML = '<div class="empty">Select a file or folder to see its role, layer, status and parity.</div>'; return; }
+    const a = n.ann || {}; const st = a.status || (n.exists === false ? 'proposed' : 'existing');
+    const scen = (a.scenarios || []).map(s => `<span class="pill status">${esc(s)}</span> ${esc(M.scenarios[s] || '')}`).join('<br>');
+    const layer = a.layer ? `<code>${esc(a.layer)}</code> ${esc((M.layers || {})[a.layer] || '')}` : '';
+    box.innerHTML = `<h2>${esc(n.path || M.root_label)}</h2>
+      <div><span class="pill status ${st}">${st}</span> <span class="pill status">${n.kind}</span> ${a.parity ? `<span class="pill ${a.parity}">${a.parity}</span>` : ''}</div>
+      <dl>
+        ${a.role ? `<dt>Role</dt><dd>${esc(a.role)}</dd>` : ''}
+        ${scen ? `<dt>Scenarios</dt><dd>${scen}</dd>` : ''}
+        ${layer ? `<dt>Layer</dt><dd>${layer}</dd>` : ''}
+        ${a.notes ? `<dt>Notes</dt><dd>${esc(a.notes)}</dd>` : ''}
+        ${a.recipe ? `<dt>Recipe</dt><dd><code>${esc(a.recipe)}</code></dd>` : ''}
+        ${!n.ann ? `<dt>Annotation</dt><dd class="empty">none — add this path to the annotations file to describe it</dd>` : ''}
+      </dl>`;
+  };
+
+  // ---- controls ---------------------------------------------------------------------------------
+  const chip = (parent, id, label, pressed, onClick) => {
+    const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = label; b.dataset.id = id;
+    b.setAttribute('aria-pressed', String(pressed)); b.addEventListener('click', () => onClick(b)); parent.appendChild(b); return b;
+  };
+  const sc = $('#scenarios');
+  const scChips = [chip(sc, 'all', 'All', state.scenario === 'all', pick)].concat(scenarioIds.map(id => chip(sc, id, `${id} · ${M.scenarios[id]}`, state.scenario === id, pick)));
+  function pick(b) { state.scenario = b.dataset.id; scChips.forEach(c => c.setAttribute('aria-pressed', String(c === b))); try { localStorage.setItem('treef.scenario', state.scenario); } catch (e) {} render(); }
+  const stBox = $('#statuses');
+  M.statuses.forEach(s => chip(stBox, s, s, true, (b) => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); if (on) state.statuses.add(s); else state.statuses.delete(s); render(); }));
+  $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); render(); });
+  $('#tree').addEventListener('click', (e) => { const r = e.target.closest('.row'); if (!r) return; onRow(r, e); });
+  $('#tree').addEventListener('keydown', (e) => { const r = e.target.closest('.row'); if (!r) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(r, e); } });
+  function onRow(r) {
+    const p = r.dataset.path; state.selected = p;
+    if (r.classList.contains('dir') && p !== '' && state.selected === p && r.dataset.toggled === '1') { /* second click toggles */ }
+    if (r.classList.contains('dir') && p !== '') { if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p); }
+    render();
+    const again = document.querySelector(`.row[data-path="${CSS.escape(p)}"]`); if (again) again.focus();
+  }
+  $('#expand').addEventListener('click', () => { state.collapsed.clear(); render(); });
+  $('#collapse').addEventListener('click', () => { const t = view(); const walk = (n, depth) => { if (n.kind === 'dir' && depth > 0) state.collapsed.add(n.path); (n.children || []).forEach(c => walk(c, depth + 1)); }; walk(t, 0); render(); });
+  const toast = (msg) => { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1600); };
+  $('#copy').addEventListener('click', () => {
+    const text = ascii(view());
+    const fallback = () => { const ta = $('#clip'); ta.value = text; ta.select(); try { document.execCommand('copy'); toast('Copied (fallback)'); } catch (e) { toast('Select the listing and copy manually'); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('Copied tree /f listing'), fallback); else fallback();
+  });
+  render();
+})();
+</script>
