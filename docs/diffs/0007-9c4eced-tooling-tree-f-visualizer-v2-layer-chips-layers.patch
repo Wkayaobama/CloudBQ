@@ -1,0 +1,845 @@
+commit 9c4eced8a7dcf60e2656401f5e979082292cc434
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 17:40:05 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 17:40:05 2026 +0000
+
+    tooling: tree-f-visualizer v2 (layer chips, layers×scenarios lane view, --check gate, .gitignore excludes, tree.com serial and NTFS sort order)
+    
+    Same change as in IC-DBT-BQ; see that commit body. Verified here: py_compile, node --check on the embedded script, artifact fragment starts with <title>, zero external references.
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .../skills/tree-f-visualizer/assets/template.html  | 262 +++++++++++-------
+ .claude/skills/tree-f-visualizer/scripts/tree_f.py | 295 ++++++++++++++-------
+ 2 files changed, 376 insertions(+), 181 deletions(-)
+
+diff --git a/.claude/skills/tree-f-visualizer/assets/template.html b/.claude/skills/tree-f-visualizer/assets/template.html
+index 4f44136..3228985 100644
+--- a/.claude/skills/tree-f-visualizer/assets/template.html
++++ b/.claude/skills/tree-f-visualizer/assets/template.html
+@@ -1,38 +1,44 @@
+ <title>__TITLE__</title>
+ <style>
+-/* Layout: console-style listing on the left (its own horizontal scroll), sticky details panel on the right; stacks at phone width. */
++/* tree-f-visualizer template. Everything inline: no fonts, scripts or styles from the network, so the page works
++   offline from a repo and as a published artifact. Colours are tokens on :root; dark follows the viewer's setting. */
+ :root {
+   --bg: #f4f6f9; --panel: #ffffff; --fg: #1b2430; --muted: #5b6878; --line: #d6dde6; --accent: #2456a6; --accent-fg: #ffffff;
+-  --glyph: #8b98a8; --hover: #e9eef5; --sel: #dfe8f7;
+-  --par-parallel: #e2f0d9; --par-conditional: #fff2cc; --par-divergent: #f8cbad; --par-fg: #1b2430;
++  --glyph: #8b98a8; --hover: #e9eef5; --sel: #dfe8f7; --mark: #fff3b0;
++  --par-parallel: #e2f0d9; --par-parallel-line: #7fb069; --par-conditional: #fff2cc; --par-conditional-line: #d6b24a;
++  --par-divergent: #f8cbad; --par-divergent-line: #e08a5a; --par-fg: #1b2430;
+   --st-new: #1f8a4c; --st-modify: #b7791f; --st-proposed: #7a6ff0;
+-  --mono: "Cascadia Mono", "Consolas", "SF Mono", ui-monospace, Menlo, monospace;
++  --mono: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, Menlo, monospace;
+   --sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
++  color-scheme: light;
+ }
+ @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+   --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a4b3; --line: #2a3442; --accent: #7aa7ff; --accent-fg: #0f141b;
+-  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247;
++  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247; --mark: #5a4a12;
+   --par-parallel: #244a2c; --par-conditional: #5a4a12; --par-divergent: #6a3419; --par-fg: #e4e9f0;
+-  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark } }
++  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark; } }
+ :root[data-theme="dark"] {
+   --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a4b3; --line: #2a3442; --accent: #7aa7ff; --accent-fg: #0f141b;
+-  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247;
++  --glyph: #5c6a7c; --hover: #1d2733; --sel: #243247; --mark: #5a4a12;
+   --par-parallel: #244a2c; --par-conditional: #5a4a12; --par-divergent: #6a3419; --par-fg: #e4e9f0;
+-  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark }
++  --st-new: #4ccf7f; --st-modify: #f0b64a; --st-proposed: #a79cff; color-scheme: dark; }
+ body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; }
+-.wrap { max-width: 1400px; margin: 0 auto; padding-block: 16px 32px; padding-inline: 16px; display: grid; gap: 14px; }
++.wrap { max-width: 1440px; margin: 0 auto; padding: 16px 16px 32px; display: grid; gap: 14px; }
+ header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+-header h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
++header h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+ header .counts { color: var(--muted); font-variant-numeric: tabular-nums; }
+ .toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+ .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+ .group .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-right: 2px; }
+-button.chip { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+-button.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+-button.chip:focus-visible, button.btn:focus-visible, .row:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+-input#q { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); min-width: 180px; }
+-button.btn { font: inherit; font-size: 13px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+-.main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
++button { font: inherit; cursor: pointer; }
++.chip { font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 3px 10px; }
++.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
++.chip .n { opacity: .7; font-variant-numeric: tabular-nums; margin-left: 4px; }
++.btn { font-size: 13px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 4px 12px; }
++.btn.secondary { background: var(--panel); color: var(--fg); border-color: var(--line); }
++:is(button, .row, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++input#q { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); min-width: 200px; }
++.main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
+ @media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } .details { position: static; } }
+ .listing { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; min-width: 0; }
+ .listing pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.5; white-space: pre; }
+@@ -43,30 +49,41 @@ button.btn { font: inherit; font-size: 13px; border: 1px solid var(--accent); ba
+ .g { color: var(--glyph); }
+ .dir .nm { font-weight: 650; }
+ .nm.proposed { font-style: italic; border-bottom: 1px dashed var(--st-proposed); }
+-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; border: 1px solid transparent; }
+-.dot.Parallel { background: var(--par-parallel); border-color: #7fb069; } .dot.Conditional { background: var(--par-conditional); border-color: #d6b24a; } .dot.Divergent { background: var(--par-divergent); border-color: #e08a5a; }
+-.dot.none { background: transparent; border-color: var(--line); }
++.nm mark { background: var(--mark); color: inherit; border-radius: 2px; }
++.dim { opacity: .55; }
++.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; border: 1px solid var(--line); background: transparent; }
++.dot.Parallel { background: var(--par-parallel); border-color: var(--par-parallel-line); }
++.dot.Conditional { background: var(--par-conditional); border-color: var(--par-conditional-line); }
++.dot.Divergent { background: var(--par-divergent); border-color: var(--par-divergent-line); }
+ .st { margin-left: 8px; font-size: 11px; color: var(--muted); }
+ .st.new { color: var(--st-new); } .st.modify { color: var(--st-modify); } .st.proposed { color: var(--st-proposed); }
+ .fold { color: var(--muted); }
+-.details { position: sticky; top: env(safe-area-inset-top, 0px); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
++.details { position: sticky; top: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+ .details h2 { margin: 0 0 6px; font-size: 14px; font-family: var(--mono); word-break: break-all; }
+ .details .empty { color: var(--muted); }
+ dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; margin: 10px 0 0; }
+ dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
+ dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+-.pill { display: inline-block; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: 600; color: var(--par-fg); }
++.pill { display: inline-block; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: 600; color: var(--par-fg); background: var(--hover); }
+ .pill.Parallel { background: var(--par-parallel); } .pill.Conditional { background: var(--par-conditional); } .pill.Divergent { background: var(--par-divergent); }
+-.pill.status { background: var(--hover); color: var(--fg); }
+-.pill.status.new { color: var(--st-new); } .pill.status.modify { color: var(--st-modify); } .pill.status.proposed { color: var(--st-proposed); border: 1px dashed var(--st-proposed); background: transparent; }
++.pill.new { color: var(--st-new); } .pill.modify { color: var(--st-modify); }
++.pill.proposed { color: var(--st-proposed); border: 1px dashed var(--st-proposed); background: transparent; }
+ .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; align-items: center; }
+-.legend .dot { margin-right: 4px; }
+-.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 6px; font-size: 13px; }
++table.lanes { border-collapse: collapse; width: 100%; font-size: 13px; }
++.lanes th, .lanes td { border: 1px solid var(--line); padding: 6px 8px; vertical-align: top; text-align: left; }
++.lanes th { background: var(--hover); font-weight: 600; position: sticky; top: 0; }
++.lanes th.layer, .lanes td.layer { width: 220px; }
++.lanes td code { font-family: var(--mono); font-size: 12px; display: block; cursor: pointer; padding: 1px 2px; border-radius: 3px; }
++.lanes td code:hover { background: var(--hover); }
++.lanes td code.selected { background: var(--sel); }
++.lanes td .none { color: var(--muted); }
++.toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+ code { font-family: var(--mono); font-size: 12.5px; }
+-textarea.sr { position: absolute; left: -9999px; top: 0; }
+-@media (prefers-reduced-motion: no-preference) { .row { transition: background 80ms linear; } }
++.sr { position: absolute; left: -9999px; top: 0; }
++kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+ </style>
+-
++<!--__BODY__-->
++<script type="application/json" id="tree-f-manifest">__MANIFEST__</script>
+ <div class="wrap">
+   <header>
+     <h1 id="title">__TITLE__</h1>
+@@ -75,107 +92,145 @@ textarea.sr { position: absolute; left: -9999px; top: 0; }
+   <div class="toolbar">
+     <div class="group" id="scenarios"><span class="lbl">Scenario</span></div>
+     <div class="group" id="statuses"><span class="lbl">Status</span></div>
+-    <div class="group"><input id="q" type="search" placeholder="Filter paths…" aria-label="Filter paths"></div>
+-    <div class="group"><button class="btn" id="copy" type="button">Copy as tree /f</button><button class="chip" id="expand" type="button">Expand all</button><button class="chip" id="collapse" type="button">Collapse dirs</button></div>
++    <div class="group" id="layers"><span class="lbl">Layer</span></div>
++  </div>
++  <div class="toolbar">
++    <div class="group"><input id="q" type="search" placeholder="Search path, role, notes…" aria-label="Search"></div>
++    <div class="group" role="group" aria-label="View">
++      <button class="chip" id="view-tree" type="button" aria-pressed="true">Tree</button>
++      <button class="chip" id="view-lanes" type="button" aria-pressed="false">Layers × scenarios</button>
++    </div>
++    <div class="group">
++      <button class="btn" id="copy" type="button" title="Copies the exact ASCII of the current view">Copy as tree /f</button>
++      <button class="btn secondary" id="glyphs" type="button" aria-pressed="false" title="tree /f /a glyphs for the copy">/a</button>
++      <button class="chip" id="expand" type="button">Expand all</button>
++      <button class="chip" id="collapse" type="button">Collapse dirs</button>
++      <button class="chip" id="unann" type="button" aria-pressed="true" title="Show paths that have no annotation">Unannotated</button>
++    </div>
+   </div>
+   <div class="main">
+-    <section class="listing" aria-label="Directory listing"><pre id="tree"></pre></section>
+-    <aside class="details" id="details" aria-live="polite"><div class="empty">Select a file or folder to see its role, layer, status and parity.</div></aside>
++    <section class="listing" id="listing" aria-label="Directory listing"><pre id="tree" tabindex="0"></pre></section>
++    <aside class="details" id="details" aria-live="polite"><div class="empty">Select a file or folder to see its role, layer, status and parity. <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> fold, <kbd>Enter</kbd> toggle.</div></aside>
+   </div>
+   <div class="legend" id="legend">
+-    <span><i class="dot Parallel"></i>Parallel — same mechanism, same result</span>
+-    <span><i class="dot Conditional"></i>Conditional — same result under a stated condition</span>
++    <span><i class="dot Parallel"></i>Parallel — same mechanism, same result on every surface</span>
++    <span><i class="dot Conditional"></i>Conditional — same result when a stated condition holds</span>
+     <span><i class="dot Divergent"></i>Divergent — different mechanism, remediation makes it equivalent</span>
+     <span><i class="nm proposed">proposed</i> — not on disk yet</span>
++    <span><span class="st new">new</span> added by this work · <span class="st modify">modify</span> existing file changed</span>
+   </div>
+   <textarea class="sr" id="clip" aria-hidden="true" tabindex="-1"></textarea>
+ </div>
+-
+ <script>
+ (() => {
+-  const M = /*__MANIFEST__*/;
++  const M = JSON.parse(document.getElementById('tree-f-manifest').textContent);
+   const $ = (s) => document.querySelector(s);
+-  const scenarioIds = Object.keys(M.scenarios || {});
+-  const state = { scenario: M.scenario_filter || 'all', statuses: new Set(M.statuses), q: '', selected: null, collapsed: new Set() };
+-  try { const s = localStorage.getItem('treef.scenario'); if (s && (s === 'all' || scenarioIds.includes(s))) state.scenario = s; } catch (e) {}
++  const GL = { unicode: { branch: '├───', last: '└───', vert: '│   ', blank: '    ', bar: '│' },
++               ascii: { branch: '+---', last: '\\---', vert: '|   ', blank: '    ', bar: '|' } };
++  const scenarioIds = Object.keys(M.scenarios || {}), layerIds = Object.keys(M.layers || {});
++  const state = { scenario: M.scenario_filter || 'all', statuses: new Set(M.statuses), layers: new Set(layerIds), q: '',
++                  selected: null, collapsed: new Set(), glyphs: 'unicode', view: 'tree', unann: true };
++  // URL hash carries scenario / search / selection so a link opens the same view (works offline and in an artifact frame)
++  try { const h = new URLSearchParams(location.hash.slice(1));
++        if (h.get('s') && (h.get('s') === 'all' || scenarioIds.includes(h.get('s')))) state.scenario = h.get('s');
++        if (h.get('q')) state.q = h.get('q').toLowerCase(); if (h.get('p') !== null) state.selected = h.get('p');
++        if (h.get('v') === 'lanes') state.view = 'lanes'; } catch (e) {}
++  try { if (!location.hash) { const s = localStorage.getItem('treef.scenario'); if (s && (s === 'all' || scenarioIds.includes(s))) state.scenario = s; } } catch (e) {}
++  const syncHash = () => { try { const h = new URLSearchParams(); if (state.scenario !== 'all') h.set('s', state.scenario); if (state.q) h.set('q', state.q);
++    if (state.selected !== null) h.set('p', state.selected); if (state.view !== 'tree') h.set('v', state.view);
++    history.replaceState(null, '', h.toString() ? '#' + h.toString() : location.pathname + location.search); } catch (e) {} };
+ 
+-  // ---- filtering -----------------------------------------------------------------------------
++  // ---- filtering ------------------------------------------------------------------------------------------------
++  const hay = (n) => { const a = n.ann || {}; return [n.path, a.role, a.notes, a.layer, a.recipe].filter(Boolean).join(' ').toLowerCase(); };
+   const matches = (n) => {
+     const a = n.ann || {};
+     const stOk = state.statuses.has(a.status || 'existing');
+     const scOk = state.scenario === 'all' || (a.scenarios || []).includes(state.scenario);
+-    const qOk = !state.q || n.path.toLowerCase().includes(state.q);
+-    return stOk && scOk && qOk;
++    const lyOk = !a.layer || state.layers.has(a.layer) || state.layers.size === layerIds.length;
++    const anOk = state.unann || !!n.ann;
++    const qOk = !state.q || hay(n).includes(state.q);
++    return stOk && scOk && lyOk && anOk && qOk;
+   };
+   const prune = (n) => {
+     if (n.kind === 'dir') {
+       const kids = (n.children || []).map(prune).filter(Boolean);
+       const own = matches(n) && (state.scenario === 'all' || n.ann);
+-      if (kids.length || own) return Object.assign({}, n, { children: kids });
+-      return null;
++      return (kids.length || own) ? Object.assign({}, n, { children: kids }) : null;
+     }
+     return matches(n) ? n : null;
+   };
+-  const view = () => { const t = prune(M.tree); return t || Object.assign({}, M.tree, { children: [] }); };
++  const view = () => prune(M.tree) || Object.assign({}, M.tree, { children: [] });
+ 
+-  // ---- tree /f text (same algorithm as scripts/tree_f.py) --------------------------------------
+-  const ascii = (t) => {
+-    const out = [`Folder PATH listing for volume ${M.volume}`, `Volume serial number is ${M.serial}`, M.root_label];
++  // ---- tree /f text (same algorithm as scripts/tree_f.py render_ascii) ---------------------------------------------
++  const header = () => [M.volume ? `Folder PATH listing for volume ${M.volume}` : 'Folder PATH listing', `Volume serial number is ${M.serial}`, M.root_label];
++  const ascii = (t, mode) => {
++    const g = GL[mode || state.glyphs]; const out = header();
+     const emit = (d, prefix) => {
+       const kids = d.children || [], files = kids.filter(k => k.kind !== 'dir'), dirs = kids.filter(k => k.kind === 'dir');
+-      const col = dirs.length ? '│   ' : '    ';
++      const col = dirs.length ? g.vert : g.blank;
+       for (const f of files) out.push(prefix + col + f.name);
+       if (dirs.length) {
+-        if (files.length) out.push(prefix + '│');
+-        dirs.forEach((sub, i) => { const last = i === dirs.length - 1; out.push(prefix + (last ? '└───' : '├───') + sub.name); emit(sub, prefix + (last ? '    ' : '│   ')); });
++        if (files.length) out.push(prefix + g.bar);
++        dirs.forEach((sub, i) => { const last = i === dirs.length - 1; out.push(prefix + (last ? g.last : g.branch) + sub.name); emit(sub, prefix + (last ? g.blank : g.vert)); });
+       } else out.push(prefix.replace(/\s+$/, ''));
+     };
+     emit(t, '');
+     return out.join('\n') + '\n';
+   };
+ 
+-  // ---- rendering ---------------------------------------------------------------------------------
++  // ---- rendering --------------------------------------------------------------------------------------------------
+   const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
++  const hi = (name) => { if (!state.q) return esc(name); const i = name.toLowerCase().indexOf(state.q); return i < 0 ? esc(name) : esc(name.slice(0, i)) + '<mark>' + esc(name.slice(i, i + state.q.length)) + '</mark>' + esc(name.slice(i + state.q.length)); };
+   const nameHtml = (n) => {
+-    const a = n.ann || {}; const st = a.status || 'existing'; const proposed = n.exists === false || st === 'proposed';
+-    const dot = a.parity ? `<i class="dot ${a.parity}" title="${a.parity}"></i>` : (n.ann ? '<i class="dot none"></i>' : '');
++    const a = n.ann || {}; const st = a.status || (n.exists === false ? 'proposed' : 'existing'); const proposed = n.exists === false || st === 'proposed';
++    const dot = a.parity ? `<i class="dot ${a.parity}" title="${a.parity}"></i>` : (n.ann ? '<i class="dot" title="no parity stated"></i>' : '');
+     const tag = st !== 'existing' ? `<span class="st ${st}">${st}</span>` : '';
+-    return `${dot}<span class="nm${proposed ? ' proposed' : ''}">${esc(n.name)}</span>${tag}`;
++    return `${dot}<span class="nm${proposed ? ' proposed' : ''}${!n.ann && n.path ? ' dim' : ''}">${hi(n.name)}</span>${tag}`;
+   };
+-  const render = () => {
+-    const t = view(); const pre = $('#tree'); const rows = [];
+-    rows.push(`<span class="hdr">Folder PATH listing for volume ${esc(M.volume)}\nVolume serial number is ${esc(M.serial)}</span>\n`);
+-    rows.push(`<span class="row dir${state.selected === t.path ? ' selected' : ''}" data-path="${esc(t.path)}" tabindex="0">${esc(M.root_label)}</span>\n`);
++  const rowHtml = (n, cls) => `<span class="row ${cls}${state.selected === n.path ? ' selected' : ''}" data-path="${esc(n.path)}" tabindex="-1">${nameHtml(n)}</span>`;
++  let visibleRows = [];
++  const renderTree = () => {
++    const g = GL.unicode; const t = view(); const rows = []; visibleRows = [];
++    rows.push(`<span class="hdr">${esc(header().slice(0, 2).join('\n'))}</span>\n`);
++    rows.push(`<span class="row dir${state.selected === '' ? ' selected' : ''}" data-path="" tabindex="-1">${esc(M.root_label)}</span>\n`); visibleRows.push('');
+     const emit = (d, prefix) => {
+       const kids = d.children || [], files = kids.filter(k => k.kind !== 'dir'), dirs = kids.filter(k => k.kind === 'dir');
+-      const col = dirs.length ? '│   ' : '    ';
+-      for (const f of files) rows.push(`<span class="g">${esc(prefix + col)}</span><span class="row file${state.selected === f.path ? ' selected' : ''}" data-path="${esc(f.path)}" tabindex="0">${nameHtml(f)}</span>\n`);
++      const col = dirs.length ? g.vert : g.blank;
++      for (const f of files) { rows.push(`<span class="g">${esc(prefix + col)}</span>${rowHtml(f, 'file')}\n`); visibleRows.push(f.path); }
+       if (dirs.length) {
+-        if (files.length) rows.push(`<span class="g">${esc(prefix + '│')}</span>\n`);
++        if (files.length) rows.push(`<span class="g">${esc(prefix + g.bar)}</span>\n`);
+         dirs.forEach((sub, i) => {
+-          const last = i === dirs.length - 1; const folded = state.collapsed.has(sub.path);
+-          const n = (sub.children || []).length;
+-          rows.push(`<span class="g">${esc(prefix + (last ? '└───' : '├───'))}</span><span class="row dir${state.selected === sub.path ? ' selected' : ''}" data-path="${esc(sub.path)}" tabindex="0">${nameHtml(sub)}${folded ? ` <span class="fold">[+${n}]</span>` : ''}</span>\n`);
+-          if (!folded) emit(sub, prefix + (last ? '    ' : '│   '));
+-          else rows.push(`<span class="g">${esc((prefix + (last ? '    ' : '│   ')).replace(/\s+$/, ''))}</span>\n`);
++          const last = i === dirs.length - 1, folded = state.collapsed.has(sub.path), n = (sub.children || []).length;
++          rows.push(`<span class="g">${esc(prefix + (last ? g.last : g.branch))}</span>${rowHtml(sub, 'dir')}${folded ? ` <span class="fold">[+${n}]</span>` : ''}\n`); visibleRows.push(sub.path);
++          if (!folded) emit(sub, prefix + (last ? g.blank : g.vert));
++          else rows.push(`<span class="g">${esc((prefix + (last ? g.blank : g.vert)).replace(/\s+$/, ''))}</span>\n`);
+         });
+       } else rows.push(`<span class="g">${esc(prefix.replace(/\s+$/, ''))}</span>\n`);
+     };
+     emit(t, '');
+-    pre.innerHTML = rows.join('');
+-    const c = M.counts; const lab = state.scenario === 'all' ? 'all scenarios' : `scenario ${state.scenario}`;
+-    $('#counts').textContent = `${c.dirs} folders · ${c.files} files · ${c.annotated} annotated · ${c.proposed} proposed · showing ${lab}`;
+-    renderDetails();
++    $('#tree').innerHTML = rows.join('');
++  };
++  const renderLanes = () => {
++    const cols = state.scenario === 'all' ? scenarioIds : [state.scenario];
++    const th = cols.map(s => `<th>${esc(s)} · ${esc(M.scenarios[s] || '')}</th>`).join('');
++    const body = layerIds.filter(L => state.layers.has(L)).map(L => {
++      const cells = cols.map(s => {
++        const paths = ((M.lanes[L] || {})[s] || []).filter(p => { const n = find(p); return n && matches(n); });
++        return `<td>${paths.length ? paths.map(p => { const a = (M.index[p] || {}); return `<code class="${state.selected === p ? 'selected' : ''}" data-path="${esc(p)}"><i class="dot ${esc(a.parity || '')}"></i>${esc(p)}${a.status && a.status !== 'existing' ? ` <span class="st ${a.status}">${a.status}</span>` : ''}</code>`; }).join('') : '<span class="none">—</span>'}</td>`;
++      }).join('');
++      return `<tr><td class="layer"><code>${esc(L)}</code> ${esc(M.layers[L])}</td>${cells}</tr>`;
++    }).join('');
++    $('#tree').innerHTML = `<table class="lanes"><thead><tr><th class="layer">Layer</th>${th}</tr></thead><tbody>${body}</tbody></table>`;
+   };
+   const find = (path, n = M.tree) => { if (n.path === path) return n; for (const c of (n.children || [])) { const r = find(path, c); if (r) return r; } return null; };
+   const renderDetails = () => {
+     const box = $('#details'); const n = state.selected !== null ? find(state.selected) : null;
+-    if (!n) { box.innerHTML = '<div class="empty">Select a file or folder to see its role, layer, status and parity.</div>'; return; }
++    if (!n) { box.innerHTML = '<div class="empty">Select a file or folder to see its role, layer, status and parity. <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> fold, <kbd>Enter</kbd> toggle.</div>'; return; }
+     const a = n.ann || {}; const st = a.status || (n.exists === false ? 'proposed' : 'existing');
+-    const scen = (a.scenarios || []).map(s => `<span class="pill status">${esc(s)}</span> ${esc(M.scenarios[s] || '')}`).join('<br>');
++    const scen = (a.scenarios || []).map(s => `<span class="pill">${esc(s)}</span> ${esc(M.scenarios[s] || '')}`).join('<br>');
+     const layer = a.layer ? `<code>${esc(a.layer)}</code> ${esc((M.layers || {})[a.layer] || '')}` : '';
+     box.innerHTML = `<h2>${esc(n.path || M.root_label)}</h2>
+-      <div><span class="pill status ${st}">${st}</span> <span class="pill status">${n.kind}</span> ${a.parity ? `<span class="pill ${a.parity}">${a.parity}</span>` : ''}</div>
++      <div><span class="pill ${st}">${st}</span> <span class="pill">${n.kind}</span> ${a.parity ? `<span class="pill ${a.parity}">${a.parity}</span>` : ''}${n.exists === false ? ' <span class="pill proposed">not on disk</span>' : ''}</div>
+       <dl>
+         ${a.role ? `<dt>Role</dt><dd>${esc(a.role)}</dd>` : ''}
+         ${scen ? `<dt>Scenarios</dt><dd>${scen}</dd>` : ''}
+@@ -185,34 +240,57 @@ textarea.sr { position: absolute; left: -9999px; top: 0; }
+         ${!n.ann ? `<dt>Annotation</dt><dd class="empty">none — add this path to the annotations file to describe it</dd>` : ''}
+       </dl>`;
+   };
++  const render = () => {
++    (state.view === 'lanes' ? renderLanes : renderTree)();
++    const c = M.counts, lab = state.scenario === 'all' ? 'all scenarios' : `scenario ${state.scenario}`;
++    $('#counts').textContent = `${c.dirs} folders · ${c.files} files · ${c.annotated} annotated · ${c.proposed} proposed · showing ${lab}`;
++    $('#view-tree').setAttribute('aria-pressed', String(state.view === 'tree')); $('#view-lanes').setAttribute('aria-pressed', String(state.view === 'lanes'));
++    renderDetails(); syncHash();
++  };
+ 
+-  // ---- controls ---------------------------------------------------------------------------------
+-  const chip = (parent, id, label, pressed, onClick) => {
+-    const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = label; b.dataset.id = id;
++  // ---- controls -----------------------------------------------------------------------------------------------------
++  const chip = (parent, id, label, pressed, onClick, count) => {
++    const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.dataset.id = id;
++    b.innerHTML = esc(label) + (count !== undefined ? `<span class="n">${count}</span>` : '');
+     b.setAttribute('aria-pressed', String(pressed)); b.addEventListener('click', () => onClick(b)); parent.appendChild(b); return b;
+   };
+   const sc = $('#scenarios');
+-  const scChips = [chip(sc, 'all', 'All', state.scenario === 'all', pick)].concat(scenarioIds.map(id => chip(sc, id, `${id} · ${M.scenarios[id]}`, state.scenario === id, pick)));
++  const scChips = [chip(sc, 'all', 'All', state.scenario === 'all', pick)]
++    .concat(scenarioIds.map(id => chip(sc, id, `${id} · ${M.scenarios[id]}`, state.scenario === id, pick, (M.counts.by_scenario || {})[id])));
+   function pick(b) { state.scenario = b.dataset.id; scChips.forEach(c => c.setAttribute('aria-pressed', String(c === b))); try { localStorage.setItem('treef.scenario', state.scenario); } catch (e) {} render(); }
+-  const stBox = $('#statuses');
+-  M.statuses.forEach(s => chip(stBox, s, s, true, (b) => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); if (on) state.statuses.add(s); else state.statuses.delete(s); render(); }));
+-  $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); render(); });
+-  $('#tree').addEventListener('click', (e) => { const r = e.target.closest('.row'); if (!r) return; onRow(r, e); });
+-  $('#tree').addEventListener('keydown', (e) => { const r = e.target.closest('.row'); if (!r) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(r, e); } });
+-  function onRow(r) {
+-    const p = r.dataset.path; state.selected = p;
+-    if (r.classList.contains('dir') && p !== '' && state.selected === p && r.dataset.toggled === '1') { /* second click toggles */ }
+-    if (r.classList.contains('dir') && p !== '') { if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p); }
+-    render();
+-    const again = document.querySelector(`.row[data-path="${CSS.escape(p)}"]`); if (again) again.focus();
+-  }
++  M.statuses.forEach(s => chip($('#statuses'), s, s, true, (b) => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); if (on) state.statuses.add(s); else state.statuses.delete(s); render(); }, (M.counts.by_status || {})[s]));
++  const lyBox = $('#layers');
++  if (layerIds.length) {
++    const all = chip(lyBox, 'all', 'All', true, () => { state.layers = new Set(layerIds); lyChips.forEach(c => c.setAttribute('aria-pressed', 'true')); render(); });
++    var lyChips = layerIds.map(L => chip(lyBox, L, L, true, (b) => {
++      if (state.layers.size === layerIds.length) { state.layers = new Set([L]); } else if (state.layers.has(L)) { state.layers.delete(L); if (!state.layers.size) state.layers = new Set(layerIds); } else state.layers.add(L);
++      lyChips.forEach(c => c.setAttribute('aria-pressed', String(state.layers.has(c.dataset.id)))); all.setAttribute('aria-pressed', String(state.layers.size === layerIds.length)); render();
++    }));
++    lyChips.forEach(c => c.title = M.layers[c.dataset.id]);
++  } else lyBox.remove();
++  $('#q').value = state.q; $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); render(); });
++  $('#view-tree').addEventListener('click', () => { state.view = 'tree'; render(); });
++  $('#view-lanes').addEventListener('click', () => { state.view = 'lanes'; render(); });
++  $('#unann').addEventListener('click', (e) => { state.unann = !state.unann; e.currentTarget.setAttribute('aria-pressed', String(state.unann)); render(); });
++  const select = (p, toggle) => { state.selected = p; const n = find(p); if (toggle && n && n.kind === 'dir' && p !== '') { if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p); } render(); };
++  $('#tree').addEventListener('click', (e) => { const r = e.target.closest('.row, code[data-path]'); if (!r) return; select(r.dataset.path, r.classList.contains('dir')); $('#tree').focus(); });
++  $('#tree').addEventListener('keydown', (e) => {
++    if (state.view !== 'tree') return;
++    const i = visibleRows.indexOf(state.selected);
++    if (e.key === 'ArrowDown') { e.preventDefault(); select(visibleRows[Math.min(visibleRows.length - 1, i + 1)], false); }
++    else if (e.key === 'ArrowUp') { e.preventDefault(); select(visibleRows[Math.max(0, i - 1)], false); }
++    else if (e.key === 'ArrowLeft' && state.selected) { e.preventDefault(); const n = find(state.selected); if (n && n.kind === 'dir' && !state.collapsed.has(n.path)) state.collapsed.add(n.path); else state.selected = state.selected.split('/').slice(0, -1).join('/'); render(); }
++    else if (e.key === 'ArrowRight' && state.selected) { e.preventDefault(); state.collapsed.delete(state.selected); render(); }
++    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (state.selected !== null) select(state.selected, true); }
++  });
+   $('#expand').addEventListener('click', () => { state.collapsed.clear(); render(); });
+-  $('#collapse').addEventListener('click', () => { const t = view(); const walk = (n, depth) => { if (n.kind === 'dir' && depth > 0) state.collapsed.add(n.path); (n.children || []).forEach(c => walk(c, depth + 1)); }; walk(t, 0); render(); });
++  $('#collapse').addEventListener('click', () => { const walk = (n, d) => { if (n.kind === 'dir' && d > 0) state.collapsed.add(n.path); (n.children || []).forEach(c => walk(c, d + 1)); }; walk(view(), 0); render(); });
++  $('#glyphs').addEventListener('click', (e) => { state.glyphs = state.glyphs === 'unicode' ? 'ascii' : 'unicode'; e.currentTarget.setAttribute('aria-pressed', String(state.glyphs === 'ascii')); });
+   const toast = (msg) => { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1600); };
+   $('#copy').addEventListener('click', () => {
+     const text = ascii(view());
+     const fallback = () => { const ta = $('#clip'); ta.value = text; ta.select(); try { document.execCommand('copy'); toast('Copied (fallback)'); } catch (e) { toast('Select the listing and copy manually'); } };
+-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('Copied tree /f listing'), fallback); else fallback();
++    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast(`Copied tree /f${state.glyphs === 'ascii' ? ' /a' : ''} listing`), fallback); else fallback();
+   });
+   render();
+ })();
+diff --git a/.claude/skills/tree-f-visualizer/scripts/tree_f.py b/.claude/skills/tree-f-visualizer/scripts/tree_f.py
+index cd81556..db2a63a 100644
+--- a/.claude/skills/tree-f-visualizer/scripts/tree_f.py
++++ b/.claude/skills/tree-f-visualizer/scripts/tree_f.py
+@@ -3,27 +3,26 @@
+ 
+     python3 tree_f.py --root . --annotations docs/architecture.yaml \
+         --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt \
+-        --out-html docs/architecture_tree.html [--scenario A] [--annotate] [--exclude .git,node_modules]
+-
+-The walk gives what exists; the annotations YAML (or JSON) adds meaning per path (scenarios, layer, role,
+-status, parity, notes, recipe) and may name paths that do not exist yet (status: proposed) — they are drawn
+-dashed in the HTML and tagged in the ASCII when --annotate is set. Nothing in this file is project-specific:
+-labels, scenarios and layers all come from the annotations file.
+-
+-Annotations format (YAML):
+-    project: <name>                      # title of the page
+-    scenarios: {A: "<label>", B: "<label>"}
+-    layers: {L0: "<label>", ...}         # optional, shown in the details panel
+-    nodes:
+-      path/to/file.py:  {scenarios: [A], layer: L5, role: "...", status: existing|modify|new|proposed,
+-                         parity: Parallel|Conditional|Divergent, notes: "...", recipe: "path/to/recipe.md"}
+-      path/to/dir/:     {...}            # trailing slash = directory
+-
+-`tree /f` rendering rules (Windows): header "Folder PATH listing for volume <v>" + "Volume serial number is <s>",
+-root line, a directory's files first (prefix + "│   " when the directory also has sub-directories, else four spaces),
+-then a spacer line (prefix + "│") when files precede sub-directories, then "├───name" / "└───name" with the child
+-prefix "│   " / "    ", and after a directory that has no sub-directories a spacer line equal to its child prefix
+-(right-stripped). The algorithm below is also implemented in assets/template.html so "Copy as tree /f" matches.
++        --out-html docs/architecture_tree.html [--scenario A] [--exclude .git,node_modules,.venv]
++
++The walk says what exists; the annotations file (YAML or JSON) says what each path means — scenarios, layer,
++role, status, parity, notes, recipe — and may name paths that are not on disk yet (status: proposed). Those are
++grafted into the tree, drawn dashed in the HTML and tagged in the ASCII when --annotate is set. Nothing in this
++file is project-specific: project name, scenario ids, layer ids and every label come from the annotations file.
++
++`tree /f` rendering (Microsoft tree.com behaviour, Unicode glyphs; --ascii-glyphs gives the /A variant):
++  header   "Folder PATH listing for volume <label>" (or "Folder PATH listing" when the volume has no label),
++           "Volume serial number is <serial>", then the root line.
++  files    a directory's files come first, one per line: prefix + column + name, where column is "│   " when the
++           directory also has sub-directories and four spaces when it has none (ReactOS tree.c: "|   %s" / "    %s").
++  spacer   when files precede sub-directories, one line prefix + "│".
++  dirs     "├───name" for every sub-directory but the last, "└───name" for the last; the sub-directory's own lines use
++           child prefix prefix + "│   " (not last) or prefix + "    " (last).
++  tail     after a directory that has no sub-directories (files only, or empty) one line equal to its child prefix,
++           right-stripped — this is the blank/"│" line that separates sibling directories in a real listing.
++  order    tree.com does not sort; NTFS enumerates names case-insensitively by up-cased UTF-16 code unit, so the
++           renderer sorts by name.upper() (not .lower(): "__init__.py" lands after "workflow_api.py", as on Windows).
++The same algorithm is implemented in assets/template.html so "Copy as tree /f" and --out-ascii are byte-identical.
+ """
+ from __future__ import annotations
+ 
+@@ -35,56 +34,108 @@ import os
+ import sys
+ from pathlib import Path, PurePosixPath
+ 
++SCHEMA_VERSION = 2
+ DEFAULT_EXCLUDES = ".git,node_modules,.venv,venv,__pycache__,.pytest_cache,.mypy_cache,.ruff_cache,dist,build,.aider*,.DS_Store"
+ STATUSES = ("existing", "modify", "new", "proposed")
+ PARITY = ("Parallel", "Conditional", "Divergent")
++GLYPHS = {
++    "unicode": {"branch": "├───", "last": "└───", "vert": "│   ", "blank": "    ", "bar": "│"},
++    "ascii": {"branch": "+---", "last": "\\---", "vert": "|   ", "blank": "    ", "bar": "|"},
++}
++ANN_KEYS = ("scenarios", "layer", "role", "status", "parity", "notes", "recipe", "kind")
+ 
+ 
+ # ----------------------------------------------------------------------------- annotations
+ def load_annotations(path: str | None) -> dict:
+-    if not path:
+-        return {"project": "", "scenarios": {}, "layers": {}, "nodes": {}}
+-    text = Path(path).read_text(encoding="utf-8")
+-    if path.endswith(".json"):
+-        data = json.loads(text)
+-    else:
+-        try:
+-            import yaml  # type: ignore
+-        except ImportError:  # pragma: no cover
+-            sys.exit("annotations are YAML but PyYAML is missing: pip install pyyaml (or pass a .json file)")
+-        data = yaml.safe_load(text) or {}
+-    data.setdefault("project", ""); data.setdefault("scenarios", {}); data.setdefault("layers", {}); data.setdefault("nodes", {})
+-    nodes = {}
++    """Read YAML/JSON annotations into {project, scenarios, layers, nodes}; normalise keys; validate vocabulary."""
++    data: dict = {}
++    if path:
++        text = Path(path).read_text(encoding="utf-8")
++        if path.endswith(".json"):
++            data = json.loads(text)
++        else:
++            try:
++                import yaml  # type: ignore
++            except ImportError:  # pragma: no cover
++                sys.exit("annotations are YAML but PyYAML is missing: pip install pyyaml (or pass a .json file)")
++            data = yaml.safe_load(text) or {}
++    for k, default in (("project", ""), ("scenarios", {}), ("layers", {}), ("nodes", {}), ("header", {})):
++        data.setdefault(k, default)
++    # scenarios / layers accept a mapping (id → label) or a list of {id, label}; order is preserved
++    for key in ("scenarios", "layers"):
++        v = data[key]
++        if isinstance(v, list):
++            data[key] = {str(i["id"]): str(i.get("label", i["id"])) for i in v}
++        else:
++            data[key] = {str(k): str(lbl) for k, lbl in (v or {}).items()}
++    errors: list[str] = []
++    nodes: dict[str, dict] = {}
+     for raw_path, ann in (data["nodes"] or {}).items():
+         ann = dict(ann or {})
+-        is_dir = raw_path.endswith("/")
+-        key = str(PurePosixPath(raw_path.strip("/")))
++        unknown = set(ann) - set(ANN_KEYS)
++        if unknown:
++            errors.append(f"{raw_path}: unknown keys {sorted(unknown)}")
++        is_dir = str(raw_path).endswith("/")
++        key = str(PurePosixPath(str(raw_path).strip("/")))
+         ann.setdefault("kind", "dir" if is_dir else "file")
+         ann.setdefault("status", "existing")
+         if ann["status"] not in STATUSES:
+-            sys.exit(f"{raw_path}: status must be one of {STATUSES}, got {ann['status']!r}")
++            errors.append(f"{raw_path}: status must be one of {STATUSES}, got {ann['status']!r}")
+         if ann.get("parity") and ann["parity"] not in PARITY:
+-            sys.exit(f"{raw_path}: parity must be one of {PARITY}, got {ann['parity']!r}")
++            errors.append(f"{raw_path}: parity must be one of {PARITY}, got {ann['parity']!r}")
+         scen = ann.get("scenarios") or []
+         ann["scenarios"] = [str(s) for s in (scen if isinstance(scen, list) else [scen])]
++        for s in ann["scenarios"]:
++            if data["scenarios"] and s not in data["scenarios"]:
++                errors.append(f"{raw_path}: scenario {s!r} is not declared under `scenarios`")
++        if ann.get("layer") is not None:
++            ann["layer"] = str(ann["layer"])
++            if data["layers"] and ann["layer"] not in data["layers"]:
++                errors.append(f"{raw_path}: layer {ann['layer']!r} is not declared under `layers`")
+         nodes[key] = ann
++    if errors:
++        sys.exit("annotations invalid:\n  " + "\n  ".join(errors))
+     data["nodes"] = nodes
+     return data
+ 
+ 
+ # ----------------------------------------------------------------------------- walk
++def load_gitignore(root: Path) -> list[str]:
++    """Patterns from <root>/.gitignore in the simple subset the walker understands (no negation, no '**' ranges)."""
++    f = root / ".gitignore"
++    if not f.is_file():
++        return []
++    pats = []
++    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
++        s = line.strip()
++        if not s or s.startswith("#") or s.startswith("!"):
++            continue
++        pats.append(s.rstrip("/"))
++    return pats
++
++
+ def _excluded(name: str, rel: str, patterns: list[str]) -> bool:
+-    return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(rel, p) for p in patterns)
++    for p in patterns:
++        p = p.lstrip("/")
++        if fnmatch.fnmatch(name, p) or fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(rel, p + "/*") or rel.startswith(p + "/"):
++            return True
++    return False
++
++
++def ntfs_key(name: str) -> str:
++    """NTFS enumerates case-insensitively by up-cased UTF-16 code unit; tree.com prints in that order."""
++    return name.upper()
+ 
+ 
+ def walk(root: Path, excludes: list[str]) -> dict:
+-    """Directory tree as nested dicts: {name, kind, path, children}. Directories first, then files, both sorted."""
++    """Directory tree as nested dicts {name, kind, path, exists, children}; files and dirs each sorted by ntfs_key."""
+     def node(p: Path, rel: str) -> dict:
+         n = {"name": p.name if rel else root.resolve().name, "kind": "dir", "path": rel, "exists": True, "children": []}
+         try:
+-            entries = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
++            entries = list(p.iterdir())
+         except PermissionError:
+             entries = []
++        entries.sort(key=lambda e: (not e.is_dir(), ntfs_key(e.name)))
+         for e in entries:
+             r = f"{rel}/{e.name}" if rel else e.name
+             if _excluded(e.name, r, excludes):
+@@ -97,8 +148,12 @@ def walk(root: Path, excludes: list[str]) -> dict:
+     return node(root, "")
+ 
+ 
++def _sort_children(n: dict) -> None:
++    n["children"].sort(key=lambda c: (c["kind"] != "dir", ntfs_key(c["name"])))
++
++
+ def graft_proposed(tree: dict, nodes: dict) -> None:
+-    """Add annotated paths that are not on disk (status proposed/new) so the architecture shows them."""
++    """Add annotated paths that are not on disk so the architecture shows the proposal, not only the present."""
+     for key, ann in nodes.items():
+         parts = key.split("/")
+         cur = tree
+@@ -111,26 +166,26 @@ def graft_proposed(tree: dict, nodes: dict) -> None:
+                 if kind == "dir":
+                     match["children"] = []
+                 cur["children"].append(match)
+-                cur["children"].sort(key=lambda c: (c["kind"] != "dir", c["name"].lower()))
++                _sort_children(cur)
+             if not last:
++                if "children" not in match:  # a file annotated as a parent: coerce to dir
++                    match["kind"] = "dir"; match["children"] = []
+                 cur = match
+-                if "children" not in cur:  # a file annotated as a parent: coerce
+-                    cur["kind"] = "dir"; cur["children"] = []
+ 
+ 
+ def annotate(tree: dict, nodes: dict) -> None:
+     def visit(n: dict) -> None:
+         ann = nodes.get(n["path"])
+         if ann:
+-            n["ann"] = {k: v for k, v in ann.items() if k != "kind"}
+-            if not n["exists"] and n["ann"].get("status") == "existing":
+-                n["ann"]["status"] = "proposed"
++            n["ann"] = {k: v for k, v in ann.items() if k != "kind" and v not in (None, "", [])}
++            if not n["exists"] and n["ann"].get("status", "existing") in ("existing", "modify"):
++                n["ann"]["status"] = "proposed"  # cannot be existing if it is not on disk
+         for c in n.get("children", []):
+             visit(c)
+     visit(tree)
+ 
+ 
+-def filter_scenario(tree: dict, scenario: str | None, keep_unannotated: bool) -> dict | None:
++def filter_scenario(tree: dict, scenario: str | None, keep_unannotated: bool) -> dict:
+     """Keep nodes annotated with the scenario (and their ancestors); unannotated nodes only when asked."""
+     if not scenario:
+         return tree
+@@ -149,9 +204,31 @@ def filter_scenario(tree: dict, scenario: str | None, keep_unannotated: bool) ->
+     return out
+ 
+ 
++def build_lanes(tree: dict, layers: dict, scenarios: dict) -> dict:
++    """layer id → scenario id → [paths]: the cross-tab the surfaces workbook also shows (layers × lanes)."""
++    lanes = {L: {s: [] for s in scenarios} for L in layers}
++    def visit(n: dict) -> None:
++        a = n.get("ann")
++        if a and a.get("layer") in lanes:
++            for s in a.get("scenarios", []):
++                if s in lanes[a["layer"]]:
++                    lanes[a["layer"]][s].append(n["path"])
++        for c in n.get("children", []):
++            visit(c)
++    visit(tree)
++    return lanes
++
++
+ # ----------------------------------------------------------------------------- ascii (tree /f)
+-def render_ascii(tree: dict, root_label: str, volume: str, serial: str, tags: bool) -> str:
+-    lines = [f"Folder PATH listing for volume {volume}", f"Volume serial number is {serial}", root_label]
++def header_lines(volume: str, serial: str, root_label: str) -> list[str]:
++    first = f"Folder PATH listing for volume {volume}" if volume else "Folder PATH listing"
++    return [first, f"Volume serial number is {serial}", root_label]
++
++
++def render_ascii(tree: dict, root_label: str, volume: str, serial: str, tags: bool = False, glyphs: str = "unicode",
++                 header: bool = True) -> str:
++    g = GLYPHS[glyphs]
++    lines = header_lines(volume, serial, root_label) if header else [root_label]
+ 
+     def tag(n: dict) -> str:
+         a = n.get("ann")
+@@ -168,66 +245,102 @@ def render_ascii(tree: dict, root_label: str, volume: str, serial: str, tags: bo
+         kids = d.get("children", [])
+         files = [c for c in kids if c["kind"] != "dir"]
+         dirs = [c for c in kids if c["kind"] == "dir"]
+-        col = "│   " if dirs else "    "
++        col = g["vert"] if dirs else g["blank"]
+         for f in files:
+             lines.append(f"{prefix}{col}{f['name']}{tag(f)}")
+         if dirs:
+             if files:
+-                lines.append(f"{prefix}│")
++                lines.append(f"{prefix}{g['bar']}")
+             for i, sub in enumerate(dirs):
+                 last = i == len(dirs) - 1
+-                lines.append(f"{prefix}{'└───' if last else '├───'}{sub['name']}{tag(sub)}")
+-                emit(sub, prefix + ("    " if last else "│   "))
++                lines.append(f"{prefix}{g['last'] if last else g['branch']}{sub['name']}{tag(sub)}")
++                emit(sub, prefix + (g["blank"] if last else g["vert"]))
+         else:
+             lines.append(prefix.rstrip())
+ 
+     emit(tree, "")
+-    return "\n".join(lines).rstrip("\n") + "\n"
++    return "\n".join(lines) + "\n"
+ 
+ 
+ # ----------------------------------------------------------------------------- html
+-def render_html(manifest: dict, template_path: Path) -> str:
++def render_html(manifest: dict, template_path: Path, standalone: bool = True) -> str:
+     tpl = template_path.read_text(encoding="utf-8")
++    for marker in ("__MANIFEST__", "__TITLE__", "<!--__BODY__-->"):
++        if marker not in tpl:
++            sys.exit(f"{template_path}: missing {marker} marker")
+     payload = json.dumps(manifest, ensure_ascii=False).replace("</", "<\\/")
+-    if "/*__MANIFEST__*/" not in tpl:
+-        sys.exit(f"{template_path}: missing /*__MANIFEST__*/ placeholder")
+-    title = manifest.get("project") or manifest["tree"]["name"]
+-    return tpl.replace("/*__MANIFEST__*/", payload).replace("__TITLE__", f"{title} Architecture Tree")
++    title = f"{manifest.get('project') or manifest['tree']['name']} Architecture Tree"
++    page = tpl.replace("__MANIFEST__", payload).replace("__TITLE__", title)
++    head, body = page.split("<!--__BODY__-->", 1)
++    if not standalone:  # artifact page contract: no doctype/html/head/body; title + style first
++        return head.rstrip() + "\n" + body.lstrip("\n")
++    return ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
++            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
++            f"{head.strip()}\n</head>\n<body>\n{body.strip()}\n</body>\n</html>\n")
+ 
+ 
+-# ----------------------------------------------------------------------------- main
++# ----------------------------------------------------------------------------- manifest
+ def build_manifest(root: Path, ann: dict, excludes: list[str], scenario: str | None, keep_unannotated: bool,
+-                   root_label: str, volume: str, serial: str) -> dict:
++                   root_label: str, volume: str, serial: str | None) -> dict:
+     tree = walk(root, excludes)
+     graft_proposed(tree, ann["nodes"])
+     annotate(tree, ann["nodes"])
+     tree = filter_scenario(tree, scenario, keep_unannotated)
+-    counts = {"dirs": 0, "files": 0, "annotated": 0, "proposed": 0}
++    counts = {"dirs": 0, "files": 0, "annotated": 0, "proposed": 0, "by_status": {s: 0 for s in STATUSES},
++              "by_scenario": {s: 0 for s in ann["scenarios"]}}
++    index = {}
+     def count(n: dict) -> None:
+         counts["dirs" if n["kind"] == "dir" else "files"] += 1
+-        if n.get("ann"): counts["annotated"] += 1
++        a = n.get("ann")
++        if a:
++            counts["annotated"] += 1
++            counts["by_status"][a.get("status", "existing")] += 1
++            for s in a.get("scenarios", []):
++                if s in counts["by_scenario"]: counts["by_scenario"][s] += 1
++            index[n["path"]] = dict(a, kind=n["kind"], exists=n["exists"])
+         if not n.get("exists", True): counts["proposed"] += 1
+         for c in n.get("children", []): count(c)
+     count(tree)
+-    return {"project": ann.get("project") or root.resolve().name, "root": str(root), "root_label": root_label,
+-            "volume": volume, "serial": serial, "scenario_filter": scenario,
+-            "scenarios": ann.get("scenarios", {}), "layers": ann.get("layers", {}),
+-            "statuses": list(STATUSES), "parity": list(PARITY), "counts": counts, "tree": tree}
++    if not serial:  # deterministic serial from the tree, in tree.com's "%08X %04X:%04X" shape → byte-identical re-runs
++        h = hashlib.sha1(json.dumps(tree, sort_keys=True, ensure_ascii=False).encode()).hexdigest().upper()
++        serial = f"{h[:8]} {h[8:12]}:{h[12:16]}"
++    return {"schema_version": SCHEMA_VERSION, "project": ann.get("project") or root.resolve().name, "root": str(root),
++            "root_label": root_label, "volume": volume, "serial": serial, "scenario_filter": scenario,
++            "scenarios": ann["scenarios"], "layers": ann["layers"], "statuses": list(STATUSES), "parity": list(PARITY),
++            "counts": counts, "lanes": build_lanes(tree, ann["layers"], ann["scenarios"]), "index": index, "tree": tree}
++
++
++def verify_capture(ascii_text: str, capture: Path) -> int:
++    """Compare body lines (after the three header lines) with a Windows capture; report the first difference."""
++    ours = ascii_text.splitlines()[3:]
++    theirs = capture.read_text(encoding="utf-8-sig", errors="replace").splitlines()[3:]
++    for i, (a, b) in enumerate(zip(ours, theirs)):
++        if a.rstrip() != b.rstrip():
++            print(f"capture differs at body line {i + 1}:\n  ours   : {a!r}\n  capture: {b!r}"); return 1
++    if len(ours) != len(theirs):
++        print(f"capture has {len(theirs)} body lines, ours {len(ours)}"); return 1
++    print("capture matches"); return 0
+ 
+ 
++# ----------------------------------------------------------------------------- main
+ def main(argv=None) -> int:
+     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--root", default=".")
+     ap.add_argument("--annotations", help="YAML or JSON annotations (see module doc)")
+     ap.add_argument("--exclude", default=DEFAULT_EXCLUDES, help="comma-separated glob patterns (name or relative path)")
++    ap.add_argument("--no-gitignore", action="store_true", help="do not add <root>/.gitignore patterns to --exclude")
+     ap.add_argument("--scenario", help="keep only nodes annotated with this scenario id (plus ancestors)")
+     ap.add_argument("--keep-unannotated", action="store_true", help="with --scenario: also keep nodes without annotation")
+     ap.add_argument("--annotate", action="store_true", help="append {scenarios · layer · status · parity} tags in the ASCII")
+-    ap.add_argument("--root-label", help="root line of the listing (default: the root directory name)")
+-    ap.add_argument("--volume", help="volume name in the header (default: project name)")
+-    ap.add_argument("--serial", help="serial in the header (default: derived from the manifest content)")
++    ap.add_argument("--ascii-glyphs", action="store_true", help="tree /f /a glyphs (+--- \\--- |) instead of box drawing")
++    ap.add_argument("--root-label", help="root line of the listing (default: root directory name; Windows prints 'C:.')")
++    ap.add_argument("--volume", help="volume label in the header (default: project name; '' → 'Folder PATH listing')")
++    ap.add_argument("--serial", help="serial in the header (default: derived from the tree content)")
+     ap.add_argument("--out-json"); ap.add_argument("--out-ascii"); ap.add_argument("--out-html")
++    ap.add_argument("--artifact", action="store_true", help="write --out-html in artifact page form (no doctype/html/body)")
+     ap.add_argument("--template", default=str(Path(__file__).resolve().parent.parent / "assets" / "template.html"))
++    ap.add_argument("--check", action="store_true", help="exit 1 if any --out-* file on disk differs from what would be written")
++    ap.add_argument("--verify-capture", help="path of a real `tree /f > capture.txt`; compare body lines and exit 1 on difference")
+     a = ap.parse_args(argv)
+ 
+     root = Path(a.root)
+@@ -235,29 +348,33 @@ def main(argv=None) -> int:
+         sys.exit(f"--root {a.root} is not a directory")
+     ann = load_annotations(a.annotations)
+     excludes = [p.strip() for p in a.exclude.split(",") if p.strip()]
++    if not a.no_gitignore:
++        excludes += load_gitignore(root)
+     project = ann.get("project") or root.resolve().name
++    volume = project if a.volume is None else a.volume
+     manifest = build_manifest(root, ann, excludes, a.scenario, a.keep_unannotated,
+-                              a.root_label or root.resolve().name, a.volume or project, a.serial or "0000-0000")
+-    if not a.serial:  # deterministic serial from content, so re-runs on the same tree give the same header
+-        h = hashlib.sha1(json.dumps(manifest["tree"], sort_keys=True).encode()).hexdigest().upper()
+-        manifest["serial"] = f"{h[:4]}-{h[4:8]}"
+-    wrote = []
+-    if a.out_json:
+-        Path(a.out_json).parent.mkdir(parents=True, exist_ok=True)
+-        Path(a.out_json).write_text(json.dumps(manifest, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"); wrote.append(a.out_json)
+-    ascii_text = render_ascii(manifest["tree"], manifest["root_label"], manifest["volume"], manifest["serial"], a.annotate)
+-    if a.out_ascii:
+-        Path(a.out_ascii).parent.mkdir(parents=True, exist_ok=True)
+-        Path(a.out_ascii).write_text(ascii_text, encoding="utf-8"); wrote.append(a.out_ascii)
+-    if a.out_html:
+-        Path(a.out_html).parent.mkdir(parents=True, exist_ok=True)
+-        Path(a.out_html).write_text(render_html(manifest, Path(a.template)), encoding="utf-8"); wrote.append(a.out_html)
+-    if not wrote:
++                              a.root_label or root.resolve().name, volume, a.serial)
++    glyphs = "ascii" if a.ascii_glyphs else "unicode"
++    ascii_text = render_ascii(manifest["tree"], manifest["root_label"], manifest["volume"], manifest["serial"], a.annotate, glyphs)
++    outputs: dict[str, str] = {}
++    if a.out_json: outputs[a.out_json] = json.dumps(manifest, indent=1, ensure_ascii=False) + "\n"
++    if a.out_ascii: outputs[a.out_ascii] = ascii_text
++    if a.out_html: outputs[a.out_html] = render_html(manifest, Path(a.template), standalone=not a.artifact)
++    if a.verify_capture:
++        return verify_capture(ascii_text, Path(a.verify_capture))
++    if a.check:
++        stale = [p for p, text in outputs.items() if not Path(p).is_file() or Path(p).read_text(encoding="utf-8") != text]
++        print("tree_f --check: " + ("up to date" if not stale else "stale: " + ", ".join(stale)))
++        return 1 if stale else 0
++    for p, text in outputs.items():
++        Path(p).parent.mkdir(parents=True, exist_ok=True)
++        Path(p).write_text(text, encoding="utf-8")
++    if not outputs:
+         sys.stdout.write(ascii_text)
+     else:
+         c = manifest["counts"]
+         print(f"tree_f: {c['dirs']} dirs, {c['files']} files, {c['annotated']} annotated, {c['proposed']} proposed"
+-              + (f", scenario {a.scenario}" if a.scenario else "") + " → " + ", ".join(wrote))
++              + (f", scenario {a.scenario}" if a.scenario else "") + " → " + ", ".join(outputs))
+     return 0
+ 
+ 

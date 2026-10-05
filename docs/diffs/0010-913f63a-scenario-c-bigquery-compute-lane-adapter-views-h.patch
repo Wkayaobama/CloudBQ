@@ -1,0 +1,629 @@
+commit 913f63a33661e642cc0a5b6076550a7ba145ffd9
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 17:51:22 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 17:51:22 2026 +0000
+
+    scenario C: BigQuery compute lane (adapter views, hot_deals_v1 views, transactional weekly script, audit tables, registration scripts) and the Node 22 write-back job
+    
+    From discovery/scenario_C.md (DuckDB-fuzzed SQL parity, DTS/HubSpot sync research, batch-update semantics): compute in BigQuery over the synced deals table with the shared hot_score_v1 UDF, one transaction per entity run (MERGE + history + run log + state under NEW_DEALS_<entity>_C), 36 h freshness guard, per-region top-5 via window functions; write-back as a Cloud Run job with batch PATCH ×100, skip-unchanged view, never-NULL rule, 207 handling, dry gate WRITEBACK_APPROVE, Scheduler → jobs.run. UDF and vectors now use the ${DATASET} placeholder. Verified offline: bash -n on every script, node --check, DRYRUN renders with no leftover placeholder; bq --dry_run and the UDF vectors need credentials (first authenticated run).
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/c_writeback_job.md
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .../assets/recipes/c_bigquery_compute.md           | 20 +++++
+ .../assets/recipes/c_writeback_job.md              | 14 ++++
+ scoring/hot_score_v1.sql                           |  2 +-
+ sql/apply.sh                                       | 25 +++++++
+ sql/audit_tables.sql                               | 17 +++++
+ sql/deals_synced_v1.sql                            | 55 ++++++++++++++
+ sql/hot_deals_v1.sql                               | 36 +++++++++
+ sql/new_deals_weekly.sql                           | 86 ++++++++++++++++++++++
+ sql/refresh_pipeline_labels.sh                     | 19 +++++
+ sql/scheduled_query.sh                             | 44 +++++++++++
+ sql/sync_transfer.sh                               | 19 +++++
+ tests/hot_score_vectors.sql                        |  2 +-
+ tests/test_hot_score.py                            |  2 +-
+ writeback/Dockerfile                               |  7 ++
+ writeback/bootstrap_property.sh                    | 14 ++++
+ writeback/deploy_job.sh                            | 37 ++++++++++
+ writeback/index.mjs                                | 57 ++++++++++++++
+ writeback/package.json                             | 10 +++
+ 18 files changed, 463 insertions(+), 3 deletions(-)
+
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md b/.claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md
+new file mode 100644
+index 0000000..d413495
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md
+@@ -0,0 +1,20 @@
++# Recipe — scenario C compute lane: BigQuery views, transactional weekly script, audit tables, registration scripts
++
++/add sql/deals_synced_v1.sql sql/hot_deals_v1.sql sql/new_deals_weekly.sql sql/audit_tables.sql sql/apply.sh sql/scheduled_query.sh sql/sync_transfer.sh sql/refresh_pipeline_labels.sh
++/read-only scoring/hot_score_v1.sql cloud_function_new_deals/bigquery_schema.sql cloud_function_new_deals/main.py CONVENTIONS.md
++
++Build the hybrid lane's compute half over a HubSpot → BigQuery sync (Google DTS HubSpot connector by default):
++- deals_synced_v1.sql: adapter views (deals, owners) with SAFE_CAST over ${SYNC_DATASET}.${SYNC_DEALS_TABLE}; pipeline_labels table
++  + views (labels are not a sync asset; refresh_pipeline_labels.sh loads GET /crm/v3/pipelines/deals with WRITE_TRUNCATE).
++- hot_deals_v1.sql: scored view calling hubspot.hot_score_v1 (argument order of scoring/hot_score_v1.sql), per-region top-5 with
++  window functions, and hot_deals_v1_writeback (rows whose value differs from the last OK write-back or the synced property;
++  never a NULL score).
++- new_deals_weekly.sql: one transaction per entity run: 14-day lookback window → name_key/duplicates (90 days, whole portal) →
++  MERGE into new_deals with the same frozen columns as main.py → new_deals_history slice → new_deals_runs row → report_state
++  row NEW_DEALS_<entity>_C (never A's key). Freshness guard aborts when the sync is older than 36 h and records the abort.
++- audit_tables.sql: new_deals_history (partitioned, 730-day expiry) and writeback_log.
++- apply.sh renders ${PROJECT} ${DATASET} ${BQ_LOCATION} ${PORTAL_ID} ${SYNC_*} and applies in dependency order; DRYRUN=1 renders only.
++- scheduled_query.sh registers/updates one scheduled query per entity ("every monday 04:00" UTC, before the write-back and A);
++  DISABLE_SCHEDULE=1 registers without auto-scheduling (the gate); DRYRUN=1 runs bq --dry_run on the rendered scripts.
++- sync_transfer.sh creates the DTS transfer config (assets Deals + Owners, daily 02:00 UTC) if missing.
++All scripts: bash -n clean, placeholders refused, create-or-update everywhere.
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/c_writeback_job.md b/.claude/skills/aider-scaffold/assets/recipes/c_writeback_job.md
+new file mode 100644
+index 0000000..12565df
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/c_writeback_job.md
+@@ -0,0 +1,14 @@
++# Recipe — scenario C write-back: Node 22 Cloud Run job that PATCHes hot_score_v1 / hot_flag_v1 onto deals
++
++/add writeback/package.json writeback/index.mjs writeback/Dockerfile writeback/deploy_job.sh writeback/bootstrap_property.sh
++/read-only sql/hot_deals_v1.sql sql/audit_tables.sql CONVENTIONS.md
++
++- index.mjs: read hubspot.hot_deals_v1_writeback (only rows whose value differs), POST /crm/v3/objects/deals/batch/update in
++  slices of 100, honour 429/5xx with the X-HubSpot-RateLimit-Interval-Milliseconds header (bounded backoff), parse 207 partial
++  results per id, log one writeback_log row per deal (OK | ERROR | DRY), exit 1 when any error so the task is retried; gate:
++  WRITEBACK_APPROVE unset → DRY (no HubSpot call). Never send a NULL score. A 403 names the missing scope.
++- bootstrap_property.sh: create hot_score_v1 (number) and hot_flag_v1 (booleancheckbox) once with a schema-write token (GET first).
++- deploy_job.sh: SAs new-deals-writeback (jobUser + dataset dataEditor + accessor on hubspot-token-write pinned version) and
++  new-deals-scheduler (run.invoker on the job); `gcloud run jobs deploy --source`; Cloud Scheduler → jobs.run at 05:30
++  Europe/Zurich Monday (after the 04:00 UTC scheduled query, before A's 07:00); `execute` and `live` sub-commands; DRYRUN=1.
++Verify: node --check, bash -n, DRYRUN=1 deploy prints the sequence.
+diff --git a/scoring/hot_score_v1.sql b/scoring/hot_score_v1.sql
+index fb232da..36c9941 100644
+--- a/scoring/hot_score_v1.sql
++++ b/scoring/hot_score_v1.sql
+@@ -1,7 +1,7 @@
+ -- hot_score_v1.sql — BigQuery SQL port of hot_score() from cloud_function_new_deals/main.py (scenario C compute lane).
+ -- Replace ${PROJECT}. Returns NULLs for pipelines without a conversion rate, like the Python function.
+ -- Verify with tests/hot_score_vectors.sql (generated from tests/hot_score_vectors.json): every row must show ok = TRUE.
+-CREATE OR REPLACE FUNCTION `${PROJECT}.hubspot.hot_score_v1`(
++CREATE OR REPLACE FUNCTION `${PROJECT}.${DATASET}.hot_score_v1`(
+   pipeline STRING, hs_deal_stage_probability FLOAT64, closedate TIMESTAMP,
+   calculation___pipeline_2026__k__ FLOAT64, services_value_2026 FLOAT64,
+   asp_in_usd_q2_2022_calculation FLOAT64, tpm__k_y FLOAT64, product_hierarchy STRING,
+diff --git a/sql/apply.sh b/sql/apply.sh
+new file mode 100755
+index 0000000..4e32145
+--- /dev/null
++++ b/sql/apply.sh
+@@ -0,0 +1,25 @@
++#!/usr/bin/env bash
++# apply.sh — render and apply every SQL object of scenario C in dependency order (idempotent: OR REPLACE / IF NOT EXISTS).
++#   sql/apply.sh            apply to ${PROJECT}.${DATASET}
++#   DRYRUN=1 sql/apply.sh   render only; prints each statement's first line and checks no placeholder survives
++# Settings from ../.env: PROJECT DATASET BQ_LOCATION PORTAL_ID SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
++[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
++: "${PROJECT:?set PROJECT in .env}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}"
++: "${SYNC_DATASET:?set SYNC_DATASET in .env (dataset the HubSpot→BigQuery sync writes to)}" "${SYNC_DEALS_TABLE:?}" "${SYNC_OWNERS_TABLE:?}"
++DRYRUN="${DRYRUN:-0}"
++for v in PROJECT SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE; do [[ "${!v}" != your-* && "${!v}" != "<"*">" ]] || { echo "apply.sh: $v holds a placeholder (${!v})" >&2; exit 2; }; done
++
++render() { sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${BQ_LOCATION}/$BQ_LOCATION/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" \
++               -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g" -e "s/\${SYNC_OWNERS_TABLE}/$SYNC_OWNERS_TABLE/g" "$1"; }
++
++# order matters: tables (A's schema + audit) → UDF → adapter views → scoring views
++FILES=("$ROOT/cloud_function_new_deals/bigquery_schema.sql" "$HERE/audit_tables.sql" "$ROOT/scoring/hot_score_v1.sql" "$HERE/deals_synced_v1.sql" "$HERE/hot_deals_v1.sql")
++for f in "${FILES[@]}"; do
++  sql=$(render "$f")
++  if grep -q '\${' <<<"$sql"; then echo "apply.sh: unrendered placeholder in $f:" >&2; grep -n '\${' <<<"$sql" >&2; exit 2; fi
++  if [[ "$DRYRUN" == 1 ]]; then echo "── $(basename "$f"): $(grep -c -E '^(CREATE|ALTER)' <<<"$sql") DDL statement(s), $(wc -l <<<"$sql") lines (rendered OK)"
++  else echo "── applying $(basename "$f")"; bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false <<<"$sql"; fi
++done
++echo "next: sql/refresh_pipeline_labels.sh (labels), sql/scheduled_query.sh (register the weekly script), bq query < tests/hot_score_vectors.sql (UDF parity)"
+diff --git a/sql/audit_tables.sql b/sql/audit_tables.sql
+new file mode 100644
+index 0000000..855e122
+--- /dev/null
++++ b/sql/audit_tables.sql
+@@ -0,0 +1,17 @@
++-- Audit tables shared by every scenario (layer L13). new_deals_runs (one summary row per run) lives in
++-- cloud_function_new_deals/bigquery_schema.sql; these two add the per-deal history and the write-back log.
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_history` (
++  run_ts TIMESTAMP NOT NULL, entity STRING, orchestrator STRING, deal_id STRING NOT NULL, dealname STRING, final_customer STRING,
++  name_key STRING, createdate TIMESTAMP, created_by_user_id STRING, source STRING, owner STRING, sales_region STRING,
++  pipeline STRING, pipeline_id STRING, stage STRING, probability_pct FLOAT64, amount FLOAT64, currency STRING, amount_kusd FLOAT64,
++  closedate DATE, arr_ky FLOAT64, product_family STRING, product STRING, application STRING, icalps_dealtype STRING, icalps_stage STRING,
++  day1_hot_score FLOAT64, day1_hot_flag BOOL, duplicate_suspect BOOL, duplicate_of STRING, deal_url STRING,
++  first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
++PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id
++OPTIONS (partition_expiration_days = 730, description = "one slice per run: how a deal scored on each run; a replay of a run_ts replaces its slice");
++
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.writeback_log` (
++  run_ts TIMESTAMP NOT NULL, deal_id STRING NOT NULL, hot_score_v1 FLOAT64, hot_flag_v1 BOOL,
++  previous_score FLOAT64, previous_flag BOOL, status STRING, http_status INT64, error STRING, dry_run BOOL)
++PARTITION BY DATE(run_ts) CLUSTER BY deal_id
++OPTIONS (description = "one row per deal per write-back run; status OK | ERROR | DRY");
+diff --git a/sql/deals_synced_v1.sql b/sql/deals_synced_v1.sql
+new file mode 100644
+index 0000000..621983f
+--- /dev/null
++++ b/sql/deals_synced_v1.sql
+@@ -0,0 +1,55 @@
++-- Adapter views over the HubSpot → BigQuery sync (scenario C, layer L4). The connector decides the raw names and types;
++-- these views are the single place that knows them, so every downstream object reads stable names.
++-- ${SYNC_DATASET}.${SYNC_DEALS_TABLE} / ${SYNC_OWNERS_TABLE} are filled from .env after the first transfer run
++-- (Google DTS HubSpot connector: native tables per asset; HubSpot Data Hub sync: external tables in hubspot_data_set_<hubId>).
++-- SAFE_CAST tolerates either typing. Deals outside the five known pipelines pass through and are filtered downstream.
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.deals_synced_v1` AS
++SELECT
++  CAST(hs_object_id AS STRING)                                   AS deal_id,
++  CAST(pipeline AS STRING)                                       AS pipeline_id,
++  CAST(dealstage AS STRING)                                      AS dealstage_id,
++  CAST(dealname AS STRING)                                       AS dealname,
++  CAST(final_customer AS STRING)                                 AS final_customer,
++  CAST(sales_region AS STRING)                                   AS sales_region,
++  CAST(deal_currency_code AS STRING)                             AS currency,
++  CAST(product_hierarchy AS STRING)                              AS product_hierarchy,
++  CAST(prod___product_name_new_ AS STRING)                       AS product,
++  CAST(application AS STRING)                                    AS application,
++  CAST(icalps_dealtype AS STRING)                                AS icalps_dealtype,
++  CAST(icalps_stage AS STRING)                                   AS icalps_stage,
++  CAST(icalps_dealstatus AS STRING)                              AS icalps_dealstatus,
++  CAST(revenue_state AS STRING)                                  AS revenue_state,
++  CAST(hs_object_source_label AS STRING)                         AS source,
++  CAST(hs_created_by_user_id AS STRING)                          AS created_by_user_id,
++  CAST(hubspot_owner_id AS STRING)                               AS owner_id,
++  SAFE_CAST(createdate AS TIMESTAMP)                             AS createdate,
++  SAFE_CAST(closedate AS TIMESTAMP)                              AS closedate,
++  SAFE_CAST(notes_last_updated AS TIMESTAMP)                     AS notes_last_updated,
++  SAFE_CAST(hs_lastmodifieddate AS TIMESTAMP)                    AS lastmodified,
++  SAFE_CAST(hs_deal_stage_probability AS FLOAT64)                AS stage_probability,
++  SAFE_CAST(amount AS FLOAT64)                                   AS amount,
++  SAFE_CAST(amount_in_home_currency AS FLOAT64)                  AS amount_kusd,
++  SAFE_CAST(asp_in_usd_q2_2022_calculation AS FLOAT64)           AS asp_in_usd_q2_2022_calculation,
++  SAFE_CAST(tpm__k_y AS FLOAT64)                                 AS tpm__k_y,
++  SAFE_CAST(services_value_2026 AS FLOAT64)                      AS services_value_2026,
++  SAFE_CAST(calculation___pipeline_2026__k__ AS FLOAT64)         AS calculation___pipeline_2026__k__,
++  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes,
++  -- the written-back properties, once they exist in HubSpot and in the sync (NULL before the first write-back)
++  SAFE_CAST(hot_score_v1 AS FLOAT64)                             AS hot_score_v1_synced,
++  SAFE_CAST(hot_flag_v1 AS BOOL)                                 AS hot_flag_v1_synced
++FROM `${PROJECT}.${SYNC_DATASET}.${SYNC_DEALS_TABLE}`
++WHERE hs_object_id IS NOT NULL;
++
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.owners_synced_v1` AS
++SELECT CAST(id AS STRING) AS owner_id,
++       NULLIF(TRIM(CONCAT(IFNULL(CAST(firstName AS STRING), ''), ' ', IFNULL(CAST(lastName AS STRING), ''))), '') AS owner_name,
++       CAST(email AS STRING) AS owner_email
++FROM `${PROJECT}.${SYNC_DATASET}.${SYNC_OWNERS_TABLE}`;
++
++-- pipeline and stage labels are not a sync asset: sql/refresh_pipeline_labels.sh loads them from GET /crm/v3/pipelines/deals
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.pipeline_labels` (
++  pipeline_id STRING NOT NULL, pipeline_label STRING, stage_id STRING, stage_label STRING, stage_probability FLOAT64, refreshed_at TIMESTAMP);
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.pipelines_synced_v1` AS
++SELECT DISTINCT pipeline_id, pipeline_label AS label FROM `${PROJECT}.${DATASET}.pipeline_labels`;
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` AS
++SELECT stage_id, stage_label AS label, pipeline_id FROM `${PROJECT}.${DATASET}.pipeline_labels` WHERE stage_id IS NOT NULL;
+diff --git a/sql/hot_deals_v1.sql b/sql/hot_deals_v1.sql
+new file mode 100644
+index 0000000..1f21241
+--- /dev/null
++++ b/sql/hot_deals_v1.sql
+@@ -0,0 +1,36 @@
++-- Versioned scoring views (scenario C, layer L5/L6). v1 is never edited in place: a new fit is hot_score_v2 + hot_deals_v2.
++-- Needs scoring/hot_score_v1.sql (the UDF) and sql/deals_synced_v1.sql applied first (sql/apply.sh does it in order).
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1` AS
++WITH scored AS (
++  SELECT d.*,
++         `${PROJECT}.${DATASET}.hot_score_v1`(d.pipeline_id, d.stage_probability, d.closedate, d.calculation___pipeline_2026__k__,
++            d.services_value_2026, d.asp_in_usd_q2_2022_calculation, d.tpm__k_y, d.product_hierarchy, d.num_contacted_notes,
++            d.notes_last_updated, d.revenue_state, CURRENT_TIMESTAMP()) AS hs
++  FROM `${PROJECT}.${DATASET}.deals_synced_v1` d
++  LEFT JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` st ON st.stage_id = d.dealstage_id
++  WHERE d.pipeline_id IN ('12096408', '13772279')                                   -- scored pipelines only (main.py CR)
++    AND NOT REGEXP_CONTAINS(LOWER(IFNULL(st.label, '')), r'closed')                -- open deals only; label from pipeline_labels
++)
++SELECT deal_id, dealname, final_customer, sales_region, pipeline_id, amount_kusd, closedate,
++       hs.score AS hot_score_v1, hs.hot AS hot_flag_v1,
++       ROW_NUMBER() OVER (PARTITION BY sales_region ORDER BY hs.score DESC, amount_kusd DESC, deal_id) AS region_rank,
++       RANK()       OVER (ORDER BY hs.score DESC, amount_kusd DESC)                                       AS global_rank,
++       hot_score_v1_synced, hot_flag_v1_synced
++FROM scored;
++
++-- per-region top-5: the arithmetic HubSQL cannot do (window functions)
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_top5_by_region` AS
++SELECT * FROM `${PROJECT}.${DATASET}.hot_deals_v1` QUALIFY region_rank <= 5;
++
++-- rows the write-back must PATCH: the computed value differs from what HubSpot holds (last successful write-back, else the synced property).
++-- Never a NULL score: sending "" would clear the property on unscored pipelines.
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_writeback` AS
++SELECT h.deal_id, h.hot_score_v1, h.hot_flag_v1,
++       COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced) AS previous_score,
++       COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced)  AS previous_flag
++FROM `${PROJECT}.${DATASET}.hot_deals_v1` h
++LEFT JOIN (SELECT deal_id, ARRAY_AGG(STRUCT(hot_score_v1, hot_flag_v1) ORDER BY run_ts DESC LIMIT 1)[OFFSET(0)] AS last
++           FROM `${PROJECT}.${DATASET}.writeback_log` WHERE status = 'OK' AND NOT dry_run GROUP BY deal_id) w USING (deal_id)
++WHERE h.hot_score_v1 IS NOT NULL
++  AND (h.hot_score_v1 IS DISTINCT FROM COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced)
++    OR h.hot_flag_v1  IS DISTINCT FROM COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced));
+diff --git a/sql/new_deals_weekly.sql b/sql/new_deals_weekly.sql
+new file mode 100644
+index 0000000..b66b92e
+--- /dev/null
++++ b/sql/new_deals_weekly.sql
+@@ -0,0 +1,86 @@
++-- Scenario C scheduled script: window → shape → duplicates → MERGE → history → run log → state, in ONE transaction.
++-- Registered per entity by sql/scheduled_query.sh (${ENTITY}, ${PIPELINES} substituted); @run_time is BigQuery's parameter.
++-- Idempotent: the batch is a pure function of (synced state, @run_time); replaying a run_time rewrites the same slices.
++DECLARE entity STRING DEFAULT '${ENTITY}';
++DECLARE pipelines ARRAY<STRING> DEFAULT ${PIPELINES};
++DECLARE lookback_days INT64 DEFAULT 14;                        -- replaces the watermark search; MERGE absorbs the overlap
++DECLARE run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(@run_time, SECOND);
++DECLARE freshest TIMESTAMP;
++DECLARE t0 TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
++
++-- freshness guard: never MERGE a stale sync (the sync is scheduled, never real-time)
++SET freshest = (SELECT MAX(lastmodified) FROM `${PROJECT}.${DATASET}.deals_synced_v1`);
++IF freshest IS NULL OR freshest < TIMESTAMP_SUB(run_ts, INTERVAL 36 HOUR) THEN
++  INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, status, error, duration_ms)
++  VALUES (run_ts, entity, 'window', FALSE, 'bigquery-scheduled-query', 'ABORTED', 'deals sync older than 36h', 0);
++  RAISE USING MESSAGE = 'deals sync is older than 36h; aborting run';
++END IF;
++
++BEGIN TRANSACTION;
++
++CREATE TEMP TABLE batch AS
++WITH recent AS (
++  SELECT *, SUBSTR(REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(final_customer), ''), REGEXP_EXTRACT(dealname, r'^[^-/|(]*'))), r'[^a-z0-9]', ''), 1, 40) AS name_key
++  FROM `${PROJECT}.${DATASET}.deals_synced_v1`
++  WHERE createdate >= TIMESTAMP_SUB(run_ts, INTERVAL 90 DAY) AND createdate < run_ts     -- duplicate horizon = main.py recent_names(days=90)
++), win AS (
++  SELECT * FROM recent WHERE createdate >= TIMESTAMP_SUB(run_ts, INTERVAL lookback_days DAY) AND pipeline_id IN UNNEST(pipelines)
++), dups AS (
++  SELECT w.deal_id, STRING_AGG(r.deal_id, ', ' ORDER BY r.createdate) AS duplicate_of
++  FROM win w JOIN recent r ON r.name_key = w.name_key AND r.deal_id <> w.deal_id AND w.name_key <> ''
++  GROUP BY w.deal_id
++)
++SELECT entity, w.deal_id, w.dealname, w.final_customer, w.name_key,
++       w.createdate, w.created_by_user_id, w.source,
++       COALESCE(o.owner_name, w.owner_id) AS owner, w.sales_region,
++       COALESCE(p.label, w.pipeline_id) AS pipeline, w.pipeline_id, COALESCE(s.label, w.dealstage_id) AS stage,
++       ROUND(IFNULL(w.stage_probability, 0) * 100, 1) AS probability_pct, IFNULL(w.amount, 0) AS amount, w.currency,
++       IFNULL(w.amount_kusd, 0) AS amount_kusd, DATE(w.closedate) AS closedate,
++       IFNULL(w.asp_in_usd_q2_2022_calculation, 0) AS arr_ky, w.product_hierarchy AS product_family, w.product, w.application,
++       w.icalps_dealtype, w.icalps_stage,
++       hs.score AS day1_hot_score, hs.hot AS day1_hot_flag,
++       d.duplicate_of IS NOT NULL AS duplicate_suspect, d.duplicate_of,
++       CONCAT('https://app.hubspot.com/go-to/${PORTAL_ID}/0-3/', w.deal_id) AS deal_url,
++       run_ts AS first_seen_run, run_ts AS last_seen_run
++FROM win w
++LEFT JOIN dups d USING (deal_id)
++LEFT JOIN `${PROJECT}.${DATASET}.owners_synced_v1` o ON o.owner_id = w.owner_id
++LEFT JOIN `${PROJECT}.${DATASET}.pipelines_synced_v1` p ON p.pipeline_id = w.pipeline_id
++LEFT JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` s ON s.stage_id = w.dealstage_id,
++UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(w.pipeline_id, w.stage_probability, w.closedate, w.calculation___pipeline_2026__k__,
++        w.services_value_2026, w.asp_in_usd_q2_2022_calculation, w.tpm__k_y, w.product_hierarchy, w.num_contacted_notes,
++        w.notes_last_updated, w.revenue_state, run_ts)]) AS hs;
++
++-- L7: MERGE on deal_id; deal_id, first_seen_run and the day-1 score are never overwritten (same frozen set as main.py after G06)
++MERGE `${PROJECT}.${DATASET}.new_deals` t USING batch s ON t.deal_id = s.deal_id
++WHEN MATCHED THEN UPDATE SET
++  entity = s.entity, dealname = s.dealname, final_customer = s.final_customer, name_key = s.name_key, createdate = s.createdate,
++  created_by_user_id = s.created_by_user_id, source = s.source, owner = s.owner, sales_region = s.sales_region, pipeline = s.pipeline,
++  pipeline_id = s.pipeline_id, stage = s.stage, probability_pct = s.probability_pct, amount = s.amount, currency = s.currency,
++  amount_kusd = s.amount_kusd, closedate = s.closedate, arr_ky = s.arr_ky, product_family = s.product_family, product = s.product,
++  application = s.application, icalps_dealtype = s.icalps_dealtype, icalps_stage = s.icalps_stage,
++  duplicate_suspect = s.duplicate_suspect, duplicate_of = s.duplicate_of, deal_url = s.deal_url, last_seen_run = s.last_seen_run
++WHEN NOT MATCHED THEN INSERT ROW;
++
++-- L13: per-deal history slice (replay of the same run_ts replaces it) and one summary row
++DELETE FROM `${PROJECT}.${DATASET}.new_deals_history` WHERE run_ts = run_ts AND entity = entity;
++INSERT INTO `${PROJECT}.${DATASET}.new_deals_history`
++SELECT run_ts, entity, 'bigquery-scheduled-query', * EXCEPT(entity) FROM batch;
++
++DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs` WHERE run_ts = run_ts AND entity = entity AND orchestrator = 'bigquery-scheduled-query';
++INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
++  (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms)
++SELECT run_ts, entity, 'window', FALSE, 'bigquery-scheduled-query',
++       (SELECT watermark FROM `${PROJECT}.${DATASET}.report_state` WHERE report_id = CONCAT('NEW_DEALS_', entity, '_C')),
++       TIMESTAMP_SUB(run_ts, INTERVAL lookback_days DAY), run_ts,
++       COUNT(*), COUNT(*), COUNTIF(duplicate_suspect), COUNTIF(day1_hot_flag), 'OK', NULL,
++       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), t0, MILLISECOND)
++FROM batch;
++
++-- L8: state advances inside the same transaction as the MERGE (engine-enforced "only after"); C keeps its own report_id
++MERGE `${PROJECT}.${DATASET}.report_state` t
++USING (SELECT CONCAT('NEW_DEALS_', entity, '_C') AS report_id, run_ts AS watermark) s ON t.report_id = s.report_id
++WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP()
++WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP());
++
++COMMIT TRANSACTION;
+diff --git a/sql/refresh_pipeline_labels.sh b/sql/refresh_pipeline_labels.sh
+new file mode 100755
+index 0000000..125a177
+--- /dev/null
++++ b/sql/refresh_pipeline_labels.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++# refresh_pipeline_labels.sh — pipelines and stage labels are not a sync asset; load them from the HubSpot API into
++# ${DATASET}.pipeline_labels (WRITE_TRUNCATE → re-runnable). Needs HUBSPOT_TOKEN (read scope crm.schemas.deals.read) in the env.
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
++[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
++: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${HUBSPOT_TOKEN:?HUBSPOT_TOKEN (read) must be in the environment}"
++TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
++curl -sS -f -H "Authorization: Bearer $HUBSPOT_TOKEN" https://api.hubapi.com/crm/v3/pipelines/deals \
++ | python3 -c '
++import json, sys, datetime
++now = datetime.datetime.now(datetime.timezone.utc).isoformat()
++for p in json.load(sys.stdin)["results"]:
++    for s in p.get("stages", []):
++        print(json.dumps({"pipeline_id": p["id"], "pipeline_label": p["label"], "stage_id": s["id"], "stage_label": s["label"],
++                          "stage_probability": float((s.get("metadata") or {}).get("probability") or 0), "refreshed_at": now}))' > "$TMP"
++echo "fetched $(wc -l < "$TMP") stage rows"
++bq --project_id="$PROJECT" --location="$BQ_LOCATION" load --source_format=NEWLINE_DELIMITED_JSON --replace \
++   "${DATASET}.pipeline_labels" "$TMP" pipeline_id:STRING,pipeline_label:STRING,stage_id:STRING,stage_label:STRING,stage_probability:FLOAT64,refreshed_at:TIMESTAMP
+diff --git a/sql/scheduled_query.sh b/sql/scheduled_query.sh
+new file mode 100755
+index 0000000..0abf23f
+--- /dev/null
++++ b/sql/scheduled_query.sh
+@@ -0,0 +1,44 @@
++#!/usr/bin/env bash
++# scheduled_query.sh — register or update one BigQuery scheduled query per entity running sql/new_deals_weekly.sql.
++#   sql/scheduled_query.sh                 create-or-update both; schedule "every monday 04:00" (UTC — scheduled queries ignore DST:
++#                                          04:00 UTC is 05:00/06:00 Europe/Zurich, always before the 05:30-Zurich write-back and A's 07:00)
++#   DISABLE_SCHEDULE=1 sql/scheduled_query.sh   register without auto-scheduling (the gate: run one backfill by hand first)
++#   DRYRUN=1 sql/scheduled_query.sh        render the two scripts, run `bq query --dry_run` on each (syntax + bytes), register nothing
++# Settings from ../.env: PROJECT DATASET BQ_LOCATION PORTAL_ID SQL_SA_NAME (default new-deals-sql)
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
++[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
++: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}"
++DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
++declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
++
++render() { sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" -e "s/\${ENTITY}/$1/g" -e "s/\${PIPELINES}/${PIPES[$1]}/g" "$HERE/new_deals_weekly.sql"; }
++
++if [[ "$DRYRUN" != 1 ]]; then
++  gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1 || gcloud iam service-accounts create "$SQL_SA_NAME" --project "$PROJECT" --display-name "new deals scheduled queries"
++  gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None >/dev/null
++  bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
++fi
++for E in SEALSQ ICALPS; do
++  Q=$(render "$E"); NAME="new-deals-$E-C"
++  grep -q '\${' <<<"$Q" && { echo "unrendered placeholder for $E" >&2; exit 2; }
++  if [[ "$DRYRUN" == 1 ]]; then
++    echo "── $NAME: $(wc -l <<<"$Q") lines; bq query --dry_run:"
++    bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false --dry_run --parameter="run_time:TIMESTAMP:$(date -u +%FT%TZ)" <<<"$Q" || echo "   (dry_run needs credentials; rendered script saved to /tmp/new_deals_weekly_$E.sql)"; printf '%s\n' "$Q" > "/tmp/new_deals_weekly_$E.sql"; continue
++  fi
++  EXISTING=$(bq ls --transfer_config --transfer_location="$BQ_LOCATION" --project_id="$PROJECT" --format=json 2>/dev/null \
++             | python3 -c 'import sys,json; d=json.load(sys.stdin) or []; print(next((c["name"] for c in d if c.get("displayName")==sys.argv[1]),""))' "$NAME")
++  PARAMS=$(python3 -c 'import json,sys; print(json.dumps({"query": sys.stdin.read()}))' <<<"$Q")
++  if [[ -z "$EXISTING" ]]; then
++    bq mk --transfer_config --project_id="$PROJECT" --location="$BQ_LOCATION" --data_source=scheduled_query --display_name="$NAME" \
++       --schedule="$SCHEDULE_UTC" --service_account_name="$SA" --params="$PARAMS" ${DISABLE_SCHEDULE:+--no_auto_scheduling}
++  else
++    bq update --transfer_config --params="$PARAMS" --schedule="$SCHEDULE_UTC" --service_account_name="$SA" "$EXISTING"
++  fi
++done
++cat <<TXT
++manual run (the C gate — writes to the real tables, so use a dev dataset first if you need a no-write rehearsal):
++  bq mk --transfer_run --run_time=\$(date -u +%FT%TZ) <transfer_config_resource_name>
++replay a week:
++  bq mk --transfer_run --start_time=2026-09-28T04:00:00Z --end_time=2026-10-05T04:00:00Z <transfer_config_resource_name>
++TXT
+diff --git a/sql/sync_transfer.sh b/sql/sync_transfer.sh
+new file mode 100755
+index 0000000..688a2cb
+--- /dev/null
++++ b/sql/sync_transfer.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++# sync_transfer.sh — HubSpot → BigQuery with the Google BigQuery Data Transfer Service HubSpot connector (Preview, free while
++# in Preview; full refresh on every run). Creates or reports the transfer config for assets Deals + Owners, daily 02:00 UTC,
++# so the Monday 04:00 UTC scheduled query reads a sync at most ~26 h old (freshness guard is 36 h).
++# Needs a HubSpot private-app token with crm.objects.deals.read + crm.objects.owners.read in HUBSPOT_TOKEN (not stored here:
++# the connector keeps its own copy inside the transfer config).
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
++[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
++: "${PROJECT:?}" "${BQ_LOCATION:=EU}" "${SYNC_DATASET:?}" "${HUBSPOT_TOKEN:?}" "${SYNC_SCHEDULE:=every day 02:00}"
++NAME="hubspot-sync-deals-owners"
++bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "CREATE SCHEMA IF NOT EXISTS \`${PROJECT}.${SYNC_DATASET}\` OPTIONS (location = '${BQ_LOCATION}')"
++EXISTING=$(bq ls --transfer_config --transfer_location="$BQ_LOCATION" --project_id="$PROJECT" --format=json 2>/dev/null \
++           | python3 -c 'import sys,json; d=json.load(sys.stdin) or []; print(next((c["name"] for c in d if c.get("displayName")==sys.argv[1]),""))' "$NAME")
++if [[ -n "$EXISTING" ]]; then echo "transfer config exists: $EXISTING (update the token with: bq update --transfer_config --params=... $EXISTING)"; exit 0; fi
++PARAMS=$(python3 -c 'import json,os; print(json.dumps({"assets": ["Deals", "Owners"], "connector.authentication.oauth.accessToken": os.environ["HUBSPOT_TOKEN"]}))')
++bq mk --transfer_config --project_id="$PROJECT" --location="$BQ_LOCATION" --data_source=hubspot --target_dataset="$SYNC_DATASET" \
++   --display_name="$NAME" --schedule="$SYNC_SCHEDULE" --params="$PARAMS"
++echo "after the first run: bq ls ${PROJECT}:${SYNC_DATASET}  → put the deals/owners table names into .env SYNC_DEALS_TABLE / SYNC_OWNERS_TABLE, then sql/apply.sh"
+diff --git a/tests/hot_score_vectors.sql b/tests/hot_score_vectors.sql
+index b38fd2e..1485044 100644
+--- a/tests/hot_score_vectors.sql
++++ b/tests/hot_score_vectors.sql
+@@ -19,7 +19,7 @@ WITH v AS (SELECT * FROM UNNEST([
+ ]))
+ SELECT id, exp_score, r.score, exp_hot, r.hot,
+        (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok
+-FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),
++FROM v, UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),
+        SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),
+        product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '2026-10-05T07:00:00+00')]) AS r
+ ORDER BY id;
+diff --git a/tests/test_hot_score.py b/tests/test_hot_score.py
+index 5420ca0..554b1dc 100644
+--- a/tests/test_hot_score.py
++++ b/tests/test_hot_score.py
+@@ -126,7 +126,7 @@ def emit_sql(vectors: dict) -> str:
+             "WITH v AS (SELECT * FROM UNNEST([\n  " + ",\n  ".join(rows) + "\n]))\n"
+             "SELECT id, exp_score, r.score, exp_hot, r.hot,\n"
+             "       (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok\n"
+-            "FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),\n"
++            "FROM v, UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),\n"
+             "       SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),\n"
+             "       product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '" + vectors["now"].replace("Z", "+00") + "')]) AS r\n"
+             "ORDER BY id;\n")
+diff --git a/writeback/Dockerfile b/writeback/Dockerfile
+new file mode 100644
+index 0000000..266a671
+--- /dev/null
++++ b/writeback/Dockerfile
+@@ -0,0 +1,7 @@
++FROM node:22-slim
++WORKDIR /app
++COPY package*.json ./
++RUN npm ci --omit=dev || npm install --omit=dev
++COPY index.mjs ./
++USER node
++CMD ["node", "index.mjs"]
+diff --git a/writeback/bootstrap_property.sh b/writeback/bootstrap_property.sh
+new file mode 100755
+index 0000000..595029a
+--- /dev/null
++++ b/writeback/bootstrap_property.sh
+@@ -0,0 +1,14 @@
++#!/usr/bin/env bash
++# bootstrap_property.sh — one-time creation of the deal properties the write-back fills (GET before POST → re-runnable).
++# Needs a token with crm.schemas.deals.write in HUBSPOT_SCHEMA_TOKEN (use it once; it is not stored anywhere).
++set -euo pipefail
++: "${HUBSPOT_SCHEMA_TOKEN:?a token with crm.schemas.deals.write, used once}"
++H=(-H "Authorization: Bearer $HUBSPOT_SCHEMA_TOKEN" -H "Content-Type: application/json")
++ensure() {  # name label type fieldType description
++  if curl -sS -o /dev/null -w '%{http_code}' "${H[@]}" "https://api.hubapi.com/crm/v3/properties/deals/$1" | grep -q '^200$'; then echo "exists: $1"; return; fi
++  curl -sS -f "${H[@]}" -X POST https://api.hubapi.com/crm/v3/properties/deals \
++    -d "{\"name\":\"$1\",\"label\":\"$2\",\"type\":\"$3\",\"fieldType\":\"$4\",\"groupName\":\"dealinformation\",\"description\":\"$5\",\"hasUniqueValue\":false,\"formField\":false}" >/dev/null
++  echo "created: $1"
++}
++ensure hot_score_v1 "Hot score v1" number number "Day-1 hot-deal score (0-100), model v1 fitted 2026-10-01; written weekly by the new-deals write-back job from BigQuery hubspot.hot_deals_v1"
++ensure hot_flag_v1  "Hot deal v1"  bool   booleancheckbox "hot_score_v1 >= 45; written weekly by the new-deals write-back job"
+diff --git a/writeback/deploy_job.sh b/writeback/deploy_job.sh
+new file mode 100755
+index 0000000..290fd6f
+--- /dev/null
++++ b/writeback/deploy_job.sh
+@@ -0,0 +1,37 @@
++#!/usr/bin/env bash
++# deploy_job.sh — Cloud Run job for the write-back + Cloud Scheduler → jobs.run. Create-or-update everywhere.
++#   writeback/deploy_job.sh            deploy (WRITEBACK_APPROVE stays 0 → dry executions)
++#   writeback/deploy_job.sh execute    run once now and wait (dry unless WRITEBACK_APPROVE=1 was set on the job)
++#   writeback/deploy_job.sh live       flip WRITEBACK_APPROVE=1 on the job (the gate)
++#   DRYRUN=1 …                         print the commands
++# Settings from ../.env: PROJECT REGION DATASET HUBSPOT_WRITE_TOKEN_VERSION (pinned Secret Manager version of hubspot-token-write)
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
++[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
++: "${PROJECT:?}" "${REGION:=europe-west6}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${JOB:=new-deals-writeback}" "${WRITEBACK_SCHEDULE:=30 5 * * 1}"
++DRYRUN="${DRYRUN:-0}"
++SA="new-deals-writeback@${PROJECT}.iam.gserviceaccount.com"; SCHED_SA="new-deals-scheduler@${PROJECT}.iam.gserviceaccount.com"
++run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
++ensure_sa() { if [[ "$DRYRUN" == 1 ]] || ! gcloud iam service-accounts describe "$1@${PROJECT}.iam.gserviceaccount.com" --project "$PROJECT" >/dev/null 2>&1; then run gcloud iam service-accounts create "$1" --project "$PROJECT" --display-name "$2"; fi; }
++
++case "${1:-deploy}" in
++  deploy)
++    : "${HUBSPOT_WRITE_TOKEN_VERSION:?pin a Secret Manager version of hubspot-token-write (not latest)}"
++    ensure_sa new-deals-writeback "new deals write-back job"; ensure_sa new-deals-scheduler "scheduler invoker for jobs.run"
++    run gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None
++    run bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
++    run gcloud secrets add-iam-policy-binding hubspot-token-write --project "$PROJECT" --member "serviceAccount:$SA" --role roles/secretmanager.secretAccessor
++    run gcloud run jobs deploy "$JOB" --project "$PROJECT" --region "$REGION" --source "$HERE" --service-account "$SA" \
++      --tasks 1 --max-retries 2 --task-timeout 900s \
++      --set-env-vars "BQ_PROJECT=${PROJECT},BQ_DATASET=${DATASET},WRITEBACK_APPROVE=${WRITEBACK_APPROVE:-0}" \
++      --set-secrets "HUBSPOT_TOKEN=hubspot-token-write:${HUBSPOT_WRITE_TOKEN_VERSION}"
++    run gcloud run jobs add-iam-policy-binding "$JOB" --project "$PROJECT" --region "$REGION" --member "serviceAccount:$SCHED_SA" --role roles/run.invoker
++    URI="https://run.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/jobs/${JOB}:run"
++    ARGS=(--project "$PROJECT" --location "$REGION" --schedule "$WRITEBACK_SCHEDULE" --time-zone "Europe/Zurich" --uri "$URI" --http-method POST --oauth-service-account-email "$SCHED_SA" --max-retry-attempts 3)
++    if [[ "$DRYRUN" != 1 ]] && gcloud scheduler jobs describe "$JOB" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then run gcloud scheduler jobs update http "$JOB" "${ARGS[@]}"; else run gcloud scheduler jobs create http "$JOB" "${ARGS[@]}"; fi
++    echo "dry execution now:  writeback/deploy_job.sh execute      (WRITEBACK_APPROVE=0 → rows logged with status DRY)"
++    echo "go live:            writeback/deploy_job.sh live" ;;
++  execute) run gcloud run jobs execute "$JOB" --project "$PROJECT" --region "$REGION" --wait ;;
++  live)    run gcloud run jobs update "$JOB" --project "$PROJECT" --region "$REGION" --update-env-vars WRITEBACK_APPROVE=1 ;;
++  *) sed -n '2,8p' "$0"; exit 1 ;;
++esac
+diff --git a/writeback/index.mjs b/writeback/index.mjs
+new file mode 100644
+index 0000000..4177c90
+--- /dev/null
++++ b/writeback/index.mjs
+@@ -0,0 +1,57 @@
++// new-deals write-back (scenario C, layer L10). Node 22 Cloud Run *job*: no HTTP surface, started by Cloud Scheduler via jobs.run.
++// Reads the delta view (rows whose computed hot score differs from what HubSpot holds), PATCHes deals in batches of 100,
++// logs one row per deal to writeback_log. Idempotent: a same-value PATCH is a projection (f(f(x)) = f(x)); unchanged rows are
++// skipped by the view anyway; a NULL score is never sent (it would clear the property). Gate: WRITEBACK_APPROVE unset → DRY.
++import { BigQuery } from '@google-cloud/bigquery';
++
++const { BQ_PROJECT, BQ_DATASET = 'hubspot', HUBSPOT_TOKEN, WRITEBACK_APPROVE, BATCH_PAUSE_MS = '600', MAX_ROWS } = process.env;
++if (!BQ_PROJECT) throw new Error('BQ_PROJECT is required');
++const DRY = WRITEBACK_APPROVE !== '1';
++if (!DRY && !HUBSPOT_TOKEN) throw new Error('HUBSPOT_TOKEN is required when WRITEBACK_APPROVE=1');
++const HS = 'https://api.hubapi.com';
++const RUN_TS = new Date(); RUN_TS.setUTCMilliseconds(0);
++const bq = new BigQuery({ projectId: BQ_PROJECT });
++const T = (n) => `\`${BQ_PROJECT}.${BQ_DATASET}.${n}\``;
++const log = (o) => console.log(JSON.stringify({ severity: 'INFO', run_ts: RUN_TS.toISOString(), ...o }));
++const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
++
++const [rows] = await bq.query({ query: `SELECT deal_id, hot_score_v1, hot_flag_v1, previous_score, previous_flag FROM ${T('hot_deals_v1_writeback')} ORDER BY deal_id${MAX_ROWS ? ` LIMIT ${Number(MAX_ROWS)}` : ''}` });
++log({ message: 'candidates', candidates: rows.length, dry_run: DRY });
++
++// POST /crm/v3/objects/deals/batch/update — ≤ 100 inputs; 200 = all written, 207 = partial (errors[] names the ids that failed).
++async function patchBatch(batch) {
++  const body = { inputs: batch.map((r) => ({ id: String(r.deal_id), properties: { hot_score_v1: String(r.hot_score_v1), hot_flag_v1: r.hot_flag_v1 ? 'true' : 'false' } })) };
++  for (let attempt = 1; attempt <= 5; attempt++) {
++    const res = await fetch(`${HS}/crm/v3/objects/deals/batch/update`, {
++      method: 'POST', headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
++    });
++    if (res.status === 429 || res.status >= 500) {          // honour the rate-limit interval header, then retry with backoff
++      const wait = Number(res.headers.get('x-hubspot-ratelimit-interval-milliseconds') || res.headers.get('retry-after') * 1000 || 10000) * attempt;
++      console.warn(JSON.stringify({ severity: 'WARNING', message: `HTTP ${res.status}`, attempt, wait_ms: wait }));
++      await sleep(Math.min(wait, 60000)); continue;
++    }
++    const json = await res.json().catch(() => ({}));
++    if (res.status === 403) throw new Error(`403 from HubSpot — the token lacks crm.objects.deals.write (${JSON.stringify(json).slice(0, 300)})`);
++    const failed = new Set((json.errors || []).flatMap((e) => (e.context?.ids || e.context?.objectIds || []).map(String)));
++    return batch.map((r) => ({ ...r, http_status: res.status,
++      status: res.ok && !failed.has(String(r.deal_id)) ? 'OK' : 'ERROR',
++      error: res.ok ? (failed.has(String(r.deal_id)) ? JSON.stringify(json.errors).slice(0, 1000) : null) : JSON.stringify(json).slice(0, 1000) }));
++  }
++  return batch.map((r) => ({ ...r, http_status: 0, status: 'ERROR', error: 'retries exhausted' }));
++}
++
++const results = [];
++for (let i = 0; i < rows.length; i += 100) {
++  const batch = rows.slice(i, i + 100);
++  results.push(...(DRY ? batch.map((r) => ({ ...r, http_status: null, status: 'DRY', error: null })) : await patchBatch(batch)));
++  if (!DRY && i + 100 < rows.length) await sleep(Number(BATCH_PAUSE_MS));   // ≈ 17 calls / 10 s, well under the 190 / 10 s burst limit
++}
++if (results.length) {
++  await bq.dataset(BQ_DATASET).table('writeback_log').insert(results.map((r) => ({
++    run_ts: RUN_TS.toISOString(), deal_id: String(r.deal_id), hot_score_v1: r.hot_score_v1, hot_flag_v1: r.hot_flag_v1,
++    previous_score: r.previous_score ?? null, previous_flag: r.previous_flag ?? null,
++    status: r.status, http_status: r.http_status, error: r.error, dry_run: DRY })));
++}
++const summary = { message: 'summary', patched: results.filter((r) => r.status === 'OK').length, errors: results.filter((r) => r.status === 'ERROR').length, dry: results.filter((r) => r.status === 'DRY').length };
++log(summary);
++if (summary.errors) process.exit(1);   // non-zero → Cloud Run retries the task (--max-retries); OK rows are logged, so the retry PATCHes only the rest
+diff --git a/writeback/package.json b/writeback/package.json
+new file mode 100644
+index 0000000..b858207
+--- /dev/null
++++ b/writeback/package.json
+@@ -0,0 +1,10 @@
++{
++  "name": "new-deals-writeback",
++  "version": "1.0.0",
++  "private": true,
++  "type": "module",
++  "description": "Scenario C write-back: BigQuery hot_deals_v1_writeback view → HubSpot deals batch update (100 per call) → writeback_log",
++  "engines": { "node": ">=22" },
++  "scripts": { "start": "node index.mjs", "check": "node --check index.mjs" },
++  "dependencies": { "@google-cloud/bigquery": "^8.1.0" }
++}
