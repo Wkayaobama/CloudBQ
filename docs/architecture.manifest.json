@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "AB549F61 17B1:4B47",
+ "serial": "27DE3AD4 15B9:CF17",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,7 +44,7 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 117,
+  "files": 101,
   "annotated": 75,
   "proposed": 3,
   "by_status": {
@@ -2180,102 +2180,6 @@
       "path": "docs/diffs",
       "exists": true,
       "children": [
-       {
-        "name": "0001-3a0cbb2-initial-commit-cloudbq-new-deals-function.patch",
-        "kind": "file",
-        "path": "docs/diffs/0001-3a0cbb2-initial-commit-cloudbq-new-deals-function.patch",
-        "exists": true
-       },
-       {
-        "name": "0002-8830ca2-tooling-tree-f-visualizer-skill-tree-f-ascii-man.patch",
-        "kind": "file",
-        "path": "docs/diffs/0002-8830ca2-tooling-tree-f-visualizer-skill-tree-f-ascii-man.patch",
-        "exists": true
-       },
-       {
-        "name": "0003-4fbbb49-tooling-aider-scaffold-skill-recipe-runner-diff.patch",
-        "kind": "file",
-        "path": "docs/diffs/0003-4fbbb49-tooling-aider-scaffold-skill-recipe-runner-diff.patch",
-        "exists": true
-       },
-       {
-        "name": "0004-63359b6-tooling-discovery-agent-and-implementation-agent.patch",
-        "kind": "file",
-        "path": "docs/diffs/0004-63359b6-tooling-discovery-agent-and-implementation-agent.patch",
-        "exists": true
-       },
-       {
-        "name": "0005-3a5c1bc-tooling-port-the-pass-sequence-skill-from-mir-lo.patch",
-        "kind": "file",
-        "path": "docs/diffs/0005-3a5c1bc-tooling-port-the-pass-sequence-skill-from-mir-lo.patch",
-        "exists": true
-       },
-       {
-        "name": "0006-15c926b-scoring-shared-hot-score-v1-constants-js-and-sql.patch",
-        "kind": "file",
-        "path": "docs/diffs/0006-15c926b-scoring-shared-hot-score-v1-constants-js-and-sql.patch",
-        "exists": true
-       },
-       {
-        "name": "0007-9c4eced-tooling-tree-f-visualizer-v2-layer-chips-layers.patch",
-        "kind": "file",
-        "path": "docs/diffs/0007-9c4eced-tooling-tree-f-visualizer-v2-layer-chips-layers.patch",
-        "exists": true
-       },
-       {
-        "name": "0008-b5c37ab-scenario-a-deploy-sh-as-a-gated-step-runner-in-c.patch",
-        "kind": "file",
-        "path": "docs/diffs/0008-b5c37ab-scenario-a-deploy-sh-as-a-gated-step-runner-in-c.patch",
-        "exists": true
-       },
-       {
-        "name": "0009-c6a7cc9-scenario-a-dry-mode-rehearses-the-live-window-pe.patch",
-        "kind": "file",
-        "path": "docs/diffs/0009-c6a7cc9-scenario-a-dry-mode-rehearses-the-live-window-pe.patch",
-        "exists": true
-       },
-       {
-        "name": "0010-913f63a-scenario-c-bigquery-compute-lane-adapter-views-h.patch",
-        "kind": "file",
-        "path": "docs/diffs/0010-913f63a-scenario-c-bigquery-compute-lane-adapter-views-h.patch",
-        "exists": true
-       },
-       {
-        "name": "0011-9e7e18a-scenario-b-n8n-on-cloud-run-deploy-unit-and-gene.patch",
-        "kind": "file",
-        "path": "docs/diffs/0011-9e7e18a-scenario-b-n8n-on-cloud-run-deploy-unit-and-gene.patch",
-        "exists": true
-       },
-       {
-        "name": "0012-6dbbf1f-docs-architecture-annotations-rendered-tree-f-pa.patch",
-        "kind": "file",
-        "path": "docs/diffs/0012-6dbbf1f-docs-architecture-annotations-rendered-tree-f-pa.patch",
-        "exists": true
-       },
-       {
-        "name": "0013-427410b-fixes-from-the-completeness-critic-scheduled-scr.patch",
-        "kind": "file",
-        "path": "docs/diffs/0013-427410b-fixes-from-the-completeness-critic-scheduled-scr.patch",
-        "exists": true
-       },
-       {
-        "name": "0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
-        "kind": "file",
-        "path": "docs/diffs/0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
-        "exists": true
-       },
-       {
-        "name": "0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
-        "kind": "file",
-        "path": "docs/diffs/0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
-        "exists": true
-       },
-       {
-        "name": "0016-566bc8f-tooling-tree-f-exclude-list-actually-applied-anc.patch",
-        "kind": "file",
-        "path": "docs/diffs/0016-566bc8f-tooling-tree-f-exclude-list-actually-applied-anc.patch",
-        "exists": true
-       },
        {
         "name": "INDEX.md",
         "kind": "file",

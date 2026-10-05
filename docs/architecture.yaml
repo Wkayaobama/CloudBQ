@@ -4,6 +4,7 @@
 #   python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml \
 #     --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html
 project: CloudBQ
+exclude: ['*.patch']            # the diff ledger's patches are listed in docs/diffs/INDEX.md, not in the tree
 scenarios:
   A: Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)
   B: n8n on Cloud Run (B1 delivery tail · B2 owns the workflow JSON)
