@@ -59,8 +59,8 @@ def load_annotations(path: str | None) -> dict:
             except ImportError:  # pragma: no cover
                 sys.exit("annotations are YAML but PyYAML is missing: pip install pyyaml (or pass a .json file)")
             data = yaml.safe_load(text) or {}
-    for k, default in (("project", ""), ("scenarios", {}), ("layers", {}), ("nodes", {}), ("header", {})):
-        data.setdefault(k, default)
+    for k, default in (("project", ""), ("scenarios", {}), ("layers", {}), ("nodes", {}), ("header", {}), ("exclude", [])):
+        data.setdefault(k, default)                       # exclude: project-level extra glob patterns (e.g. "*.patch"), merged with --exclude
     # scenarios / layers accept a mapping (id → label) or a list of {id, label}; order is preserved
     for key in ("scenarios", "layers"):
         v = data[key]
@@ -354,7 +354,7 @@ def main(argv=None) -> int:
     if not root.is_dir():
         sys.exit(f"--root {a.root} is not a directory")
     ann = load_annotations(a.annotations)
-    excludes = [p.strip() for p in a.exclude.split(",") if p.strip()]
+    excludes = [p.strip() for p in a.exclude.split(",") if p.strip()] + [str(x) for x in (ann.get("exclude") or [])]
     if not a.no_gitignore:
         excludes += load_gitignore(root)
     project = ann.get("project") or root.resolve().name

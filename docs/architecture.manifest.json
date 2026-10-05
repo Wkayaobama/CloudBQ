@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "9DF0E0C0 49CC:8757",
+ "serial": "AB549F61 17B1:4B47",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,7 +44,7 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 116,
+  "files": 117,
   "annotated": 75,
   "proposed": 3,
   "by_status": {
@@ -2268,6 +2268,12 @@
         "name": "0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
         "kind": "file",
         "path": "docs/diffs/0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
+        "exists": true
+       },
+       {
+        "name": "0016-566bc8f-tooling-tree-f-exclude-list-actually-applied-anc.patch",
+        "kind": "file",
+        "path": "docs/diffs/0016-566bc8f-tooling-tree-f-exclude-list-actually-applied-anc.patch",
         "exists": true
        },
        {

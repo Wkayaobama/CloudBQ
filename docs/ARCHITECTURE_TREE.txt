@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is 9DF0E0C0 49CC:8757
+Volume serial number is AB549F61 17B1:4B47
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -124,6 +124,7 @@ CloudBQ
 │   │       0013-427410b-fixes-from-the-completeness-critic-scheduled-scr.patch
 │   │       0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch
 │   │       0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch
+│   │       0016-566bc8f-tooling-tree-f-exclude-list-actually-applied-anc.patch
 │   │       INDEX.md
 │   │
 │   └───discovery
