@@ -1,0 +1,155 @@
+Folder PATH listing for volume CloudBQ
+Volume serial number is C946BA12 F324:A30F
+CloudBQ
+│   .aider.conf.yml
+│   .aiderignore
+│   .env.example
+│   .gitignore
+│   CONVENTIONS.md
+│
+├───.claude
+│   ├───agents
+│   │       discovery-agent.md
+│   │       implementation-agent.md
+│   │
+│   └───skills
+│       ├───aider-scaffold
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │   │   aider.conf.yml
+│       │   │   │   aiderignore
+│       │   │   │   CONVENTIONS.template.md
+│       │   │   │
+│       │   │   └───recipes
+│       │   │           a_deploy_canonical.md
+│       │   │           a_main_idempotency.md
+│       │   │           b_n8n_cloud_run.md
+│       │   │           b_workflows_generated.md
+│       │   │           c_bigquery_compute.md
+│       │   │           c_writeback_job.md
+│       │   │           scoring_hot_score_ports.md
+│       │   │
+│       │   ├───references
+│       │   │       aider-0.86-commit-signature.md
+│       │   │
+│       │   └───scripts
+│       │           aider_scaffold.py
+│       │           diff_ledger.py
+│       │
+│       ├───pass-sequence
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │       EXECUTION_SURFACES.template.md
+│       │   │       PASS_SEQUENCE.template.md
+│       │   │
+│       │   ├───evals
+│       │   │       evals.json
+│       │   │
+│       │   ├───references
+│       │   │       pattern.md
+│       │   │       surfaces-spec.md
+│       │   │       worked-example.md
+│       │   │
+│       │   └───scripts
+│       │           build_run_sheet.py
+│       │           build_surfaces_xlsx.py
+│       │           dump_surfaces_xlsx.py
+│       │
+│       └───tree-f-visualizer
+│           │   SKILL.md
+│           │
+│           ├───assets
+│           │       template.html
+│           │
+│           ├───references
+│           │       tree-f-format.md
+│           │
+│           └───scripts
+│                   tree_f.py
+│
+├───alternative
+│       cloudcompute.md
+│
+├───cloud_function_new_deals
+│       .gcloudignore
+│       bigquery_schema.sql
+│       deploy.sh
+│       main.py
+│       n8n_NewDeals_Delivery.json
+│       README.md
+│       requirements.txt
+│
+├───deploy
+│   └───n8n
+│           cloudsql.sh
+│           deploy_n8n.sh
+│           import_workflows.sh
+│           scheduler.sh
+│           secrets.sh
+│           service.yaml
+│
+├───docs
+│   │   architecture.manifest.json
+│   │   architecture.yaml
+│   │   architecture_tree.html
+│   │   ARCHITECTURE_TREE.txt
+│   │   EXECUTION_SURFACES.md
+│   │   EXECUTION_SURFACES.xlsx
+│   │   execution_surfaces.yaml
+│   │   PASS1_SEQUENCE.md
+│   │   SCENARIOS.md
+│   │
+│   └───diffs
+│           0001-3a0cbb2-initial-commit-cloudbq-new-deals-function.patch
+│           0002-8830ca2-tooling-tree-f-visualizer-skill-tree-f-ascii-man.patch
+│           0003-4fbbb49-tooling-aider-scaffold-skill-recipe-runner-diff.patch
+│           0004-63359b6-tooling-discovery-agent-and-implementation-agent.patch
+│           0005-3a5c1bc-tooling-port-the-pass-sequence-skill-from-mir-lo.patch
+│           0006-15c926b-scoring-shared-hot-score-v1-constants-js-and-sql.patch
+│           INDEX.md
+│
+├───scoring
+│       hot_score_v1.constants.json
+│       hot_score_v1.mjs
+│       hot_score_v1.sql
+│       README.md
+│
+├───sql
+│       apply.sh
+│       audit_tables.sql
+│       deals_synced_v1.sql
+│       hot_deals_v1.sql
+│       new_deals_weekly.sql
+│       refresh_pipeline_labels.sh
+│       scheduled_query.sh
+│       sync_transfer.sh
+│
+├───tests
+│       hot_score_vectors.json
+│       hot_score_vectors.sql
+│       test_hot_score.py
+│       test_main_offline.py
+│       test_n8n_code.py
+│
+├───workflows
+│   │   credentials.map.json.example
+│   │   NEW_DEALS_DELIVERY.json
+│   │   NEW_DEALS_ERRORS.json
+│   │   NEW_DEALS_FULL.json
+│   │
+│   ├───src
+│   │       build_workflow.py
+│   │       node_code.template.js
+│   │       shape_score.js
+│   │
+│   └───templates
+│
+└───writeback
+        bootstrap_property.sh
+        deploy_job.sh
+        Dockerfile
+        index.mjs
+        package.json
+
