@@ -15,16 +15,37 @@ Modes
   • POST {"objectId": "<dealId>", "mode": "event"}   HubSpot workflow webhook on deal creation (near-real-time; no watermark change)
   • ?dry_run=1                                 compute everything, write nothing, return the payload
 
+  • Dry mode builds the BigQuery client and reads watermark + warehouse twins like a live run (so the gate rehearses Monday's
+    window exactly); only the MERGE, the watermark advance, the audit rows and the delivery POST are skipped.
+  • Per-run staging table (new_deals_staging_<entity>_<run_ts>) so two entities or a retry can never truncate each other.
+  • Lease: report_state.lock_until is taken by one atomic UPDATE per entity; an overlapping run gets 409 and nothing moves.
+  • day1_hot_score / day1_hot_flag are written once (first observation) and never overwritten by a re-observation or a replay.
+  • Audit: one row per run in new_deals_runs (also on failure) and the run's rows in new_deals_history (layer L13).
+
 Environment
   HUBSPOT_TOKEN (Secret Manager)  BQ_PROJECT  BQ_DATASET (default hubspot)  DELIVERY_WEBHOOK_URL (optional, n8n)
-  OVERLAP_MINUTES (default 5)  FIRST_RUN_DAYS (default 7)  PORTAL_ID (default 9201667)
+  DELIVERY_WEBHOOK_TOKEN (optional, sent as X-Delivery-Token)  OVERLAP_MINUTES (default 5)  FIRST_RUN_DAYS (default 7)
+  PORTAL_ID (default 9201667)  ORCHESTRATOR (default cloud-run-function)  LEASE_MINUTES (default 12)
 """
-import os, re, json, math, logging
+import os, re, json, math, time, logging
 from datetime import datetime, timedelta, timezone
 import requests
 import functions_framework
 
-log = logging.getLogger("new_deals"); logging.basicConfig(level=logging.INFO)
+
+class _JsonFormatter(logging.Formatter):
+    """One JSON object per line; Cloud Logging parses severity/message and keeps the extra fields queryable."""
+    def format(self, r):
+        o = {"severity": {"WARNING": "WARNING", "ERROR": "ERROR", "CRITICAL": "CRITICAL"}.get(r.levelname, "INFO"), "message": r.getMessage()}
+        o.update(getattr(r, "fields", {}) or {})
+        return json.dumps(o, default=str)
+
+
+log = logging.getLogger("new_deals")
+if not log.handlers:
+    _h = logging.StreamHandler(); _h.setFormatter(_JsonFormatter()); log.addHandler(_h); log.setLevel(logging.INFO); log.propagate = False
+def jlog(level, message, **fields): log.log(level, message, extra={"fields": fields})
+ORCHESTRATOR = os.environ.get("ORCHESTRATOR", "cloud-run-function")
 HS = "https://api.hubapi.com"
 PORTAL = os.environ.get("PORTAL_ID", "9201667")
 ENTITIES = {
@@ -104,36 +125,82 @@ def bq():
     return bigquery.Client(project=os.environ["BQ_PROJECT"])
 def table(name): return f"{os.environ['BQ_PROJECT']}.{os.environ.get('BQ_DATASET', 'hubspot')}.{name}"
 
-def read_watermark(client, entity, now):
-    q = f"SELECT watermark FROM `{table('report_state')}` WHERE report_id = @rid"
+def _qp(**kw):
     from google.cloud import bigquery
-    rows = list(client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("rid", "STRING", f"NEW_DEALS_{entity}")])).result())
+    types = {str: "STRING", datetime: "TIMESTAMP", bool: "BOOL", int: "INT64", float: "FLOAT64"}
+    return bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter(k, types[type(v)], v) for k, v in kw.items()])
+
+def read_watermark(client, entity, now):
+    rows = list(client.query(f"SELECT watermark FROM `{table('report_state')}` WHERE report_id = @rid", job_config=_qp(rid=f"NEW_DEALS_{entity}")).result())
     return rows[0]["watermark"].replace(tzinfo=timezone.utc) if rows else now - timedelta(days=int(os.environ.get("FIRST_RUN_DAYS", "7")))
 
-def write_watermark(client, entity, ts):
-    q = f"""MERGE `{table('report_state')}` t USING (SELECT @rid AS report_id, @ts AS watermark) s ON t.report_id = s.report_id
-            WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP()
-            WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP())"""
-    from google.cloud import bigquery
-    client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("rid", "STRING", f"NEW_DEALS_{entity}"), bigquery.ScalarQueryParameter("ts", "TIMESTAMP", ts)])).result()
+def acquire_lease(client, entity, run_ts, start):
+    """One run per entity at a time (layer L15). Creates the state row on the first run, then takes lock_until atomically.
+    Returns False when another run holds a live lease — the caller answers 409 and writes nothing."""
+    minutes = int(os.environ.get("LEASE_MINUTES", "12")); rid = f"NEW_DEALS_{entity}"
+    client.query(f"""MERGE `{table('report_state')}` t USING (SELECT @rid AS report_id) s ON t.report_id = s.report_id
+                     WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (@rid, @wm, CURRENT_TIMESTAMP())""",
+                 job_config=_qp(rid=rid, wm=start)).result()
+    job = client.query(f"""UPDATE `{table('report_state')}` SET lock_until = TIMESTAMP_ADD(@ts, INTERVAL {minutes} MINUTE)
+                           WHERE report_id = @rid AND (lock_until IS NULL OR lock_until < @ts)""", job_config=_qp(rid=rid, ts=run_ts))
+    job.result(); return (job.num_dml_affected_rows or 0) == 1
 
-def merge_rows(client, rows):
+def write_watermark(client, entity, ts):
+    """Advance the watermark and release the lease in one statement — only called after a successful MERGE."""
+    client.query(f"""UPDATE `{table('report_state')}` SET watermark = @ts, updated_at = CURRENT_TIMESTAMP(), lock_until = NULL WHERE report_id = @rid""",
+                 job_config=_qp(rid=f"NEW_DEALS_{entity}", ts=ts)).result()
+
+def release_lease(client, entity):
+    try: client.query(f"UPDATE `{table('report_state')}` SET lock_until = NULL WHERE report_id = @rid", job_config=_qp(rid=f"NEW_DEALS_{entity}")).result()
+    except Exception as e: jlog(logging.WARNING, "lease release failed", error=str(e))
+
+FROZEN = ("deal_id", "first_seen_run", "day1_hot_score", "day1_hot_flag")   # never overwritten by a re-observation or a replay (G06)
+
+def merge_rows(client, rows, entity, run_ts):
+    """Per-run staging table → MERGE on deal_id → staging dropped. Two entities or a retry never share a staging table (G03)."""
     if not rows: return 0
     from google.cloud import bigquery
-    tmp = table("new_deals_staging")
-    client.load_table_from_json(rows, tmp, job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", autodetect=False, schema=client.get_table(table("new_deals")).schema)).result()
-    cols = [f.name for f in client.get_table(table("new_deals")).schema]
-    upd = ", ".join(f"{c} = s.{c}" for c in cols if c not in ("deal_id", "first_seen_run"))
-    q = f"""MERGE `{table('new_deals')}` t USING `{tmp}` s ON t.deal_id = s.deal_id
-            WHEN MATCHED THEN UPDATE SET {upd}
-            WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('s.' + c for c in cols)})"""
-    client.query(q).result(); return len(rows)
+    tmp = table(f"new_deals_staging_{entity.lower()}_{run_ts:%Y%m%d%H%M%S}")
+    schema = client.get_table(table("new_deals")).schema
+    cols = [f.name for f in schema]
+    try:
+        client.load_table_from_json(rows, tmp, job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", autodetect=False, schema=schema)).result()
+        upd = ", ".join(f"{c} = s.{c}" for c in cols if c not in FROZEN)
+        client.query(f"""MERGE `{table('new_deals')}` t USING `{tmp}` s ON t.deal_id = s.deal_id
+                WHEN MATCHED THEN UPDATE SET {upd}
+                WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('s.' + c for c in cols)})""").result()
+    finally:
+        client.delete_table(tmp, not_found_ok=True)
+    return len(rows)
 
-def recent_names(client, entity, days=90):
-    q = f"SELECT deal_id, name_key FROM `{table('new_deals')}` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)"  # all entities: twins live in other pipelines
+def write_history(client, rows, entity, run_ts):
+    """Layer L13: how every deal scored on this run (append; a replayed run_ts replaces its slice)."""
+    if not rows: return
     from google.cloud import bigquery
-    try: return {r["name_key"]: r["deal_id"] for r in client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("e", "STRING", entity)])).result()}
-    except Exception as e: log.warning("recent_names unavailable: %s", e); return {}
+    client.query(f"DELETE FROM `{table('new_deals_history')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o", job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR)).result()
+    hist = [{"run_ts": run_ts.isoformat(), "orchestrator": ORCHESTRATOR, **r} for r in rows]
+    client.load_table_from_json(hist, table("new_deals_history"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
+                                schema=client.get_table(table("new_deals_history")).schema)).result()
+
+def write_run(client, entity, run_ts, window, rows, written, dry, status, error, started):
+    """One row per run, also on failure — the probe every scenario shares."""
+    rec = {"run_ts": run_ts.isoformat(), "entity": entity, "mode": window.get("mode"), "dry_run": dry, "orchestrator": ORCHESTRATOR,
+           "watermark_in": window.get("watermark_in"), "query_start": window.get("query_start"), "query_end": window.get("query_end"),
+           "row_count": len(rows), "rows_written": written, "duplicate_suspects": sum(1 for r in rows if r.get("duplicate_suspect")),
+           "day1_hot": sum(1 for r in rows if r.get("day1_hot_flag")), "status": status, "error": (error or None) and str(error)[:1000],
+           "duration_ms": int((time.monotonic() - started) * 1000)}
+    try: client.insert_rows_json(table("new_deals_runs"), [rec])
+    except Exception as e: jlog(logging.WARNING, "run log insert failed", error=str(e))
+
+def recent_names(client, days=90):
+    """name_key → [deal_id, …] over every entity (twins live in other pipelines). Errors are logged as ERROR and the run continues
+    with an empty map — the row's duplicate_suspect then reflects the batch only (G07)."""
+    q = f"SELECT deal_id, name_key FROM `{table('new_deals')}` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(days)} DAY) AND name_key != ''"
+    out = {}
+    try:
+        for r in client.query(q).result(): out.setdefault(r["name_key"], []).append(r["deal_id"])
+    except Exception as e: jlog(logging.ERROR, "recent_names unavailable; warehouse de-duplication skipped this run", error=str(e))
+    return out
 
 # ------------------------------------------------------------------ shaping
 def name_key(p):
@@ -148,7 +215,7 @@ def shape(deals, others, entity, pl, st, owners, run_ts, known):
     for d in deals:
         p = d.get("properties", {}); did = str(d["id"]); k = name_key(p)
         dup_in_batch = [x for x in batch_keys.get(k, []) if x != did]
-        dup_known = known.get(k) if known.get(k) not in (None, did) else None
+        dup_known = [x for x in known.get(k, []) if x != did and x not in dup_in_batch]   # warehouse twins (90 days, every entity)
         score, hot = hot_score(p, run_ts)
         rows.append({
             "entity": entity, "deal_id": did, "dealname": p.get("dealname"), "final_customer": p.get("final_customer"), "name_key": k,
@@ -160,46 +227,72 @@ def shape(deals, others, entity, pl, st, owners, run_ts, known):
             "arr_ky": _num(p.get("asp_in_usd_q2_2022_calculation")), "product_family": p.get("product_hierarchy"), "product": p.get("prod___product_name_new_"),
             "application": p.get("application"), "icalps_dealtype": p.get("icalps_dealtype"), "icalps_stage": p.get("icalps_stage"),
             "day1_hot_score": score, "day1_hot_flag": hot,
-            "duplicate_suspect": bool(dup_in_batch or dup_known), "duplicate_of": ", ".join(dup_in_batch) or dup_known,
+            "duplicate_suspect": bool(dup_in_batch or dup_known), "duplicate_of": ", ".join(dup_in_batch + dup_known) or None,
             "deal_url": f"https://app.hubspot.com/go-to/{PORTAL}/0-3/{did}", "first_seen_run": run_ts.isoformat(), "last_seen_run": run_ts.isoformat()})
     return rows
 
 # ------------------------------------------------------------------ entry point
+def _deliver(payload):
+    url = os.environ.get("DELIVERY_WEBHOOK_URL")
+    if not url: return None
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("DELIVERY_WEBHOOK_TOKEN"): headers["X-Delivery-Token"] = os.environ["DELIVERY_WEBHOOK_TOKEN"]
+    for attempt, wait in enumerate((0, 5, 15), start=1):             # three tries: the n8n instance may be cold-starting
+        if wait: time.sleep(wait)
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=60); r.raise_for_status(); return None
+        except Exception as e: err = str(e); jlog(logging.WARNING, "delivery webhook failed", attempt=attempt, error=err)
+    return err
+
+
 @functions_framework.http
 def new_deals_report(request):
+    started = time.monotonic()
     now = datetime.now(timezone.utc); run_ts = now.replace(microsecond=0)
     body = request.get_json(silent=True) or {}
     entity = (request.args.get("entity") or body.get("entity") or "SEALSQ").upper()
     dry = request.args.get("dry_run") == "1" or body.get("dry_run") is True
     if entity not in ENTITIES: return ({"error": f"unknown entity {entity}"}, 400)
-    hs = HubSpot(os.environ["HUBSPOT_TOKEN"]); pl, st = hs.pipelines(); owners = hs.owners()
-    client = None if dry else bq()
-    known = recent_names(client, entity) if client else {}
-
-    if body.get("mode") == "event" and body.get("objectId"):               # HubSpot workflow webhook: one deal, no watermark change
-        d = hs.deal(body["objectId"]); deals = [d] if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"] else []; others = []
-        window = {"mode": "event", "objectId": body["objectId"]}
-        start = end = None
-    else:
-        start = read_watermark(client, entity, now) if client else now - timedelta(days=int(os.environ.get("FIRST_RUN_DAYS", "7")))
-        qstart = start - timedelta(minutes=int(os.environ.get("OVERLAP_MINUTES", "5")))
-        found = hs.search_created(qstart, run_ts)
-        deals = [d for d in found if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"]]
-        others = [d for d in found if d not in deals]
-        window = {"mode": "window", "watermark_in": start.isoformat(), "query_start": qstart.isoformat(), "query_end": run_ts.isoformat()}
-
-    rows = shape(deals, others, entity, pl, st, owners, run_ts, known)
-    rows.sort(key=lambda r: (-(r["amount_kusd"] or 0), r["deal_id"]))
-    written = 0
-    if client:
-        written = merge_rows(client, rows)
-        if window["mode"] == "window": write_watermark(client, entity, run_ts)   # advance only after a successful MERGE
-    payload = {"report_id": f"NEW_DEALS_{entity}", "run_timestamp": run_ts.isoformat(), "window": window, "row_count": len(rows), "rows_written": written,
-               "duplicate_suspects": sum(1 for r in rows if r["duplicate_suspect"]), "day1_hot": [r["deal_id"] for r in rows if r.get("day1_hot_flag")],
-               "currency_note": ENTITIES[entity]["currency"], "rows": rows}
-    url = os.environ.get("DELIVERY_WEBHOOK_URL")
-    if url and not dry:
-        try: requests.post(url, json=payload, timeout=30)
-        except Exception as e: log.warning("delivery webhook failed: %s", e); payload["delivery_error"] = str(e)
-    log.info("entity=%s rows=%d written=%d window=%s", entity, len(rows), written, json.dumps(window))
-    return (payload, 200)
+    event = bool(body.get("mode") == "event" and body.get("objectId"))
+    client = bq()                                                       # dry mode reads like a live run (G05)
+    rows, written, window, leased = [], 0, {"mode": "event" if event else "window"}, False
+    try:
+        hs = HubSpot(os.environ["HUBSPOT_TOKEN"]); pl, st = hs.pipelines(); owners = hs.owners()
+        known = recent_names(client)
+        if event:                                                       # HubSpot workflow webhook: one deal, no watermark change
+            d = hs.deal(body["objectId"]); deals = [d] if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"] else []; others = []
+            window["objectId"] = body["objectId"]
+        else:
+            start = read_watermark(client, entity, now)
+            if not dry:
+                leased = acquire_lease(client, entity, run_ts, start)
+                if not leased:
+                    jlog(logging.WARNING, "run already in progress", entity=entity)
+                    return ({"error": f"a run for {entity} holds the lease; retry after LEASE_MINUTES", "report_id": f"NEW_DEALS_{entity}"}, 409)
+            qstart = start - timedelta(minutes=int(os.environ.get("OVERLAP_MINUTES", "5")))
+            found = hs.search_created(qstart, run_ts)
+            deals = [d for d in found if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"]]
+            ids = {str(d["id"]) for d in deals}; others = [d for d in found if str(d["id"]) not in ids]
+            window.update({"watermark_in": start.isoformat(), "query_start": qstart.isoformat(), "query_end": run_ts.isoformat()})
+        rows = shape(deals, others, entity, pl, st, owners, run_ts, known)
+        rows.sort(key=lambda r: (-(r["amount_kusd"] or 0), r["deal_id"]))
+        if not dry:
+            written = merge_rows(client, rows, entity, run_ts)
+            write_history(client, rows, entity, run_ts)
+            if not event: write_watermark(client, entity, run_ts)      # advance only after a successful MERGE; releases the lease
+            leased = False
+        payload = {"report_id": f"NEW_DEALS_{entity}", "run_timestamp": run_ts.isoformat(), "orchestrator": ORCHESTRATOR, "dry_run": dry,
+                   "window": window, "row_count": len(rows), "rows_written": written,
+                   "duplicate_suspects": sum(1 for r in rows if r["duplicate_suspect"]), "day1_hot": [r["deal_id"] for r in rows if r.get("day1_hot_flag")],
+                   "currency_note": ENTITIES[entity]["currency"], "rows": rows}
+        if not dry:
+            err = _deliver(payload)
+            if err: payload["delivery_error"] = err
+            write_run(client, entity, run_ts, window, rows, written, dry, "OK" if not err else "OK_DELIVERY_FAILED", err, started)
+        jlog(logging.INFO, "run complete", entity=entity, dry_run=dry, rows=len(rows), written=written, window=window, duration_ms=int((time.monotonic() - started) * 1000))
+        return (payload, 200)
+    except Exception as e:
+        jlog(logging.ERROR, "run failed", entity=entity, dry_run=dry, error=str(e), window=window)
+        if not dry: write_run(client, entity, run_ts, window, rows, written, dry, "FAILED", e, started)
+        if leased: release_lease(client, entity)
+        raise
