@@ -1,7 +1,7 @@
 -- hot_score_v1.sql — BigQuery SQL port of hot_score() from cloud_function_new_deals/main.py (scenario C compute lane).
 -- Replace ${PROJECT}. Returns NULLs for pipelines without a conversion rate, like the Python function.
 -- Verify with tests/hot_score_vectors.sql (generated from tests/hot_score_vectors.json): every row must show ok = TRUE.
-CREATE OR REPLACE FUNCTION `${PROJECT}.hubspot.hot_score_v1`(
+CREATE OR REPLACE FUNCTION `${PROJECT}.${DATASET}.hot_score_v1`(
   pipeline STRING, hs_deal_stage_probability FLOAT64, closedate TIMESTAMP,
   calculation___pipeline_2026__k__ FLOAT64, services_value_2026 FLOAT64,
   asp_in_usd_q2_2022_calculation FLOAT64, tpm__k_y FLOAT64, product_hierarchy STRING,

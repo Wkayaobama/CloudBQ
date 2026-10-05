@@ -126,7 +126,7 @@ def emit_sql(vectors: dict) -> str:
             "WITH v AS (SELECT * FROM UNNEST([\n  " + ",\n  ".join(rows) + "\n]))\n"
             "SELECT id, exp_score, r.score, exp_hot, r.hot,\n"
             "       (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok\n"
-            "FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),\n"
+            "FROM v, UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),\n"
             "       SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),\n"
             "       product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '" + vectors["now"].replace("Z", "+00") + "')]) AS r\n"
             "ORDER BY id;\n")

@@ -1,0 +1,10 @@
+{
+  "name": "new-deals-writeback",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Scenario C write-back: BigQuery hot_deals_v1_writeback view → HubSpot deals batch update (100 per call) → writeback_log",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node index.mjs", "check": "node --check index.mjs" },
+  "dependencies": { "@google-cloud/bigquery": "^8.1.0" }
+}

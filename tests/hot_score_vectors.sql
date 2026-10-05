@@ -19,7 +19,7 @@ WITH v AS (SELECT * FROM UNNEST([
 ]))
 SELECT id, exp_score, r.score, exp_hot, r.hot,
        (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok
-FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),
+FROM v, UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),
        SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),
        product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '2026-10-05T07:00:00+00')]) AS r
 ORDER BY id;
