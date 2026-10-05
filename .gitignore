@@ -11,3 +11,4 @@ __pycache__/
 # aider / tooling state
 .aider/
 .aider*.history*
+!.env.example

@@ -1,0 +1,9 @@
+# kept out of the --source upload (gcloud run deploy --source cloud_function_new_deals)
+.gcloudignore
+README.md
+n8n_NewDeals_Delivery.json
+deploy.sh
+bigquery_schema.sql
+.env
+.env.*
+__pycache__/
