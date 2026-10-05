@@ -1,0 +1,624 @@
+commit 15c926b6b6e7b403440e28870395fbac7bbd69af
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 17:29:38 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 17:29:38 2026 +0000
+
+    scoring: shared hot-score v1 (constants, JS and SQL ports, cross-runtime vectors)
+    
+    The JS scorer named in main.py does not exist in any repository (discovery/scorer_repos.md), so main.hot_score() is canonical. constants.json pins every constant; hot_score_v1.mjs matches Python on 15 vectors (raw |Δ| < 1e-9, flags equal) via tests/test_hot_score.py; hot_score_v1.sql is the BigQuery UDF with tests/hot_score_vectors.sql to prove it on the first authenticated bq run. main.py untouched.
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .../assets/recipes/scoring_hot_score_ports.md      |  25 +++
+ scoring/README.md                                  |  11 +
+ scoring/hot_score_v1.constants.json                |  17 ++
+ scoring/hot_score_v1.mjs                           |  53 +++++
+ scoring/hot_score_v1.sql                           |  43 ++++
+ tests/hot_score_vectors.json                       | 233 +++++++++++++++++++++
+ tests/hot_score_vectors.sql                        |  25 +++
+ tests/test_hot_score.py                            | 141 +++++++++++++
+ 8 files changed, 548 insertions(+)
+
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md b/.claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md
+new file mode 100644
+index 0000000..b18ca2d
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md
+@@ -0,0 +1,25 @@
++# Recipe — shared hot-score v1 across runtimes (parallel-lane block)
++
++/add scoring/hot_score_v1.constants.json scoring/hot_score_v1.mjs scoring/hot_score_v1.sql tests/test_hot_score.py
++/read-only cloud_function_new_deals/main.py CONVENTIONS.md
++
++The canonical scorer is `hot_score()` in cloud_function_new_deals/main.py (constants W, BIAS, THRESHOLD, CR, MAXC;
++the JS original named in its comment does not exist in any repository). Make the arithmetic identical on every
++surface without changing main.py:
++
++1. `scoring/hot_score_v1.constants.json` — every constant and tier boundary in one file (weights, bias, threshold,
++   conversion won/total per pipeline, hardware pipeline id, max contacted notes, horizon date and decay days, ARR
++   tiers for PKI and default, recency thresholds, forecast states).
++2. `scoring/hot_score_v1.mjs` — ESM port reading that JSON; `hotScore(props, now)` returns `{score, hot, raw}`
++   with the same branches as Python (first ARR tier is strict `<`, the rest `<=`; closedate year ≤ 2026 → 1 else
++   linear decay over 730 days from 2026-12-31; integer day differences like `timedelta.days`); pipelines without a
++   conversion rate return nulls. A CLI mode prints one JSON per vector.
++3. `scoring/hot_score_v1.sql` — BigQuery SQL UDF `hubspot.hot_score_v1(...)` returning STRUCT<score, hot, raw>,
++   same formula, NULL for unscored pipelines; `${PROJECT}` placeholder.
++4. `tests/test_hot_score.py` — builds `tests/hot_score_vectors.json` from main.hot_score over ≥ 15 cases covering
++   every branch (both scored pipelines, an unscored one, PKI and default tiers at their boundaries, close dates in
++   2026 / 2027 / 2028 / 2029, missing 2026 fields, Forecast/BIBA, garbage numbers); asserts constants == JSON,
++   Python reproduces the vectors, node's raw score within 1e-9 and flags equal; emits `tests/hot_score_vectors.sql`
++   (UNNEST of the vectors against the UDF, `ok` column) for a later `bq query`.
++
++Do not touch main.py, deploy.sh or the n8n JSON. Run `python3 tests/test_hot_score.py` and make it pass.
+diff --git a/scoring/README.md b/scoring/README.md
+new file mode 100644
+index 0000000..ff41566
+--- /dev/null
++++ b/scoring/README.md
+@@ -0,0 +1,11 @@
++# scoring — one hot score, three runtimes
++
++| Runtime | File | Used by | Verified how |
++|---|---|---|---|
++| Python | `cloud_function_new_deals/main.py` `hot_score()` | Scenario A (Cloud Run function) | canonical; builds `tests/hot_score_vectors.json` |
++| JavaScript | `scoring/hot_score_v1.mjs` | Scenario C write-back job; source of the n8n Code node (Scenario B) | `python3 tests/test_hot_score.py` runs it with node: raw score within 1e-9, flags equal |
++| BigQuery SQL | `scoring/hot_score_v1.sql` → `hubspot.hot_score_v1` | Scenario C compute lane (views, scheduled query) | `bq query --use_legacy_sql=false < tests/hot_score_vectors.sql` → every `ok` TRUE (needs credentials) |
++
++`scoring/hot_score_v1.constants.json` holds every constant once; the test fails if main.py drifts from it.
++This block is the **parallel lane** of the workbook (layer L5): whichever orchestrator runs, the arithmetic is
++pinned to the same vectors. Golden vector from the README probe: *Lattice Keystone C0 ASIC*, day-1 score 81.
+diff --git a/scoring/hot_score_v1.constants.json b/scoring/hot_score_v1.constants.json
+new file mode 100644
+index 0000000..ff83208
+--- /dev/null
++++ b/scoring/hot_score_v1.constants.json
+@@ -0,0 +1,17 @@
++{
++  "version": "v1",
++  "fitted": "2026-10-01",
++  "weights": {"stage_prob": 2.0712, "proximity_2026": 1.2399, "missing_2026_field": -0.4136, "pipeline_conversion": 1.0918,
++              "arr_points": 4.9843, "engagement": 1.3018, "recency": 0.0, "not_in_forecast": 1.5620},
++  "bias": -6.4788,
++  "threshold": 45.0,
++  "conversion": {"12096408": {"won": 84, "total": 730}, "13772279": {"won": 51, "total": 303}},
++  "hardware_pipeline": "12096408",
++  "max_contacted_notes": 223,
++  "horizon_date": "2026-12-31",
++  "horizon_decay_days": 730,
++  "arr_tiers": {"PKI": [[20, 0.5], [50, 1], [null, 2]], "default": [[100, 0.5], [500, 1], [1000, 2], [null, 3]]},
++  "arr_tier_divisor": 3,
++  "recency_days": [[90, 1.0], [180, 0.5]],
++  "forecast_states": ["Forecast", "BIBA"]
++}
+diff --git a/scoring/hot_score_v1.mjs b/scoring/hot_score_v1.mjs
+new file mode 100644
+index 0000000..0b595e4
+--- /dev/null
++++ b/scoring/hot_score_v1.mjs
+@@ -0,0 +1,53 @@
++// hot_score_v1.mjs — JS port of hot_score() from cloud_function_new_deals/main.py (same constants, same branches).
++// Used by the Cloud Run write-back job (scenario C) and as the source of the n8n Code-node snippet (scenario B).
++// Verified against tests/hot_score_vectors.json by `python3 tests/test_hot_score.py` (which runs this file with node).
++import { readFileSync } from 'node:fs';
++
++export const C = JSON.parse(readFileSync(new URL('./hot_score_v1.constants.json', import.meta.url), 'utf8'));
++const CRMAX = Math.max(...Object.values(C.conversion).map(c => c.won / c.total));
++
++const num = (v) => { if (v === null || v === undefined || v === '') return 0; const f = Number(v); return Number.isFinite(f) ? f : 0; };
++const daysBetween = (later, earlier) => Math.trunc((later - earlier) / 86400000); // python timedelta.days for positive deltas
++
++/** @returns {{score: number|null, hot: boolean|null, raw: number|null}} score rounded to 1 dp like Python's round(s, 1) */
++export function hotScore(p, now = new Date()) {
++  const cr = C.conversion[p.pipeline];
++  if (!cr) return { score: null, hot: null, raw: null };
++  const arr = num(p.asp_in_usd_q2_2022_calculation) || num(p.tpm__k_y) || num(p.services_value_2026);
++  const tiers = p.product_hierarchy === 'PKI' ? C.arr_tiers.PKI : C.arr_tiers.default;
++  let pts = tiers[tiers.length - 1][1];
++  for (const [limit, value] of tiers) {
++    if (limit === null) { pts = value; break; }
++    const strict = limit === tiers[0][0];           // first tier is "< limit", the rest are "<= limit" (as in main.py)
++    if (strict ? arr < limit : arr <= limit) { pts = value; break; }
++  }
++  let prox = 0;
++  if (p.closedate) {
++    const d = new Date(p.closedate);
++    const horizon = new Date(C.horizon_date + 'T00:00:00Z');
++    prox = d.getUTCFullYear() <= 2026 ? 1 : Math.max(0, 1 - daysBetween(d, horizon) / C.horizon_decay_days);
++  }
++  const hw = p.pipeline === C.hardware_pipeline;
++  const missing = (hw ? !num(p.calculation___pipeline_2026__k__) : !num(p.services_value_2026)) ? 1 : 0;
++  let rec = 0;
++  if (p.notes_last_updated) {
++    const days = daysBetween(now, new Date(p.notes_last_updated));
++    rec = days <= C.recency_days[0][0] ? C.recency_days[0][1] : (days <= C.recency_days[1][0] ? C.recency_days[1][1] : 0);
++  }
++  const f = {
++    stage_prob: num(p.hs_deal_stage_probability), proximity_2026: prox, missing_2026_field: missing,
++    pipeline_conversion: (cr.won / cr.total) / CRMAX, arr_points: pts / C.arr_tier_divisor,
++    engagement: Math.log1p(num(p.num_contacted_notes)) / Math.log1p(C.max_contacted_notes),
++    recency: rec, not_in_forecast: C.forecast_states.includes(p.revenue_state) ? 0 : 1,
++  };
++  const z = Object.keys(C.weights).reduce((acc, k) => acc + C.weights[k] * f[k], 0) + C.bias;
++  const s = 100 / (1 + Math.exp(-z));
++  return { score: Math.round(s * 10) / 10, hot: s >= C.threshold, raw: s };
++}
++
++// CLI: node hot_score_v1.mjs tests/hot_score_vectors.json  → prints one JSON line per vector
++if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
++  const vectors = JSON.parse(readFileSync(process.argv[2], 'utf8'));
++  const now = new Date(vectors.now);
++  process.stdout.write(JSON.stringify(vectors.cases.map(c => ({ id: c.id, ...hotScore(c.props, now) }))) + '\n');
++}
+diff --git a/scoring/hot_score_v1.sql b/scoring/hot_score_v1.sql
+new file mode 100644
+index 0000000..fb232da
+--- /dev/null
++++ b/scoring/hot_score_v1.sql
+@@ -0,0 +1,43 @@
++-- hot_score_v1.sql — BigQuery SQL port of hot_score() from cloud_function_new_deals/main.py (scenario C compute lane).
++-- Replace ${PROJECT}. Returns NULLs for pipelines without a conversion rate, like the Python function.
++-- Verify with tests/hot_score_vectors.sql (generated from tests/hot_score_vectors.json): every row must show ok = TRUE.
++CREATE OR REPLACE FUNCTION `${PROJECT}.hubspot.hot_score_v1`(
++  pipeline STRING, hs_deal_stage_probability FLOAT64, closedate TIMESTAMP,
++  calculation___pipeline_2026__k__ FLOAT64, services_value_2026 FLOAT64,
++  asp_in_usd_q2_2022_calculation FLOAT64, tpm__k_y FLOAT64, product_hierarchy STRING,
++  num_contacted_notes FLOAT64, notes_last_updated TIMESTAMP, revenue_state STRING, run_ts TIMESTAMP)
++RETURNS STRUCT<score FLOAT64, hot BOOL, raw FLOAT64>
++AS ((
++  WITH c AS (
++    SELECT
++      CASE pipeline WHEN '12096408' THEN 84/730 WHEN '13772279' THEN 51/303 END AS cr,
++      GREATEST(84/730, 51/303) AS crmax,
++      COALESCE(NULLIF(IFNULL(asp_in_usd_q2_2022_calculation, 0), 0), NULLIF(IFNULL(tpm__k_y, 0), 0), IFNULL(services_value_2026, 0)) AS arr
++  ), f AS (
++    SELECT
++      cr,
++      IFNULL(hs_deal_stage_probability, 0) AS stage_prob,
++      CASE WHEN closedate IS NULL THEN 0
++           WHEN EXTRACT(YEAR FROM closedate) <= 2026 THEN 1
++           ELSE GREATEST(0, 1 - TIMESTAMP_DIFF(closedate, TIMESTAMP '2026-12-31 00:00:00+00', DAY) / 730) END AS proximity_2026,
++      CASE WHEN pipeline = '12096408' THEN IF(IFNULL(calculation___pipeline_2026__k__, 0) = 0, 1, 0)
++           ELSE IF(IFNULL(services_value_2026, 0) = 0, 1, 0) END AS missing_2026_field,
++      cr / crmax AS pipeline_conversion,
++      (CASE WHEN product_hierarchy = 'PKI'
++            THEN CASE WHEN arr < 20 THEN 0.5 WHEN arr <= 50 THEN 1 ELSE 2 END
++            ELSE CASE WHEN arr < 100 THEN 0.5 WHEN arr <= 500 THEN 1 WHEN arr <= 1000 THEN 2 ELSE 3 END END) / 3 AS arr_points,
++      LN(1 + IFNULL(num_contacted_notes, 0)) / LN(1 + 223) AS engagement,
++      CASE WHEN notes_last_updated IS NULL THEN 0
++           WHEN TIMESTAMP_DIFF(run_ts, notes_last_updated, DAY) <= 90 THEN 1.0
++           WHEN TIMESTAMP_DIFF(run_ts, notes_last_updated, DAY) <= 180 THEN 0.5 ELSE 0 END AS recency,
++      IF(revenue_state IN ('Forecast', 'BIBA'), 0, 1) AS not_in_forecast
++    FROM c
++  ), z AS (
++    SELECT cr,
++      2.0712 * stage_prob + 1.2399 * proximity_2026 + (-0.4136) * missing_2026_field + 1.0918 * pipeline_conversion
++      + 4.9843 * arr_points + 1.3018 * engagement + 0.0 * recency + 1.5620 * not_in_forecast + (-6.4788) AS z
++    FROM f
++  )
++  SELECT IF(cr IS NULL, NULL, STRUCT(ROUND(100 / (1 + EXP(-z)), 1) AS score, 100 / (1 + EXP(-z)) >= 45.0 AS hot, 100 / (1 + EXP(-z)) AS raw))
++  FROM z
++));
+diff --git a/tests/hot_score_vectors.json b/tests/hot_score_vectors.json
+new file mode 100644
+index 0000000..255803b
+--- /dev/null
++++ b/tests/hot_score_vectors.json
+@@ -0,0 +1,233 @@
++{
++ "now": "2026-10-05T07:00:00Z",
++ "source": "cloud_function_new_deals/main.py hot_score()",
++ "cases": [
++  {
++   "id": "hw_qualified_big_arr_2027",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.2",
++    "closedate": "2027-03-31T00:00:00Z",
++    "calculation___pipeline_2026__k__": "",
++    "asp_in_usd_q2_2022_calculation": "16002",
++    "product_hierarchy": "Secure Elements",
++    "num_contacted_notes": "3",
++    "notes_last_updated": "2026-10-01T10:00:00Z",
++    "revenue_state": "Pipeline"
++   },
++   "expected": {
++    "score": 90.3,
++    "hot": true,
++    "raw": 90.33537321451396
++   }
++  },
++  {
++   "id": "hw_identified_no_data",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.1"
++   },
++   "expected": {
++    "score": 2.8,
++    "hot": false,
++    "raw": 2.8026916692277264
++   }
++  },
++  {
++   "id": "hw_forecast_2026_mid_arr",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.6",
++    "closedate": "2026-11-15T00:00:00Z",
++    "calculation___pipeline_2026__k__": "250",
++    "asp_in_usd_q2_2022_calculation": "400",
++    "num_contacted_notes": "40",
++    "notes_last_updated": "2026-05-01T00:00:00Z",
++    "revenue_state": "Forecast"
++   },
++   "expected": {
++    "score": 33.3,
++    "hot": false,
++    "raw": 33.2915784462496
++   }
++  },
++  {
++   "id": "svc_biba_tpm_fallback",
++   "props": {
++    "pipeline": "13772279",
++    "hs_deal_stage_probability": "0.4",
++    "closedate": "2026-06-30T00:00:00Z",
++    "services_value_2026": "120",
++    "tpm__k_y": "80",
++    "num_contacted_notes": "223",
++    "notes_last_updated": "2026-01-01T00:00:00Z",
++    "revenue_state": "BIBA"
++   },
++   "expected": {
++    "score": 23.4,
++    "hot": false,
++    "raw": 23.395657575054717
++   }
++  },
++  {
++   "id": "svc_missing_2026_far_close",
++   "props": {
++    "pipeline": "13772279",
++    "hs_deal_stage_probability": "0.3",
++    "closedate": "2029-06-30T00:00:00Z",
++    "services_value_2026": "",
++    "asp_in_usd_q2_2022_calculation": "",
++    "num_contacted_notes": "0"
++   },
++   "expected": {
++    "score": 5.8,
++    "hot": false,
++    "raw": 5.805678909040068
++   }
++  },
++  {
++   "id": "pki_small_arr",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.5",
++    "product_hierarchy": "PKI",
++    "asp_in_usd_q2_2022_calculation": "15",
++    "calculation___pipeline_2026__k__": "15",
++    "closedate": "2026-12-31T00:00:00Z"
++   },
++   "expected": {
++    "score": 25.7,
++    "hot": false,
++    "raw": 25.651093688619653
++   }
++  },
++  {
++   "id": "pki_mid_arr_boundary_50",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.5",
++    "product_hierarchy": "PKI",
++    "asp_in_usd_q2_2022_calculation": "50",
++    "calculation___pipeline_2026__k__": "50"
++   },
++   "expected": {
++    "score": 18.6,
++    "hot": false,
++    "raw": 18.643152446376973
++   }
++  },
++  {
++   "id": "pki_large_arr",
++   "props": {
++    "pipeline": "13772279",
++    "hs_deal_stage_probability": "0.8",
++    "product_hierarchy": "PKI",
++    "asp_in_usd_q2_2022_calculation": "51",
++    "services_value_2026": "51"
++   },
++   "expected": {
++    "score": 76.0,
++    "hot": true,
++    "raw": 76.03914227209165
++   }
++  },
++  {
++   "id": "arr_boundary_100",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.2",
++    "asp_in_usd_q2_2022_calculation": "100",
++    "calculation___pipeline_2026__k__": "1"
++   },
++   "expected": {
++    "score": 11.0,
++    "hot": false,
++    "raw": 10.961047541602564
++   }
++  },
++  {
++   "id": "arr_boundary_1000",
++   "props": {
++    "pipeline": "13772279",
++    "hs_deal_stage_probability": "0.2",
++    "asp_in_usd_q2_2022_calculation": "1000",
++    "services_value_2026": "1"
++   },
++   "expected": {
++    "score": 47.8,
++    "hot": true,
++    "raw": 47.804080151647845
++   }
++  },
++  {
++   "id": "arr_over_1000_services_fallback",
++   "props": {
++    "pipeline": "13772279",
++    "hs_deal_stage_probability": "0.9",
++    "services_value_2026": "2500",
++    "num_contacted_notes": "10",
++    "revenue_state": "Forecast",
++    "closedate": "2027-12-31T00:00:00Z"
++   },
++   "expected": {
++    "score": 93.5,
++    "hot": true,
++    "raw": 93.451192697391
++   }
++  },
++  {
++   "id": "close_2028_decay",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "0.2",
++    "closedate": "2028-06-30T00:00:00Z",
++    "calculation___pipeline_2026__k__": "10",
++    "asp_in_usd_q2_2022_calculation": "900"
++   },
++   "expected": {
++    "score": 46.9,
++    "hot": true,
++    "raw": 46.94210837166306
++   }
++  },
++  {
++   "id": "garbage_numbers",
++   "props": {
++    "pipeline": "12096408",
++    "hs_deal_stage_probability": "n/a",
++    "asp_in_usd_q2_2022_calculation": "abc",
++    "num_contacted_notes": null
++   },
++   "expected": {
++    "score": 2.3,
++    "hot": false,
++    "raw": 2.2903789326654422
++   }
++  },
++  {
++   "id": "not_scored_pipeline_wisekey",
++   "props": {
++    "pipeline": "705868909",
++    "hs_deal_stage_probability": "0.9",
++    "asp_in_usd_q2_2022_calculation": "5000"
++   },
++   "expected": {
++    "score": null,
++    "hot": null,
++    "raw": null
++   }
++  },
++  {
++   "id": "not_scored_pipeline_icalps",
++   "props": {
++    "pipeline": "766126206",
++    "hs_deal_stage_probability": "0.9"
++   },
++   "expected": {
++    "score": null,
++    "hot": null,
++    "raw": null
++   }
++  }
++ ]
++}
+diff --git a/tests/hot_score_vectors.sql b/tests/hot_score_vectors.sql
+new file mode 100644
+index 0000000..b38fd2e
+--- /dev/null
++++ b/tests/hot_score_vectors.sql
+@@ -0,0 +1,25 @@
++-- generated by tests/test_hot_score.py from tests/hot_score_vectors.json; run after scoring/hot_score_v1.sql:
++--   bq query --use_legacy_sql=false < tests/hot_score_vectors.sql   → every row ok = TRUE
++WITH v AS (SELECT * FROM UNNEST([
++  STRUCT('hw_qualified_big_arr_2027' AS id, '12096408' AS pipeline, '0.2' AS prob, '2027-03-31T00:00:00Z' AS closedate, NULL AS calc_2026, NULL AS services_2026, '16002' AS arr, NULL AS tpm, 'Secure Elements' AS product_hierarchy, '3' AS notes, '2026-10-01T10:00:00Z' AS notes_last_updated, 'Pipeline' AS revenue_state, 90.3 AS exp_score, TRUE AS exp_hot),
++  STRUCT('hw_identified_no_data' AS id, '12096408' AS pipeline, '0.1' AS prob, NULL AS closedate, NULL AS calc_2026, NULL AS services_2026, NULL AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 2.8 AS exp_score, FALSE AS exp_hot),
++  STRUCT('hw_forecast_2026_mid_arr' AS id, '12096408' AS pipeline, '0.6' AS prob, '2026-11-15T00:00:00Z' AS closedate, '250' AS calc_2026, NULL AS services_2026, '400' AS arr, NULL AS tpm, NULL AS product_hierarchy, '40' AS notes, '2026-05-01T00:00:00Z' AS notes_last_updated, 'Forecast' AS revenue_state, 33.3 AS exp_score, FALSE AS exp_hot),
++  STRUCT('svc_biba_tpm_fallback' AS id, '13772279' AS pipeline, '0.4' AS prob, '2026-06-30T00:00:00Z' AS closedate, NULL AS calc_2026, '120' AS services_2026, NULL AS arr, '80' AS tpm, NULL AS product_hierarchy, '223' AS notes, '2026-01-01T00:00:00Z' AS notes_last_updated, 'BIBA' AS revenue_state, 23.4 AS exp_score, FALSE AS exp_hot),
++  STRUCT('svc_missing_2026_far_close' AS id, '13772279' AS pipeline, '0.3' AS prob, '2029-06-30T00:00:00Z' AS closedate, NULL AS calc_2026, NULL AS services_2026, NULL AS arr, NULL AS tpm, NULL AS product_hierarchy, '0' AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 5.8 AS exp_score, FALSE AS exp_hot),
++  STRUCT('pki_small_arr' AS id, '12096408' AS pipeline, '0.5' AS prob, '2026-12-31T00:00:00Z' AS closedate, '15' AS calc_2026, NULL AS services_2026, '15' AS arr, NULL AS tpm, 'PKI' AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 25.7 AS exp_score, FALSE AS exp_hot),
++  STRUCT('pki_mid_arr_boundary_50' AS id, '12096408' AS pipeline, '0.5' AS prob, NULL AS closedate, '50' AS calc_2026, NULL AS services_2026, '50' AS arr, NULL AS tpm, 'PKI' AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 18.6 AS exp_score, FALSE AS exp_hot),
++  STRUCT('pki_large_arr' AS id, '13772279' AS pipeline, '0.8' AS prob, NULL AS closedate, NULL AS calc_2026, '51' AS services_2026, '51' AS arr, NULL AS tpm, 'PKI' AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 76.0 AS exp_score, TRUE AS exp_hot),
++  STRUCT('arr_boundary_100' AS id, '12096408' AS pipeline, '0.2' AS prob, NULL AS closedate, '1' AS calc_2026, NULL AS services_2026, '100' AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 11.0 AS exp_score, FALSE AS exp_hot),
++  STRUCT('arr_boundary_1000' AS id, '13772279' AS pipeline, '0.2' AS prob, NULL AS closedate, NULL AS calc_2026, '1' AS services_2026, '1000' AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 47.8 AS exp_score, TRUE AS exp_hot),
++  STRUCT('arr_over_1000_services_fallback' AS id, '13772279' AS pipeline, '0.9' AS prob, '2027-12-31T00:00:00Z' AS closedate, NULL AS calc_2026, '2500' AS services_2026, NULL AS arr, NULL AS tpm, NULL AS product_hierarchy, '10' AS notes, NULL AS notes_last_updated, 'Forecast' AS revenue_state, 93.5 AS exp_score, TRUE AS exp_hot),
++  STRUCT('close_2028_decay' AS id, '12096408' AS pipeline, '0.2' AS prob, '2028-06-30T00:00:00Z' AS closedate, '10' AS calc_2026, NULL AS services_2026, '900' AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 46.9 AS exp_score, TRUE AS exp_hot),
++  STRUCT('garbage_numbers' AS id, '12096408' AS pipeline, 'n/a' AS prob, NULL AS closedate, NULL AS calc_2026, NULL AS services_2026, 'abc' AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, 2.3 AS exp_score, FALSE AS exp_hot),
++  STRUCT('not_scored_pipeline_wisekey' AS id, '705868909' AS pipeline, '0.9' AS prob, NULL AS closedate, NULL AS calc_2026, NULL AS services_2026, '5000' AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, NULL AS exp_score, NULL AS exp_hot),
++  STRUCT('not_scored_pipeline_icalps' AS id, '766126206' AS pipeline, '0.9' AS prob, NULL AS closedate, NULL AS calc_2026, NULL AS services_2026, NULL AS arr, NULL AS tpm, NULL AS product_hierarchy, NULL AS notes, NULL AS notes_last_updated, NULL AS revenue_state, NULL AS exp_score, NULL AS exp_hot)
++]))
++SELECT id, exp_score, r.score, exp_hot, r.hot,
++       (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok
++FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),
++       SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),
++       product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '2026-10-05T07:00:00+00')]) AS r
++ORDER BY id;
+diff --git a/tests/test_hot_score.py b/tests/test_hot_score.py
+new file mode 100644
+index 0000000..5420ca0
+--- /dev/null
++++ b/tests/test_hot_score.py
+@@ -0,0 +1,141 @@
++#!/usr/bin/env python3
++"""Regression net for the hot score v1 across runtimes.
++
++    python3 tests/test_hot_score.py            # (re)build vectors from main.py, check constants, run the JS port, emit the SQL check
++    python3 -m pytest tests -q                 # same as pytest
++
++Checks: (1) the constants in main.py equal scoring/hot_score_v1.constants.json (drift guard); (2) main.hot_score reproduces
++tests/hot_score_vectors.json; (3) node scoring/hot_score_v1.mjs gives the same raw score (|Δ| < 1e-9) and the same flag;
++(4) writes tests/hot_score_vectors.sql, the bq query that proves the SQL UDF on the same vectors (run it once credentials exist).
++"""
++from __future__ import annotations
++
++import json
++import math
++import shutil
++import subprocess
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "cloud_function_new_deals"))
++import main  # noqa: E402  (imports functions_framework + requests)
++
++NOW = datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc)
++CONST = json.loads((ROOT / "scoring" / "hot_score_v1.constants.json").read_text())
++VEC = ROOT / "tests" / "hot_score_vectors.json"
++
++CASES = [
++    ("hw_qualified_big_arr_2027", {"pipeline": "12096408", "hs_deal_stage_probability": "0.2", "closedate": "2027-03-31T00:00:00Z", "calculation___pipeline_2026__k__": "", "asp_in_usd_q2_2022_calculation": "16002", "product_hierarchy": "Secure Elements", "num_contacted_notes": "3", "notes_last_updated": "2026-10-01T10:00:00Z", "revenue_state": "Pipeline"}),
++    ("hw_identified_no_data", {"pipeline": "12096408", "hs_deal_stage_probability": "0.1"}),
++    ("hw_forecast_2026_mid_arr", {"pipeline": "12096408", "hs_deal_stage_probability": "0.6", "closedate": "2026-11-15T00:00:00Z", "calculation___pipeline_2026__k__": "250", "asp_in_usd_q2_2022_calculation": "400", "num_contacted_notes": "40", "notes_last_updated": "2026-05-01T00:00:00Z", "revenue_state": "Forecast"}),
++    ("svc_biba_tpm_fallback", {"pipeline": "13772279", "hs_deal_stage_probability": "0.4", "closedate": "2026-06-30T00:00:00Z", "services_value_2026": "120", "tpm__k_y": "80", "num_contacted_notes": "223", "notes_last_updated": "2026-01-01T00:00:00Z", "revenue_state": "BIBA"}),
++    ("svc_missing_2026_far_close", {"pipeline": "13772279", "hs_deal_stage_probability": "0.3", "closedate": "2029-06-30T00:00:00Z", "services_value_2026": "", "asp_in_usd_q2_2022_calculation": "", "num_contacted_notes": "0"}),
++    ("pki_small_arr", {"pipeline": "12096408", "hs_deal_stage_probability": "0.5", "product_hierarchy": "PKI", "asp_in_usd_q2_2022_calculation": "15", "calculation___pipeline_2026__k__": "15", "closedate": "2026-12-31T00:00:00Z"}),
++    ("pki_mid_arr_boundary_50", {"pipeline": "12096408", "hs_deal_stage_probability": "0.5", "product_hierarchy": "PKI", "asp_in_usd_q2_2022_calculation": "50", "calculation___pipeline_2026__k__": "50"}),
++    ("pki_large_arr", {"pipeline": "13772279", "hs_deal_stage_probability": "0.8", "product_hierarchy": "PKI", "asp_in_usd_q2_2022_calculation": "51", "services_value_2026": "51"}),
++    ("arr_boundary_100", {"pipeline": "12096408", "hs_deal_stage_probability": "0.2", "asp_in_usd_q2_2022_calculation": "100", "calculation___pipeline_2026__k__": "1"}),
++    ("arr_boundary_1000", {"pipeline": "13772279", "hs_deal_stage_probability": "0.2", "asp_in_usd_q2_2022_calculation": "1000", "services_value_2026": "1"}),
++    ("arr_over_1000_services_fallback", {"pipeline": "13772279", "hs_deal_stage_probability": "0.9", "services_value_2026": "2500", "num_contacted_notes": "10", "revenue_state": "Forecast", "closedate": "2027-12-31T00:00:00Z"}),
++    ("close_2028_decay", {"pipeline": "12096408", "hs_deal_stage_probability": "0.2", "closedate": "2028-06-30T00:00:00Z", "calculation___pipeline_2026__k__": "10", "asp_in_usd_q2_2022_calculation": "900"}),
++    ("garbage_numbers", {"pipeline": "12096408", "hs_deal_stage_probability": "n/a", "asp_in_usd_q2_2022_calculation": "abc", "num_contacted_notes": None}),
++    ("not_scored_pipeline_wisekey", {"pipeline": "705868909", "hs_deal_stage_probability": "0.9", "asp_in_usd_q2_2022_calculation": "5000"}),
++    ("not_scored_pipeline_icalps", {"pipeline": "766126206", "hs_deal_stage_probability": "0.9"}),
++]
++
++
++def _raw(p):
++    """Unrounded score from main.py's arithmetic (mirrors hot_score; kept here so the JS/SQL ports are compared at full precision)."""
++    score, hot = main.hot_score(p, NOW)
++    if score is None:
++        return None
++    # recompute z exactly as main.hot_score does, to expose the unrounded value
++    arr = main._num(p.get("asp_in_usd_q2_2022_calculation")) or main._num(p.get("tpm__k_y")) or main._num(p.get("services_value_2026"))
++    if p.get("product_hierarchy") == "PKI": pts = 0.5 if arr < 20 else (1 if arr <= 50 else 2)
++    else: pts = 0.5 if arr < 100 else (1 if arr <= 500 else (2 if arr <= 1000 else 3))
++    cd = p.get("closedate"); prox = 0.0
++    if cd:
++        d = datetime.fromisoformat(cd.replace("Z", "+00:00"))
++        prox = 1.0 if d.year <= 2026 else max(0.0, 1 - (d - datetime(2026, 12, 31, tzinfo=timezone.utc)).days / 730)
++    hw = p.get("pipeline") == "12096408"
++    missing = 1.0 if (not main._num(p.get("calculation___pipeline_2026__k__")) if hw else not main._num(p.get("services_value_2026"))) else 0.0
++    nlu = p.get("notes_last_updated"); rec = 0.0
++    if nlu:
++        days = (NOW - datetime.fromisoformat(nlu.replace("Z", "+00:00"))).days; rec = 1.0 if days <= 90 else (0.5 if days <= 180 else 0.0)
++    f = {"stage_prob": main._num(p.get("hs_deal_stage_probability")), "proximity_2026": prox, "missing_2026_field": missing,
++         "pipeline_conversion": main.CR[p["pipeline"]] / main.CRMAX, "arr_points": pts / 3, "engagement": math.log1p(main._num(p.get("num_contacted_notes"))) / math.log1p(main.MAXC),
++         "recency": rec, "not_in_forecast": 0.0 if p.get("revenue_state") in ("Forecast", "BIBA") else 1.0}
++    z = sum(main.W[k] * f[k] for k in main.W) + main.BIAS
++    return 100 / (1 + math.exp(-z))
++
++
++def build_vectors() -> dict:
++    cases = []
++    for cid, p in CASES:
++        score, hot = main.hot_score(p, NOW)
++        cases.append({"id": cid, "props": p, "expected": {"score": score, "hot": hot, "raw": _raw(p)}})
++    return {"now": NOW.isoformat().replace("+00:00", "Z"), "source": "cloud_function_new_deals/main.py hot_score()", "cases": cases}
++
++
++def test_constants_match_json():
++    assert main.W == CONST["weights"]
++    assert main.BIAS == CONST["bias"] and main.THRESHOLD == CONST["threshold"] and main.MAXC == CONST["max_contacted_notes"]
++    assert main.CR == {k: v["won"] / v["total"] for k, v in CONST["conversion"].items()}
++
++
++def test_python_reproduces_vectors():
++    vectors = json.loads(VEC.read_text()) if VEC.exists() else build_vectors()
++    for c in vectors["cases"]:
++        score, hot = main.hot_score(c["props"], NOW)
++        assert (score, hot) == (c["expected"]["score"], c["expected"]["hot"]), c["id"]
++
++
++def test_js_port_matches():
++    node = shutil.which("node")
++    if not node:
++        import pytest; pytest.skip("node not installed")
++    vectors = json.loads(VEC.read_text())
++    out = subprocess.run([node, str(ROOT / "scoring" / "hot_score_v1.mjs"), str(VEC)], check=True, capture_output=True, text=True).stdout
++    got = {r["id"]: r for r in json.loads(out)}
++    for c in vectors["cases"]:
++        e, g = c["expected"], got[c["id"]]
++        if e["raw"] is None:
++            assert g["raw"] is None and g["hot"] is None, c["id"]
++        else:
++            assert abs(g["raw"] - e["raw"]) < 1e-9, (c["id"], g["raw"], e["raw"])
++            assert g["hot"] == e["hot"], c["id"]
++            assert abs(g["score"] - e["score"]) <= 0.1 + 1e-9, (c["id"], g["score"], e["score"])  # 0.1 only at an exact rounding tie
++
++
++def sql_literal(v):
++    return "NULL" if v in (None, "") else ("'" + str(v).replace("'", "\\'") + "'")
++
++
++def emit_sql(vectors: dict) -> str:
++    rows = []
++    for c in vectors["cases"]:
++        p, e = c["props"], c["expected"]
++        rows.append("STRUCT(%s AS id, %s AS pipeline, %s AS prob, %s AS closedate, %s AS calc_2026, %s AS services_2026, %s AS arr, %s AS tpm, %s AS product_hierarchy, %s AS notes, %s AS notes_last_updated, %s AS revenue_state, %s AS exp_score, %s AS exp_hot)" % (
++            sql_literal(c["id"]), sql_literal(p.get("pipeline")), sql_literal(p.get("hs_deal_stage_probability")), sql_literal(p.get("closedate")),
++            sql_literal(p.get("calculation___pipeline_2026__k__")), sql_literal(p.get("services_value_2026")), sql_literal(p.get("asp_in_usd_q2_2022_calculation")),
++            sql_literal(p.get("tpm__k_y")), sql_literal(p.get("product_hierarchy")), sql_literal(p.get("num_contacted_notes")), sql_literal(p.get("notes_last_updated")),
++            sql_literal(p.get("revenue_state")), "NULL" if e["score"] is None else repr(e["score"]), "NULL" if e["hot"] is None else str(e["hot"]).upper()))
++    return ("-- generated by tests/test_hot_score.py from tests/hot_score_vectors.json; run after scoring/hot_score_v1.sql:\n"
++            "--   bq query --use_legacy_sql=false < tests/hot_score_vectors.sql   → every row ok = TRUE\n"
++            "WITH v AS (SELECT * FROM UNNEST([\n  " + ",\n  ".join(rows) + "\n]))\n"
++            "SELECT id, exp_score, r.score, exp_hot, r.hot,\n"
++            "       (exp_score IS NULL AND r.score IS NULL) OR (ABS(r.score - exp_score) <= 0.1 AND r.hot = exp_hot) AS ok\n"
++            "FROM v, UNNEST([`${PROJECT}.hubspot.hot_score_v1`(pipeline, SAFE_CAST(prob AS FLOAT64), SAFE_CAST(closedate AS TIMESTAMP),\n"
++            "       SAFE_CAST(calc_2026 AS FLOAT64), SAFE_CAST(services_2026 AS FLOAT64), SAFE_CAST(arr AS FLOAT64), SAFE_CAST(tpm AS FLOAT64),\n"
++            "       product_hierarchy, SAFE_CAST(notes AS FLOAT64), SAFE_CAST(notes_last_updated AS TIMESTAMP), revenue_state, TIMESTAMP '" + vectors["now"].replace("Z", "+00") + "')]) AS r\n"
++            "ORDER BY id;\n")
++
++
++if __name__ == "__main__":
++    vectors = build_vectors()
++    VEC.write_text(json.dumps(vectors, indent=1) + "\n")
++    (ROOT / "tests" / "hot_score_vectors.sql").write_text(emit_sql(vectors))
++    print(f"wrote {VEC.relative_to(ROOT)} ({len(vectors['cases'])} cases) and tests/hot_score_vectors.sql")
++    test_constants_match_json(); test_python_reproduces_vectors(); test_js_port_matches()
++    print("constants OK · python vectors OK · JS port OK (raw |Δ| < 1e-9, flags equal)")
