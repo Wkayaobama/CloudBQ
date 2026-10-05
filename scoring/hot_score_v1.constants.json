@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "fitted": "2026-10-01",
+  "weights": {"stage_prob": 2.0712, "proximity_2026": 1.2399, "missing_2026_field": -0.4136, "pipeline_conversion": 1.0918,
+              "arr_points": 4.9843, "engagement": 1.3018, "recency": 0.0, "not_in_forecast": 1.5620},
+  "bias": -6.4788,
+  "threshold": 45.0,
+  "conversion": {"12096408": {"won": 84, "total": 730}, "13772279": {"won": 51, "total": 303}},
+  "hardware_pipeline": "12096408",
+  "max_contacted_notes": 223,
+  "horizon_date": "2026-12-31",
+  "horizon_decay_days": 730,
+  "arr_tiers": {"PKI": [[20, 0.5], [50, 1], [null, 2]], "default": [[100, 0.5], [500, 1], [1000, 2], [null, 3]]},
+  "arr_tier_divisor": 3,
+  "recency_days": [[90, 1.0], [180, 0.5]],
+  "forecast_states": ["Forecast", "BIBA"]
+}

@@ -1,0 +1,233 @@
+{
+ "now": "2026-10-05T07:00:00Z",
+ "source": "cloud_function_new_deals/main.py hot_score()",
+ "cases": [
+  {
+   "id": "hw_qualified_big_arr_2027",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.2",
+    "closedate": "2027-03-31T00:00:00Z",
+    "calculation___pipeline_2026__k__": "",
+    "asp_in_usd_q2_2022_calculation": "16002",
+    "product_hierarchy": "Secure Elements",
+    "num_contacted_notes": "3",
+    "notes_last_updated": "2026-10-01T10:00:00Z",
+    "revenue_state": "Pipeline"
+   },
+   "expected": {
+    "score": 90.3,
+    "hot": true,
+    "raw": 90.33537321451396
+   }
+  },
+  {
+   "id": "hw_identified_no_data",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.1"
+   },
+   "expected": {
+    "score": 2.8,
+    "hot": false,
+    "raw": 2.8026916692277264
+   }
+  },
+  {
+   "id": "hw_forecast_2026_mid_arr",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.6",
+    "closedate": "2026-11-15T00:00:00Z",
+    "calculation___pipeline_2026__k__": "250",
+    "asp_in_usd_q2_2022_calculation": "400",
+    "num_contacted_notes": "40",
+    "notes_last_updated": "2026-05-01T00:00:00Z",
+    "revenue_state": "Forecast"
+   },
+   "expected": {
+    "score": 33.3,
+    "hot": false,
+    "raw": 33.2915784462496
+   }
+  },
+  {
+   "id": "svc_biba_tpm_fallback",
+   "props": {
+    "pipeline": "13772279",
+    "hs_deal_stage_probability": "0.4",
+    "closedate": "2026-06-30T00:00:00Z",
+    "services_value_2026": "120",
+    "tpm__k_y": "80",
+    "num_contacted_notes": "223",
+    "notes_last_updated": "2026-01-01T00:00:00Z",
+    "revenue_state": "BIBA"
+   },
+   "expected": {
+    "score": 23.4,
+    "hot": false,
+    "raw": 23.395657575054717
+   }
+  },
+  {
+   "id": "svc_missing_2026_far_close",
+   "props": {
+    "pipeline": "13772279",
+    "hs_deal_stage_probability": "0.3",
+    "closedate": "2029-06-30T00:00:00Z",
+    "services_value_2026": "",
+    "asp_in_usd_q2_2022_calculation": "",
+    "num_contacted_notes": "0"
+   },
+   "expected": {
+    "score": 5.8,
+    "hot": false,
+    "raw": 5.805678909040068
+   }
+  },
+  {
+   "id": "pki_small_arr",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.5",
+    "product_hierarchy": "PKI",
+    "asp_in_usd_q2_2022_calculation": "15",
+    "calculation___pipeline_2026__k__": "15",
+    "closedate": "2026-12-31T00:00:00Z"
+   },
+   "expected": {
+    "score": 25.7,
+    "hot": false,
+    "raw": 25.651093688619653
+   }
+  },
+  {
+   "id": "pki_mid_arr_boundary_50",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.5",
+    "product_hierarchy": "PKI",
+    "asp_in_usd_q2_2022_calculation": "50",
+    "calculation___pipeline_2026__k__": "50"
+   },
+   "expected": {
+    "score": 18.6,
+    "hot": false,
+    "raw": 18.643152446376973
+   }
+  },
+  {
+   "id": "pki_large_arr",
+   "props": {
+    "pipeline": "13772279",
+    "hs_deal_stage_probability": "0.8",
+    "product_hierarchy": "PKI",
+    "asp_in_usd_q2_2022_calculation": "51",
+    "services_value_2026": "51"
+   },
+   "expected": {
+    "score": 76.0,
+    "hot": true,
+    "raw": 76.03914227209165
+   }
+  },
+  {
+   "id": "arr_boundary_100",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.2",
+    "asp_in_usd_q2_2022_calculation": "100",
+    "calculation___pipeline_2026__k__": "1"
+   },
+   "expected": {
+    "score": 11.0,
+    "hot": false,
+    "raw": 10.961047541602564
+   }
+  },
+  {
+   "id": "arr_boundary_1000",
+   "props": {
+    "pipeline": "13772279",
+    "hs_deal_stage_probability": "0.2",
+    "asp_in_usd_q2_2022_calculation": "1000",
+    "services_value_2026": "1"
+   },
+   "expected": {
+    "score": 47.8,
+    "hot": true,
+    "raw": 47.804080151647845
+   }
+  },
+  {
+   "id": "arr_over_1000_services_fallback",
+   "props": {
+    "pipeline": "13772279",
+    "hs_deal_stage_probability": "0.9",
+    "services_value_2026": "2500",
+    "num_contacted_notes": "10",
+    "revenue_state": "Forecast",
+    "closedate": "2027-12-31T00:00:00Z"
+   },
+   "expected": {
+    "score": 93.5,
+    "hot": true,
+    "raw": 93.451192697391
+   }
+  },
+  {
+   "id": "close_2028_decay",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "0.2",
+    "closedate": "2028-06-30T00:00:00Z",
+    "calculation___pipeline_2026__k__": "10",
+    "asp_in_usd_q2_2022_calculation": "900"
+   },
+   "expected": {
+    "score": 46.9,
+    "hot": true,
+    "raw": 46.94210837166306
+   }
+  },
+  {
+   "id": "garbage_numbers",
+   "props": {
+    "pipeline": "12096408",
+    "hs_deal_stage_probability": "n/a",
+    "asp_in_usd_q2_2022_calculation": "abc",
+    "num_contacted_notes": null
+   },
+   "expected": {
+    "score": 2.3,
+    "hot": false,
+    "raw": 2.2903789326654422
+   }
+  },
+  {
+   "id": "not_scored_pipeline_wisekey",
+   "props": {
+    "pipeline": "705868909",
+    "hs_deal_stage_probability": "0.9",
+    "asp_in_usd_q2_2022_calculation": "5000"
+   },
+   "expected": {
+    "score": null,
+    "hot": null,
+    "raw": null
+   }
+  },
+  {
+   "id": "not_scored_pipeline_icalps",
+   "props": {
+    "pipeline": "766126206",
+    "hs_deal_stage_probability": "0.9"
+   },
+   "expected": {
+    "score": null,
+    "hot": null,
+    "raw": null
+   }
+  }
+ ]
+}
