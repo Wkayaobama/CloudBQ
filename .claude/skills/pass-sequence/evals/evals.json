@@ -1,0 +1,23 @@
+{
+  "skill_name": "pass-sequence",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We deployed the Cloud Run function and ran ?entity=SEALSQ&dry_run=1 and ?entity=ICALPS&dry_run=1; here are both payloads (row_count 7 and 5, duplicate_suspects 1). Produce the pass-1 documentation set in order: docs/PASS1_SEQUENCE.md, the timeline in docs/EXECUTION_SURFACES.md, the workbook rows via docs/execution_surfaces.yaml, and say whether a run sheet applies. Docs only.",
+      "expected_output": "PASS1_SEQUENCE.md with preconditions, the ordered gcloud/bq block including look inserts and the dry-run curl, the delivery branch point, both payloads pasted as evidence with the date; EXECUTION_SURFACES.md timeline rows appended (not rewritten) citing commits; execution_surfaces.yaml gains equality checks for the dry-run counts with a parity word each; the workbook rebuilt with --verify; a statement that no run sheet applies while deploy.sh has no step case list; no pipeline code changed.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "There is a hand-made docs/EXECUTION_SURFACES.xlsx in this repo but no YAML source. Bootstrap the spec from it, prove the rebuild is identical, and add a Remediation row for the error we hit: PERMISSION_DENIED: Permission 'secretmanager.versions.access' denied for resource 'projects/…/secrets/hubspot-token/versions/latest'.",
+      "expected_output": "docs/execution_surfaces.yaml produced by dump_surfaces_xlsx.py (parity_meanings re-added by hand); build_surfaces_xlsx.py --compare reports identical values; a new R-row with symptom, layer L2, surfaces A, cause (service account lacks roles/secretmanager.secretAccessor on the secret), fix (gcloud secrets add-iam-policy-binding), verified; the workbook rebuilt with --verify and the recalculation limitation stated if LibreOffice is unavailable.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Scenario B (n8n) now MERGEs into hubspot.new_deals too. After both lanes ran this Monday, which Equality checks apply and which layers can move from Conditional to Parallel? Update the spec and rebuild.",
+      "expected_output": "Equality checks for rows per entity, both watermarks, and one deal's hot score across Python and the n8n Code node named with their bq query; layers L7 (MERGE) and L8 (watermark) re-decided only if the probe shows identical results, otherwise left Conditional with the condition stated; Overview counts quoted from --verify; the probe pasted verbatim with date; no change to main.py or the n8n JSON.",
+      "files": []
+    }
+  ]
+}
