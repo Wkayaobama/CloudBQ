@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "A80F995E 16F3:B211",
+ "serial": "9DF0E0C0 49CC:8757",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,7 +44,7 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 115,
+  "files": 116,
   "annotated": 75,
   "proposed": 3,
   "by_status": {
@@ -2262,6 +2262,12 @@
         "name": "0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
         "kind": "file",
         "path": "docs/diffs/0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
+        "exists": true
+       },
+       {
+        "name": "0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
+        "kind": "file",
+        "path": "docs/diffs/0015-56d2372-tooling-tree-f-honours-an-exclude-list-in-the-an.patch",
         "exists": true
        },
        {
