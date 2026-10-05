@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "B8C572BD D8E5:394C",
+ "serial": "A80F995E 16F3:B211",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,7 +44,7 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 113,
+  "files": 115,
   "annotated": 75,
   "proposed": 3,
   "by_status": {
@@ -2250,6 +2250,18 @@
         "name": "0012-6dbbf1f-docs-architecture-annotations-rendered-tree-f-pa.patch",
         "kind": "file",
         "path": "docs/diffs/0012-6dbbf1f-docs-architecture-annotations-rendered-tree-f-pa.patch",
+        "exists": true
+       },
+       {
+        "name": "0013-427410b-fixes-from-the-completeness-critic-scheduled-scr.patch",
+        "kind": "file",
+        "path": "docs/diffs/0013-427410b-fixes-from-the-completeness-critic-scheduled-scr.patch",
+        "exists": true
+       },
+       {
+        "name": "0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
+        "kind": "file",
+        "path": "docs/diffs/0014-cac72fa-docs-lane-workbook-execution-surfaces-yaml-execu.patch",
         "exists": true
        },
        {
