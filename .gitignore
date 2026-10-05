@@ -12,3 +12,5 @@ __pycache__/
 .aider/
 .aider*.history*
 !.env.example
+deploy/n8n/.secrets/
+workflows/credentials.map.json

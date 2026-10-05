@@ -1,0 +1,59 @@
+# n8n on Cloud Run — Knative Service manifest, applied with `gcloud run services replace` (declarative → idempotent).
+# Rendered by deploy_n8n.sh: ${PROJECT} ${PROJECT_NUMBER} ${REGION} ${N8N_IMAGE} ${MIN_SCALE}.
+# Design (discovery/scenario_B.md): pinned image; Cloud SQL Postgres (SQLite on Cloud Run loses everything at scale-to-zero);
+# N8N_ENCRYPTION_KEY and DB password from Secret Manager; one instance, one execution at a time; CPU always allocated so work
+# after the webhook response is not throttled; health path moved off /healthz; Cloud Scheduler → webhook keeps minScale 0.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: n8n
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "${MIN_SCALE}"        # 0 with Cloud Scheduler → webhook; 1 only for the in-app Schedule Trigger variant
+        autoscaling.knative.dev/maxScale: "1"                 # n8n regular mode: one main instance
+        run.googleapis.com/cpu-throttling: "false"            # instance-based billing; n8n keeps working after it has responded
+        run.googleapis.com/cloudsql-instances: ${PROJECT}:${REGION}:n8n-db
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      serviceAccountName: n8n-run@${PROJECT}.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 900
+      containers:
+        - image: ${N8N_IMAGE}
+          command: ["/bin/sh", "-c", "sleep 5; n8n start"]
+          ports: [{ name: http1, containerPort: 5678 }]
+          resources: { limits: { cpu: "1", memory: 2Gi } }
+          env:
+            - { name: N8N_PORT, value: "5678" }
+            - { name: N8N_PROTOCOL, value: https }
+            - { name: N8N_HOST, value: n8n-${PROJECT_NUMBER}.${REGION}.run.app }
+            - { name: N8N_WEBHOOK_URL, value: https://n8n-${PROJECT_NUMBER}.${REGION}.run.app }
+            - { name: N8N_EDITOR_BASE_URL, value: https://n8n-${PROJECT_NUMBER}.${REGION}.run.app }
+            - { name: N8N_ENDPOINT_HEALTH, value: health }
+            - { name: QUEUE_HEALTH_CHECK_ACTIVE, value: "true" }
+            - { name: DB_TYPE, value: postgresdb }
+            - { name: DB_POSTGRESDB_HOST, value: /cloudsql/${PROJECT}:${REGION}:n8n-db }
+            - { name: DB_POSTGRESDB_PORT, value: "5432" }
+            - { name: DB_POSTGRESDB_DATABASE, value: n8n }
+            - { name: DB_POSTGRESDB_USER, value: n8n-user }
+            - { name: DB_POSTGRESDB_SCHEMA, value: public }
+            - { name: DB_POSTGRESDB_PASSWORD, valueFrom: { secretKeyRef: { name: n8n-db-password, key: latest } } }
+            - { name: N8N_ENCRYPTION_KEY, valueFrom: { secretKeyRef: { name: n8n-encryption-key, key: latest } } }
+            - { name: GENERIC_TIMEZONE, value: Europe/Zurich }
+            - { name: TZ, value: Europe/Zurich }
+            - { name: EXECUTIONS_MODE, value: regular }
+            - { name: N8N_CONCURRENCY_PRODUCTION_LIMIT, value: "1" }   # single writer: a Scheduler retry cannot overlap a slow run
+            - { name: EXECUTIONS_DATA_MAX_AGE, value: "2160" }          # 90 days of per-node execution data (BigQuery remains the audit)
+            - { name: N8N_DIAGNOSTICS_ENABLED, value: "false" }
+            - { name: N8N_HIRING_BANNER_ENABLED, value: "false" }
+            - { name: N8N_BLOCK_ENV_ACCESS_IN_NODE, value: "false" }  # workflows read MAIL_FROM / MAIL_TO / BQ_PROJECT through $env
+            - { name: MAIL_FROM, value: "${MAIL_FROM}" }
+            - { name: MAIL_TO, value: "${MAIL_TO}" }
+            - { name: BQ_PROJECT, value: "${PROJECT}" }
+            - { name: BQ_DATASET, value: "${DATASET}" }
+            - { name: PORTAL_ID, value: "${PORTAL_ID}" }
+          startupProbe: { httpGet: { path: /health, port: 5678 }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 24 }
