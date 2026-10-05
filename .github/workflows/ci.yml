@@ -1,0 +1,20 @@
+name: offline checks
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: pip install -r cloud_function_new_deals/requirements.txt pyyaml openpyxl pytest
+      - run: python -m pytest tests -q
+      - run: for f in cloud_function_new_deals/deploy.sh sql/*.sh writeback/*.sh deploy/n8n/*.sh; do bash -n "$f"; done
+      - run: node --check writeback/index.mjs
+      - run: python workflows/src/build_workflow.py --check
+      - run: python .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify
+      - run: python .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
+      - run: python .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
+      - run: cd cloud_function_new_deals && DRYRUN=1 PROJECT=ci-project ./deploy.sh all >/dev/null && DRYRUN=1 PROJECT=ci-project ./deploy.sh dry >/dev/null

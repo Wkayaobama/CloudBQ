@@ -1,11 +1,12 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is C946BA12 F324:A30F
+Volume serial number is B8C572BD D8E5:394C
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
 │   .env.example
 │   .gitignore
 │   CONVENTIONS.md
+│   README.md
 │
 ├───.claude
 │   ├───agents
@@ -28,7 +29,9 @@ CloudBQ
 │       │   │           b_workflows_generated.md
 │       │   │           c_bigquery_compute.md
 │       │   │           c_writeback_job.md
+│       │   │           docs_pass1_set.md
 │       │   │           scoring_hot_score_ports.md
+│       │   │           tooling_reusable_skills.md
 │       │   │
 │       │   ├───references
 │       │   │       aider-0.86-commit-signature.md
@@ -69,6 +72,10 @@ CloudBQ
 │           └───scripts
 │                   tree_f.py
 │
+├───.github
+│   └───workflows
+│           ci.yml
+│
 ├───alternative
 │       cloudcompute.md
 │
@@ -101,14 +108,29 @@ CloudBQ
 │   │   PASS1_SEQUENCE.md
 │   │   SCENARIOS.md
 │   │
-│   └───diffs
-│           0001-3a0cbb2-initial-commit-cloudbq-new-deals-function.patch
-│           0002-8830ca2-tooling-tree-f-visualizer-skill-tree-f-ascii-man.patch
-│           0003-4fbbb49-tooling-aider-scaffold-skill-recipe-runner-diff.patch
-│           0004-63359b6-tooling-discovery-agent-and-implementation-agent.patch
-│           0005-3a5c1bc-tooling-port-the-pass-sequence-skill-from-mir-lo.patch
-│           0006-15c926b-scoring-shared-hot-score-v1-constants-js-and-sql.patch
-│           INDEX.md
+│   ├───diffs
+│   │       0001-3a0cbb2-initial-commit-cloudbq-new-deals-function.patch
+│   │       0002-8830ca2-tooling-tree-f-visualizer-skill-tree-f-ascii-man.patch
+│   │       0003-4fbbb49-tooling-aider-scaffold-skill-recipe-runner-diff.patch
+│   │       0004-63359b6-tooling-discovery-agent-and-implementation-agent.patch
+│   │       0005-3a5c1bc-tooling-port-the-pass-sequence-skill-from-mir-lo.patch
+│   │       0006-15c926b-scoring-shared-hot-score-v1-constants-js-and-sql.patch
+│   │       0007-9c4eced-tooling-tree-f-visualizer-v2-layer-chips-layers.patch
+│   │       0008-b5c37ab-scenario-a-deploy-sh-as-a-gated-step-runner-in-c.patch
+│   │       0009-c6a7cc9-scenario-a-dry-mode-rehearses-the-live-window-pe.patch
+│   │       0010-913f63a-scenario-c-bigquery-compute-lane-adapter-views-h.patch
+│   │       0011-9e7e18a-scenario-b-n8n-on-cloud-run-deploy-unit-and-gene.patch
+│   │       0012-6dbbf1f-docs-architecture-annotations-rendered-tree-f-pa.patch
+│   │       INDEX.md
+│   │
+│   └───discovery
+│           pass_sequence_port.md
+│           README.md
+│           scenario_A.md
+│           scenario_B.md
+│           scenario_C.md
+│           scorer_repos.md
+│           synthesis.md
 │
 ├───scoring
 │       hot_score_v1.constants.json
@@ -129,7 +151,9 @@ CloudBQ
 ├───tests
 │       hot_score_vectors.json
 │       hot_score_vectors.sql
+│       test_docs_consistency.py
 │       test_hot_score.py
+│       test_hot_score_sql_duckdb.py
 │       test_main_offline.py
 │       test_n8n_code.py
 │
