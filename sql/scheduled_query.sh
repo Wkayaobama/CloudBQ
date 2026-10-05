@@ -8,7 +8,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
-: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}"
+: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}" "${SYNC_DATASET:?}"
+[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
 DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
 
@@ -18,6 +19,7 @@ if [[ "$DRYRUN" != 1 ]]; then
   gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1 || gcloud iam service-accounts create "$SQL_SA_NAME" --project "$PROJECT" --display-name "new deals scheduled queries"
   gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None >/dev/null
   bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
+  bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`${PROJECT}.${SYNC_DATASET}\` TO \"serviceAccount:${SA}\""   # the script reads the synced tables
 fi
 for E in SEALSQ ICALPS; do
   Q=$(render "$E"); NAME="new-deals-$E-C"

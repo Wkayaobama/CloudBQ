@@ -10,11 +10,11 @@ lists with aider recipes, `docs/execution_surfaces.yaml`, `docs/architecture.yam
 
 ## Rules
 - One building block = one commit. The commit message names the block and the recipe file.
-  `scripts/diff_ledger.sh` turns every commit into `docs/diffs/NNNN-<sha>-<slug>.patch`; never
+  `.claude/skills/aider-scaffold/scripts/diff_ledger.py` turns every commit into `docs/diffs/NNNN-<sha>-<slug>.patch`; never
   squash, so `git diff` per suggestion stays possible.
-- Prefer `aider_scaffold.sh <recipe> [files]` when `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` is set;
+- Prefer `python3 .claude/skills/aider-scaffold/scripts/aider_scaffold.py <recipe> [files]` when `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` is set;
   without a key, apply the block yourself exactly as the recipe describes and say so in the commit
-  body (`scaffolded-by: hand (no LLM key)`).
+  body (`Scaffolded-by: hand (no LLM key)` and `Recipe: <recipe path>`).
 - Docs follow the pass-sequence order: `PASS{N}_SEQUENCE.md` → `EXECUTION_SURFACES.md` →
   `execution_surfaces.yaml` → `EXECUTION_SURFACES.xlsx --verify` → optional run sheet.
 - After every block: `python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py …` so the

@@ -14,3 +14,4 @@ __pycache__/
 !.env.example
 deploy/n8n/.secrets/
 workflows/credentials.map.json
+workflows/workflow_ids.map.json

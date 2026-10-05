@@ -9,6 +9,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && p
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 : "${PROJECT:?}" "${BQ_LOCATION:=EU}" "${SYNC_DATASET:?}" "${HUBSPOT_TOKEN:?}" "${SYNC_SCHEDULE:=every day 02:00}"
 NAME="hubspot-sync-deals-owners"
+[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
+# note: bq mk --transfer_config takes the token inside --params on the command line (visible in `ps` for the call's duration);
+# run it from Cloud Shell or a trusted shell, and rotate the token afterwards if that is a concern.
 bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "CREATE SCHEMA IF NOT EXISTS \`${PROJECT}.${SYNC_DATASET}\` OPTIONS (location = '${BQ_LOCATION}')"
 EXISTING=$(bq ls --transfer_config --transfer_location="$BQ_LOCATION" --project_id="$PROJECT" --format=json 2>/dev/null \
            | python3 -c 'import sys,json; d=json.load(sys.stdin) or []; print(next((c["name"] for c in d if c.get("displayName")==sys.argv[1]),""))' "$NAME")

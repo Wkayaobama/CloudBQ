@@ -11,25 +11,33 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." &
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && { DRY=1; shift; }
 : "${N8N_URL:?}" ; [[ "$DRY" == 1 ]] || : "${N8N_API_KEY:?create one in n8n → Settings → n8n API}"
-FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT"/workflows/NEW_DEALS_*.json)
-MAP="$ROOT/workflows/credentials.map.json"
+FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT/workflows/NEW_DEALS_ERRORS.json" "$ROOT/workflows/NEW_DEALS_DELIVERY.json" "$ROOT/workflows/NEW_DEALS_FULL.json")   # errors first: the others reference its id
+MAP="$ROOT/workflows/credentials.map.json"; IDMAP="$ROOT/workflows/workflow_ids.map.json"; [[ -f "$IDMAP" ]] || echo '{}' > "$IDMAP"
+HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$HDR"' EXIT; [[ "$DRY" == 1 ]] || printf 'X-N8N-API-KEY: %s\n' "$N8N_API_KEY" > "$HDR"   # the key never appears on argv
 for f in "${FILES[@]}"; do
-  BODY=$(python3 - "$f" "$MAP" <<'PY'
-import json, sys
-wf = json.load(open(sys.argv[1])); cmap = json.load(open(sys.argv[2])) if __import__("os").path.exists(sys.argv[2]) else {}
+  BODY=$(python3 - "$f" "$MAP" "$IDMAP" <<'PY'
+import json, os, sys
+wf = json.load(open(sys.argv[1])); cmap = json.load(open(sys.argv[2])) if os.path.exists(sys.argv[2]) else {}; idmap = json.load(open(sys.argv[3]))
 for n in wf.get("nodes", []):                           # remap credential placeholders → real ids
     for ctype, cred in (n.get("credentials") or {}).items():
         if cred.get("id", "").startswith("REPLACE_WITH_") and ctype in cmap: cred.update(cmap[ctype])
+st = wf.get("settings", {})
+if st.get("errorWorkflow") == "REPLACE_WITH_ERRORS_ID":
+    if "NEW_DEALS_ERRORS" in idmap: st["errorWorkflow"] = idmap["NEW_DEALS_ERRORS"]
+    else: st.pop("errorWorkflow", None)                 # imported before the error workflow: re-run the import once it exists
 print(json.dumps({k: wf[k] for k in ("name", "nodes", "connections", "settings", "staticData") if k in wf}))
 PY
 )
-  ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$f")
+  KEY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$f")
+  ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$IDMAP" "$KEY")
   if [[ "$DRY" == 1 ]]; then echo "would PUT/POST $(basename "$f") (id=${ID:-new}) → $N8N_URL/api/v1/workflows"; continue; fi
-  if [[ -n "$ID" ]] && curl -sS -o /dev/null -w '%{http_code}' -H "X-N8N-API-KEY: $N8N_API_KEY" "$N8N_URL/api/v1/workflows/$ID" | grep -q '^200$'; then
-    curl -sS -f -X PUT -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows/$ID" -d "$BODY" >/dev/null && echo "updated $ID"
+  if [[ -n "$ID" ]] && curl -sS -o /dev/null -w '%{http_code}' -H @"$HDR" "$N8N_URL/api/v1/workflows/$ID" | grep -q '^200$'; then
+    curl -sS -f -X PUT -H @"$HDR" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows/$ID" -d "$BODY" >/dev/null && echo "updated $KEY ($ID)"
   else
-    NEW=$(curl -sS -f -X POST -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows" -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-    echo "created $(basename "$f") as $NEW — set \"id\": \"$NEW\" in the file so the next import updates in place"
+    NEW=$(curl -sS -f -X POST -H @"$HDR" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows" -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+    python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m[sys.argv[2]]=sys.argv[3]; json.dump(m, open(sys.argv[1],"w"), indent=1)' "$IDMAP" "$KEY" "$NEW"
+    echo "created $KEY as $NEW (recorded in workflows/workflow_ids.map.json — gitignored; the next import updates in place)"
   fi
 done
-echo "activate in the UI after a manual test execution (the n8n-native dry run), or: curl -X POST \$N8N_URL/api/v1/workflows/<id>/activate"
+echo "activate in the UI after a manual test execution (the n8n-native dry run), or: curl -X POST -H @<headerfile> \$N8N_URL/api/v1/workflows/<id>/activate"
+echo "(if NEW_DEALS_ERRORS was created in this run, run the import once more so the other workflows point at its id)"

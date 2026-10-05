@@ -5,8 +5,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 : "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${HUBSPOT_TOKEN:?HUBSPOT_TOKEN (read) must be in the environment}"
-TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
-curl -sS -f -H "Authorization: Bearer $HUBSPOT_TOKEN" https://api.hubapi.com/crm/v3/pipelines/deals \
+TMP=$(mktemp); HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$TMP" "$HDR"' EXIT; printf 'Authorization: Bearer %s\n' "$HUBSPOT_TOKEN" > "$HDR"
+[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
+curl -sS -f -H @"$HDR" https://api.hubapi.com/crm/v3/pipelines/deals \
  | python3 -c '
 import json, sys, datetime
 now = datetime.datetime.now(datetime.timezone.utc).isoformat()

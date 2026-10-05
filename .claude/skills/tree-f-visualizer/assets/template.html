@@ -141,12 +141,13 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
     history.replaceState(null, '', h.toString() ? '#' + h.toString() : location.pathname + location.search); } catch (e) {} };
 
   // ---- filtering ------------------------------------------------------------------------------------------------
-  const hay = (n) => { const a = n.ann || {}; return [n.path, a.role, a.notes, a.layer, a.recipe].filter(Boolean).join(' ').toLowerCase(); };
+  const hay = (n) => { const a = n.ann || {}; return [n.path, a.role, a.notes, a.layer, ...(a.layers_list || []), a.recipe].filter(Boolean).join(' ').toLowerCase(); };
   const matches = (n) => {
     const a = n.ann || {};
     const stOk = state.statuses.has(a.status || 'existing');
     const scOk = state.scenario === 'all' || (a.scenarios || []).includes(state.scenario);
-    const lyOk = !a.layer || state.layers.has(a.layer) || state.layers.size === layerIds.length;
+    const nodeLayers = a.layers_list || (a.layer ? [a.layer] : []);
+    const lyOk = !nodeLayers.length || nodeLayers.some((l) => state.layers.has(l)) || state.layers.size === layerIds.length;
     const anOk = state.unann || !!n.ann;
     const qOk = !state.q || hay(n).includes(state.q);
     return stOk && scOk && lyOk && anOk && qOk;
@@ -228,7 +229,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
     if (!n) { box.innerHTML = '<div class="empty">Select a file or folder to see its role, layer, status and parity. <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> fold, <kbd>Enter</kbd> toggle.</div>'; return; }
     const a = n.ann || {}; const st = a.status || (n.exists === false ? 'proposed' : 'existing');
     const scen = (a.scenarios || []).map(s => `<span class="pill">${esc(s)}</span> ${esc(M.scenarios[s] || '')}`).join('<br>');
-    const layer = a.layer ? `<code>${esc(a.layer)}</code> ${esc((M.layers || {})[a.layer] || '')}` : '';
+    const layer = (a.layers_list || (a.layer ? [a.layer] : [])).map((l) => `<code>${esc(l)}</code> ${esc((M.layers || {})[l] || '')}`).join('<br>');
     box.innerHTML = `<h2>${esc(n.path || M.root_label)}</h2>
       <div><span class="pill ${st}">${st}</span> <span class="pill">${n.kind}</span> ${a.parity ? `<span class="pill ${a.parity}">${a.parity}</span>` : ''}${n.exists === false ? ' <span class="pill proposed">not on disk</span>' : ''}</div>
       <dl>

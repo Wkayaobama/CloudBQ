@@ -3,7 +3,8 @@
 # Needs a token with crm.schemas.deals.write in HUBSPOT_SCHEMA_TOKEN (use it once; it is not stored anywhere).
 set -euo pipefail
 : "${HUBSPOT_SCHEMA_TOKEN:?a token with crm.schemas.deals.write, used once}"
-H=(-H "Authorization: Bearer $HUBSPOT_SCHEMA_TOKEN" -H "Content-Type: application/json")
+HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$HDR"' EXIT; printf 'Authorization: Bearer %s\n' "$HUBSPOT_SCHEMA_TOKEN" > "$HDR"   # token never on argv
+H=(-H @"$HDR" -H "Content-Type: application/json")
 ensure() {  # name label type fieldType description
   if curl -sS -o /dev/null -w '%{http_code}' "${H[@]}" "https://api.hubapi.com/crm/v3/properties/deals/$1" | grep -q '^200$'; then echo "exists: $1"; return; fi
   curl -sS -f "${H[@]}" -X POST https://api.hubapi.com/crm/v3/properties/deals \

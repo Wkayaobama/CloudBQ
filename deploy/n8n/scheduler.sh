@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # scheduler.sh — scenario B2 trigger: Cloud Scheduler → n8n webhook (keeps n8n at minScale 0; same clock as scenario A).
 # Jobs are created PAUSED; resume after the dry run (?dry_run=1) passed: deploy/n8n/scheduler.sh enable
+# note: gcloud takes the webhook token in --headers on the command line (visible in `ps` for the call's duration) — run from a trusted shell.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 : "${PROJECT:?}" "${REGION:=europe-west6}" "${SCHEDULE_SEALSQ:=0 7 * * 1}" "${SCHEDULE_ICALPS:=20 7 * * 1}"
-DRYRUN="${DRYRUN:-0}"; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
 case "${1:-create}" in
   enable) for e in SEALSQ ICALPS; do run gcloud scheduler jobs resume "n8n-new-deals-$e" --project "$PROJECT" --location "$REGION"; done ;;
   pause)  for e in SEALSQ ICALPS; do run gcloud scheduler jobs pause  "n8n-new-deals-$e" --project "$PROJECT" --location "$REGION"; done ;;

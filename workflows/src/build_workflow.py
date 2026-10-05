@@ -72,21 +72,25 @@ def node(name, type_, params, pos, creds=None, **extra):
     n.update(extra); return n
 
 
-def bq(name, sql_expr, pos, on_error=None):
+def bq(name, sql_expr, pos, on_error=None, always_output=False, once=False):
     p = {"resource": "database", "operation": "executeQuery", "projectId": {"__rl": True, "mode": "id", "value": "={{ $env.BQ_PROJECT }}"},
          "sqlQuery": sql_expr, "options": {"location": "={{ $env.BQ_LOCATION || 'EU' }}", "useLegacySql": False}}
-    extra = {"onError": "continueRegularOutput"} if on_error else {}
+    extra = {}
+    if on_error: extra["onError"] = "continueRegularOutput"
+    if always_output: extra["alwaysOutputData"] = True      # an empty result (first run) must not stop the workflow
+    if once: extra["executeOnce"] = True                   # run once, not once per incoming item (search pages)
     return node(name, "n8n-nodes-base.googleBigQuery", p, pos, CRED["bq"], **extra)
 
 
-def hs_request(name, method, url, pos, body=None, paginate_in=None):
+def hs_request(name, method, url, pos, body=None, paginate_in=None, once=False):
     p = {"method": method, "url": url, "authentication": "predefinedCredentialType", "nodeCredentialType": "hubspotAppToken", "options": {}}
+    extra = {"executeOnce": True} if once else {}
     if body: p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
     if paginate_in:
         p["options"]["pagination"] = {"pagination": {"paginationMode": "updateAParameterInEachRequest", "paginationCompleteWhen": "other",
                                                       "completeExpression": "={{ !$response.body.paging }}", "limitPagesFetched": False,
                                                       "parameters": {"parameters": [{"type": paginate_in, "name": "after", "value": "={{ $response.body.paging.next.after }}"}]}}}
-    return node(name, "n8n-nodes-base.httpRequest", p, pos, CRED["hubspot"])
+    return node(name, "n8n-nodes-base.httpRequest", p, pos, CRED["hubspot"], **extra)
 
 
 def chain(*names):
@@ -109,7 +113,7 @@ def build_full() -> dict:
             {"id": "a6", "name": "portal_id", "type": "string", "value": "={{ $env.PORTAL_ID || '9201667' }}"},
             {"id": "a7", "name": "bq_project", "type": "string", "value": "={{ $env.BQ_PROJECT }}"}, {"id": "a8", "name": "bq_dataset", "type": "string", "value": "={{ $env.BQ_DATASET || 'hubspot' }}"}]},
             "options": {}}, (220, 300)),
-        bq("Read watermark", "=SELECT FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', watermark) AS watermark FROM `{{ $json.bq_project }}.{{ $json.bq_dataset }}.report_state` WHERE report_id = 'NEW_DEALS_{{ $json.entity }}'", (440, 300)),
+        bq("Read watermark", "=SELECT FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', watermark) AS watermark FROM `{{ $json.bq_project }}.{{ $json.bq_dataset }}.report_state` WHERE report_id = 'NEW_DEALS_{{ $json.entity }}'", (440, 300), always_output=True),
         node("Window", "n8n-nodes-base.code", {"mode": "runOnceForAllItems", "jsCode":
              "// half-open window [watermark − overlap, run_ts); computed ONCE — every later node references this item, never $now again\n"
              "const P = $('Params').first().json; const wm = $input.first().json.watermark;\n"
@@ -120,9 +124,9 @@ def build_full() -> dict:
         hs_request("HubSpot search", "POST", "https://api.hubapi.com/crm/v3/objects/deals/search", (880, 300),
                    body="={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'createdate', operator: 'GTE', value: $json.hs_start }, { propertyName: 'createdate', operator: 'LT', value: $json.hs_end }] }], properties: " + props + ", sorts: [{ propertyName: 'createdate', direction: 'ASCENDING' }], limit: 200 }) }}",
                    paginate_in="body"),
-        hs_request("Pipelines", "GET", "https://api.hubapi.com/crm/v3/pipelines/deals", (1100, 300)),
-        hs_request("Owners", "GET", "https://api.hubapi.com/crm/v3/owners?limit=100", (1320, 300), paginate_in="qs"),
-        bq("Recent names", "=SELECT deal_id, name_key FROM `{{ $('Params').first().json.bq_project }}.{{ $('Params').first().json.bq_dataset }}.new_deals` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) AND name_key != ''", (1540, 300), on_error=True),
+        hs_request("Pipelines", "GET", "https://api.hubapi.com/crm/v3/pipelines/deals", (1100, 300), once=True),
+        hs_request("Owners", "GET", "https://api.hubapi.com/crm/v3/owners?limit=100", (1320, 300), paginate_in="qs", once=True),
+        bq("Recent names", "=SELECT deal_id, name_key FROM `{{ $('Params').first().json.bq_project }}.{{ $('Params').first().json.bq_dataset }}.new_deals` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) AND name_key != ''", (1540, 300), on_error=True, always_output=True, once=True),
         node("Shape + score", "n8n-nodes-base.code", {"mode": "runOnceForAllItems", "jsCode": code_js()}, (1760, 300)),
         node("Dry run?", "n8n-nodes-base.if", {"conditions": {"options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 2},
              "conditions": [{"id": "c1", "leftValue": "={{ $('Params').first().json.dry_run }}", "rightValue": True, "operator": {"type": "boolean", "operation": "true", "singleValue": True}}], "combinator": "and"}, "options": {}}, (1980, 300)),
@@ -130,19 +134,20 @@ def build_full() -> dict:
         bq("History slice", "={{ $('Shape + score').first().json.history_sql }}", (2420, 420)),
         bq("Advance watermark", "={{ $('Shape + score').first().json.watermark_sql }}", (2640, 420)),
         bq("Run log", "={{ $('Shape + score').first().json.runlog_sql }}", (2860, 420)),
-        node("Rows", "n8n-nodes-base.splitOut", {"fieldToSplitOut": "rows", "include": "noOtherFields", "options": {}}, (3080, 420)),
-        node("XLSX", "n8n-nodes-base.convertToFile", {"operation": "xlsx", "binaryPropertyName": "NEW", "options": {"fileName": "={{ $('Shape + score').first().json.report_id }}_{{ $('Shape + score').first().json.run_timestamp.slice(0,10) }}.xlsx", "headerRow": True, "sheetName": "New deals"}}, (3300, 420)),
+        node("Rows source", "n8n-nodes-base.set", {"assignments": {"assignments": [{"id": "r1", "name": "rows", "type": "array", "value": "={{ $('Shape + score').first().json.rows }}"}]}, "options": {}}, (3080, 420)),
+        node("Rows", "n8n-nodes-base.splitOut", {"fieldToSplitOut": "rows", "include": "noOtherFields", "options": {}}, (3300, 420)),
+        node("XLSX", "n8n-nodes-base.convertToFile", {"operation": "xlsx", "binaryPropertyName": "NEW", "options": {"fileName": "={{ $('Shape + score').first().json.report_id }}_{{ $('Shape + score').first().json.run_timestamp.slice(0,10) }}.xlsx", "headerRow": True, "sheetName": "New deals"}}, (3520, 420)),
         node("Email", "n8n-nodes-base.emailSend", {"fromEmail": "={{ $env.MAIL_FROM }}", "toEmail": "={{ $env.MAIL_TO }}",
              "subject": "={{ $('Shape + score').first().json.report_id }} — {{ $('Shape + score').first().json.row_count }} new deal(s), {{ $('Shape + score').first().json.duplicate_suspects }} duplicate suspect(s)",
              "emailFormat": "text", "text": "={{ (() => { const b = $('Shape + score').first().json; return `${b.report_id} · run ${b.run_timestamp} (n8n)\\nwindow: ${JSON.stringify(b.window)}\\nrows: ${b.row_count} · duplicate suspects: ${b.duplicate_suspects} · day-1 hot: ${b.day1_hot.join(', ') || 'none'}\\namounts: ${b.currency_note}\\n\\n` + b.rows.map(r => `${r.duplicate_suspect ? '[DUP] ' : ''}${r.day1_hot_flag ? '[HOT] ' : ''}${r.dealname} — ${r.final_customer || '-'} — ${r.pipeline} / ${r.stage} ${r.probability_pct}% — ${r.amount_kusd} — created ${(r.createdate||'').slice(0,10)} — ${r.owner}\\n${r.deal_url}`).join('\\n\\n'); })() }}",
-             "options": {"attachments": "NEW"}}, (3520, 420), CRED["smtp"]),
+             "options": {"attachments": "NEW"}}, (3740, 420), CRED["smtp"]),
         node("Respond", "n8n-nodes-base.respondToWebhook", {"respondWith": "json", "responseBody": "={{ JSON.stringify((({ rows, merge_sql, history_sql, watermark_sql, runlog_sql, ...rest }) => rest)($('Shape + score').first().json)) }}", "options": {}}, (3740, 300)),
     ]
     conn = chain("Webhook: new-deals-run", "Params", "Read watermark", "Window", "HubSpot search", "Pipelines", "Owners", "Recent names", "Shape + score", "Dry run?")
     conn["Dry run?"] = {"main": [[{"node": "Respond", "type": "main", "index": 0}], [{"node": "MERGE new_deals", "type": "main", "index": 0}]]}   # true → respond only; false → write
-    conn.update(chain("MERGE new_deals", "History slice", "Advance watermark", "Run log", "Rows", "XLSX", "Email", "Respond"))
+    conn.update(chain("MERGE new_deals", "History slice", "Advance watermark", "Run log", "Rows source", "Rows", "XLSX", "Email", "Respond"))
     return {"id": "NEW_DEALS_FULL", "name": "NEW_DEALS_FULL", "nodes": nodes, "connections": conn, "active": False,
-            "settings": {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "NEW_DEALS_ERRORS", "saveManualExecutions": True},
+            "settings": {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "REPLACE_WITH_ERRORS_ID", "saveManualExecutions": True},
             "meta": {"generated_by": "workflows/src/build_workflow.py", "scenario": "B2", "note": "Cloud Scheduler → webhook (Header Auth); ?dry_run=1 computes and responds without writing; writes happen in order MERGE → history → watermark → run log → delivery."}}
 
 
@@ -163,7 +168,7 @@ def build_delivery() -> dict:
     wf["connections"] = {"Webhook: new-deals": {"main": [[{"node": "Any rows?", "type": "main", "index": 0}]]},
                          "Any rows?": {"main": [[{"node": "Rows", "type": "main", "index": 0}], [{"node": "Email (no rows)", "type": "main", "index": 0}]]},
                          **chain("Rows", "Shape columns", "XLSX", "Email")}
-    wf["settings"] = {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "NEW_DEALS_ERRORS"}
+    wf["settings"] = {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "REPLACE_WITH_ERRORS_ID"}   # patched at import from workflows/workflow_ids.map.json
     wf["meta"] = {"generated_by": "workflows/src/build_workflow.py", "scenario": "B1", "source": "cloud_function_new_deals/n8n_NewDeals_Delivery.json",
                   "hardening": ["Header Auth on the webhook (X-Delivery-Token)", "zero-row branch sends a text-only email", "recipients from MAIL_FROM/MAIL_TO env", "responds when the last node finishes"]}
     return wf

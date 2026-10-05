@@ -7,7 +7,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 : "${PROJECT:?}" "${REGION:=europe-west6}" "${DATASET:=hubspot}" "${PORTAL_ID:=9201667}" "${N8N_IMAGE:=docker.io/n8nio/n8n:2.41.7}" "${MIN_SCALE:=0}" "${MAIL_FROM:=n8n@example.com}" "${MAIL_TO:=sales-ops@example.com}"
-DRYRUN="${DRYRUN:-0}"
+DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
 [[ "$N8N_IMAGE" != *:latest ]] || { echo "pin N8N_IMAGE to a tag or digest, not :latest (env-var names and node versions drift)"; exit 2; }
 PN=$([[ "$DRYRUN" == 1 ]] && echo 000000000000 || gcloud projects describe "$PROJECT" --format 'value(projectNumber)')
 sed -e "s#\${PROJECT_NUMBER}#$PN#g" -e "s#\${PROJECT}#$PROJECT#g" -e "s#\${REGION}#$REGION#g" -e "s#\${N8N_IMAGE}#$N8N_IMAGE#g" -e "s#\${MIN_SCALE}#$MIN_SCALE#g" \

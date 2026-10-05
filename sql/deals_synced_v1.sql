@@ -33,10 +33,10 @@ SELECT
   SAFE_CAST(tpm__k_y AS FLOAT64)                                 AS tpm__k_y,
   SAFE_CAST(services_value_2026 AS FLOAT64)                      AS services_value_2026,
   SAFE_CAST(calculation___pipeline_2026__k__ AS FLOAT64)         AS calculation___pipeline_2026__k__,
-  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes,
-  -- the written-back properties, once they exist in HubSpot and in the sync (NULL before the first write-back)
-  SAFE_CAST(hot_score_v1 AS FLOAT64)                             AS hot_score_v1_synced,
-  SAFE_CAST(hot_flag_v1 AS BOOL)                                 AS hot_flag_v1_synced
+  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes
+  -- the written-back properties (hot_score_v1 / hot_flag_v1) are NOT selected here: they exist in the synced table only after
+  -- bootstrap_property.sh and a later sync, and a view that names a missing column fails to create. The write-back compares
+  -- against writeback_log instead (sql/hot_deals_v1.sql).
 FROM `${PROJECT}.${SYNC_DATASET}.${SYNC_DEALS_TABLE}`
 WHERE hs_object_id IS NOT NULL;
 

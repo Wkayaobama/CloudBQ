@@ -26,8 +26,8 @@ const payload = { report_id: `NEW_DEALS_${P.entity}`, run_timestamp: P.run_ts, o
   window: { mode: 'window', watermark_in: W.watermark_in, query_start: W.query_start, query_end: W.query_end },
   row_count: rows.length, rows_written: 0, duplicate_suspects: rows.filter((r) => r.duplicate_suspect).length,
   day1_hot: rows.filter((r) => r.day1_hot_flag).map((r) => r.deal_id), currency_note: ENTITIES[P.entity].currency, rows };
-const merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral) : 'SELECT 1';
-const history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';
+const merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral) : 'SELECT 1';   // function form: deal text may contain $& $$
+const history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';
 const watermark_sql = WATERMARK_SQL.replaceAll('__FQ__', fq).replaceAll('__RID__', `NEW_DEALS_${P.entity}`).replaceAll('__TS__', P.run_ts);
 const runlog_sql = RUNLOG_SQL.replaceAll('__FQ__', fq).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity).replaceAll('__DRY__', String(P.dry_run === true))
   .replaceAll('__WM__', W.watermark_in).replaceAll('__QS__', W.query_start).replaceAll('__QE__', W.query_end)

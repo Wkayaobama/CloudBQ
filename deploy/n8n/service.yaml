@@ -20,7 +20,7 @@ spec:
         run.googleapis.com/startup-cpu-boost: "true"
     spec:
       serviceAccountName: n8n-run@${PROJECT}.iam.gserviceaccount.com
-      containerConcurrency: 80
+      containerConcurrency: 80          # HTTP requests (editor + webhooks); executions are limited separately by N8N_CONCURRENCY_PRODUCTION_LIMIT=1
       timeoutSeconds: 900
       containers:
         - image: ${N8N_IMAGE}

@@ -28,7 +28,7 @@ from pathlib import Path
 SEP = "\x1f"
 AIDER_NAME = re.compile(r"\(aider\)\s*$")
 AIDER_TRAILER = re.compile(r"^Co-authored-by: aider \(", re.M)
-RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by|Scaffolded-By):\s*(.+)$", re.M)
+RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by):\s*(.+)$", re.M | re.I)
 
 
 def git(*args: str, cwd: Path | None = None) -> str:
@@ -91,7 +91,7 @@ def existing(index: Path) -> set[str]:
     return set(re.findall(r"\b([0-9a-f]{40})\b", index.read_text(encoding="utf-8")))
 
 
-HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
+HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
 
 
 def main(argv=None) -> int:

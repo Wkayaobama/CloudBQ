@@ -42,7 +42,7 @@ GLYPHS = {
     "unicode": {"branch": "├───", "last": "└───", "vert": "│   ", "blank": "    ", "bar": "│"},
     "ascii": {"branch": "+---", "last": "\\---", "vert": "|   ", "blank": "    ", "bar": "|"},
 }
-ANN_KEYS = ("scenarios", "layer", "role", "status", "parity", "notes", "recipe", "kind")
+ANN_KEYS = ("scenarios", "layer", "role", "status", "parity", "notes", "recipe", "kind", "layers")
 
 
 # ----------------------------------------------------------------------------- annotations
@@ -78,6 +78,9 @@ def load_annotations(path: str | None) -> dict:
         is_dir = str(raw_path).endswith("/")
         key = str(PurePosixPath(str(raw_path).strip("/")))
         ann.setdefault("kind", "dir" if is_dir else "file")
+        if "layers" in ann:                                   # several layers: keep the list, the first one is the primary `layer`
+            ls = ann.pop("layers"); ls = ls if isinstance(ls, list) else [ls]
+            ann["layers_list"] = [str(x) for x in ls]; ann.setdefault("layer", ann["layers_list"][0])
         ann.setdefault("status", "existing")
         if ann["status"] not in STATUSES:
             errors.append(f"{raw_path}: status must be one of {STATUSES}, got {ann['status']!r}")
@@ -92,6 +95,8 @@ def load_annotations(path: str | None) -> dict:
             ann["layer"] = str(ann["layer"])
             if data["layers"] and ann["layer"] not in data["layers"]:
                 errors.append(f"{raw_path}: layer {ann['layer']!r} is not declared under `layers`")
+            for L in ann.get("layers_list", []):
+                if L not in (data.get("layers") or {}): errors.append(f"{raw_path}: layer {L!r} is not declared under `layers`")
         nodes[key] = ann
     if errors:
         sys.exit("annotations invalid:\n  " + "\n  ".join(errors))
@@ -209,10 +214,12 @@ def build_lanes(tree: dict, layers: dict, scenarios: dict) -> dict:
     lanes = {L: {s: [] for s in scenarios} for L in layers}
     def visit(n: dict) -> None:
         a = n.get("ann")
-        if a and a.get("layer") in lanes:
-            for s in a.get("scenarios", []):
-                if s in lanes[a["layer"]]:
-                    lanes[a["layer"]][s].append(n["path"])
+        if a:
+            for L in (a.get("layers_list") or [a.get("layer")]):      # a block may sit on several layers
+                if L in lanes:
+                    for s in a.get("scenarios", []):
+                        if s in lanes[L]:
+                            lanes[L][s].append(n["path"])
         for c in n.get("children", []):
             visit(c)
     visit(tree)

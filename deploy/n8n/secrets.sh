@@ -9,7 +9,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 : "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}"
-DRYRUN="${DRYRUN:-0}"; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
 ensure_secret() {  # name generator-command
   if [[ "$DRYRUN" == 1 ]]; then echo "  (secret $1: create if missing with: $2)"; return; fi
   if ! gcloud secrets describe "$1" --project "$PROJECT" >/dev/null 2>&1; then

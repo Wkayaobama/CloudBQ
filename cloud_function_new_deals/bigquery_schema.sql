@@ -25,6 +25,17 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_runs` (
   status STRING, error STRING, duration_ms INT64)
 PARTITION BY DATE(run_ts) CLUSTER BY entity;
 
+-- Per-deal history: how every deal scored on each run (every lane writes it; a replayed run_ts replaces its slice) — layer L13.
+CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_history` (
+  run_ts TIMESTAMP NOT NULL, entity STRING, orchestrator STRING, deal_id STRING NOT NULL, dealname STRING, final_customer STRING,
+  name_key STRING, createdate TIMESTAMP, created_by_user_id STRING, source STRING, owner STRING, sales_region STRING,
+  pipeline STRING, pipeline_id STRING, stage STRING, probability_pct FLOAT64, amount FLOAT64, currency STRING, amount_kusd FLOAT64,
+  closedate DATE, arr_ky FLOAT64, product_family STRING, product STRING, application STRING, icalps_dealtype STRING, icalps_stage STRING,
+  day1_hot_score FLOAT64, day1_hot_flag BOOL, duplicate_suspect BOOL, duplicate_of STRING, deal_url STRING,
+  first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
+PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id
+OPTIONS (partition_expiration_days = 730);
+
 -- Per-run staging tables are created by the function as `${DATASET}.new_deals_staging_<entity>_<run_ts>` and dropped after the MERGE;
 -- the service account needs bigquery.dataEditor on the dataset (deploy.sh grants it).
 

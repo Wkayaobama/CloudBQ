@@ -20,8 +20,8 @@ structured summary.
   (`env | grep -i key`, masked), which repos are on disk and on which branch.
 
 ## 1 · One analyst per scenario, fixed layer list
-Every scenario analyst fills the same layer list (L0 code acquisition … L17 cost) so the lanes
-compare cell by cell. Each analyst returns: building blocks (path · kind · status · role ·
+Every scenario analyst fills the same layer list — the project's fixed decomposition of its execution
+layer (e.g. L0 code acquisition … Ln cost), agreed before the fan-out — so the lanes compare cell by cell. Each analyst returns: building blocks (path · kind · status · role ·
 idempotency note · an aider recipe), gaps as testable claims with evidence, one lane cell per
 layer, open questions with a default assumption.
 

@@ -93,7 +93,7 @@ def test_dry_reads_but_writes_nothing():
     payload, code = _invoke(bqc, "entity=SEALSQ&dry_run=1")
     assert code == 200 and payload["dry_run"] is True and payload["rows_written"] == 0
     assert any("SELECT watermark" in q for q in bqc.sql) and any("name_key" in q for q in bqc.sql), "dry run must read like a live run"
-    assert not bqc.loads and not bqc.inserted and not any(q.lstrip().startswith(("MERGE", "UPDATE")) for q in bqc.sql), bqc.sql
+    assert not bqc.loads and not any(q.lstrip().startswith(("MERGE", "UPDATE", "INSERT")) for q in bqc.sql), bqc.sql
     assert payload["window"]["watermark_in"].startswith("2026-09-28"), payload["window"]
     r1 = next(r for r in payload["rows"] if r["deal_id"] == "1")
     assert r1["duplicate_suspect"] and "2" in r1["duplicate_of"] and "999" in r1["duplicate_of"], r1  # twin in batch (other pipeline) + twin in warehouse
@@ -112,12 +112,13 @@ def test_live_uses_per_run_staging_and_frozen_update_list():
     assert len(order) == 2 and order[0] < order[1], "watermark must advance after the MERGE"
     assert bqc.locked is False and bqc.watermark is not None
     hist = [d for d, _, _ in bqc.loads if d.endswith("new_deals_history")]; assert hist, "history slice written"
-    assert bqc.inserted and bqc.inserted[0][1][0]["status"] == "OK" and bqc.inserted[0][1][0]["orchestrator"] == "cloud-run-function"
+    runlog = [q for q in bqc.sql if q.lstrip().startswith("INSERT INTO `p.hubspot.new_deals_runs`")]
+    assert len(runlog) == 1 and "@status" in runlog[0] and "@orchestrator" in runlog[0], "one run-log row via a query INSERT (not a streaming insert)"
 
 
 def test_overlapping_run_gets_409_and_writes_nothing():
     bqc = FakeBQ(watermark=NOW - timedelta(days=7), locked=True); payload, code = _invoke(bqc, "entity=ICALPS")
-    assert code == 409 and not bqc.loads and not bqc.inserted
+    assert code == 409 and not bqc.loads and not any(q.lstrip().startswith(("INSERT", "MERGE `p.hubspot.new_deals`")) for q in bqc.sql)
 
 
 def test_event_mode_never_touches_watermark():
@@ -129,6 +130,16 @@ def test_event_mode_never_touches_watermark():
 def test_first_run_without_watermark_uses_first_run_days():
     bqc = FakeBQ(watermark=None); payload, code = _invoke(bqc, "entity=SEALSQ&dry_run=1")
     assert code == 200 and payload["window"]["watermark_in"] is not None
+
+
+def test_every_table_main_writes_is_in_the_schema_ddl():
+    import re as _re
+    ddl = (ROOT / "cloud_function_new_deals/bigquery_schema.sql").read_text()
+    created = set(_re.findall(r"CREATE TABLE IF NOT EXISTS `\$\{PROJECT\}\.\$\{DATASET\}\.([a-z_]+)`", ddl))
+    src = (ROOT / "cloud_function_new_deals/main.py").read_text()
+    named = set(_re.findall(r"table\(\"([a-z_]+)\"\)", src)) - {"new_deals_staging"}
+    named = {n for n in named if not n.startswith("new_deals_staging")}
+    assert named <= created, f"main.py writes {named - created} but deploy.sh tables does not create them"
 
 
 if __name__ == "__main__":

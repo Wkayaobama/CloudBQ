@@ -83,12 +83,12 @@ secret() {
     fi
   fi
   run gcloud secrets add-iam-policy-binding hubspot-token --project "$PROJECT" --member "serviceAccount:$(sa)" --role roles/secretmanager.secretAccessor
-  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --format 'value(name)' --limit 1)"
+  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1)"
 }
 
 secret_version() {
   if [[ -n "$SECRET_VERSION" ]]; then echo "$SECRET_VERSION"; return; fi
-  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --format 'value(name)' --limit 1
+  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1
 }
 
 deploy() {
@@ -96,7 +96,7 @@ deploy() {
   local ver; ver=$(secret_version)
   local env="^|^BQ_PROJECT=${PROJECT}|BQ_DATASET=${DATASET}|OVERLAP_MINUTES=5|FIRST_RUN_DAYS=7|PORTAL_ID=${PORTAL_ID}|DELIVERY_WEBHOOK_URL=${DELIVERY_WEBHOOK_URL}|ORCHESTRATOR=cloud-run-function"
   local secrets="HUBSPOT_TOKEN=hubspot-token:${ver}"
-  [[ -n "${DELIVERY_WEBHOOK_TOKEN_SECRET:-}" ]] && secrets+=",DELIVERY_WEBHOOK_TOKEN=${DELIVERY_WEBHOOK_TOKEN_SECRET}:latest"
+  [[ -n "${DELIVERY_WEBHOOK_TOKEN_SECRET:-}" ]] && secrets+=",DELIVERY_WEBHOOK_TOKEN=${DELIVERY_WEBHOOK_TOKEN_SECRET}:${DELIVERY_WEBHOOK_TOKEN_VERSION:-latest}"
   run gcloud run deploy "$FN" --project "$PROJECT" --region "$REGION" --source "$HERE" \
     --function new_deals_report --base-image python312 \
     --no-allow-unauthenticated --service-account "$(sa)" \
@@ -127,7 +127,7 @@ invoker() {
 invoke() {  # invoke ENTITY [extra query]
   local u; u=$(url)
   local tok; tok=$(cap gcloud auth print-identity-token)
-  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sS -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'"; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "window": {"mode": "dry"}}'
+  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sS -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'" >&2; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "dry_run": true, "window": {"mode": "window", "watermark_in": "<wm>", "query_end": "<run_ts>"}}'
   else curl -sS -H "Authorization: Bearer $tok" "${u}?entity=$1${2:-}"; fi
 }
 
@@ -136,14 +136,13 @@ dry() {
   local ok=1
   for e in SEALSQ ICALPS; do
     local out; out=$(invoke "$e" "&dry_run=1")
-    python3 - "$e" <<<"$out" <<'PY' || ok=0
+    python3 -c '
 import json, sys
-e = sys.argv[1]; p = json.loads(sys.stdin.read())
-w = p.get("window", {})
-print(f"  {e}: rows={p.get('row_count')} written={p.get('rows_written')} dup={p.get('duplicate_suspects')} hot={len(p.get('day1_hot', []))} window={w.get('watermark_in', '?')} → {w.get('query_end', '?')}")
+e = sys.argv[1]; p = json.loads(sys.argv[2]); w = p.get("window", {})
+print("  %s: rows=%s written=%s dup=%s hot=%s window=%s -> %s" % (e, p.get("row_count"), p.get("rows_written"), p.get("duplicate_suspects"), len(p.get("day1_hot", [])), w.get("watermark_in", "?"), w.get("query_end", "?")))
 assert p.get("rows_written") == 0, "dry run wrote rows"
-assert p.get("dry_run", True) is True, "payload not marked dry_run"
-PY
+assert p.get("dry_run") is True, "payload not marked dry_run"
+' "$e" "$out" || ok=0
   done
   [[ $ok == 1 ]] || die "dry run failed — do not enable the schedulers"
   echo "  dry run passed for both entities. Next: deploy.sh run SEALSQ (first live run), deploy.sh probe, deploy.sh enable"

@@ -7,30 +7,26 @@ WITH scored AS (
             d.services_value_2026, d.asp_in_usd_q2_2022_calculation, d.tpm__k_y, d.product_hierarchy, d.num_contacted_notes,
             d.notes_last_updated, d.revenue_state, CURRENT_TIMESTAMP()) AS hs
   FROM `${PROJECT}.${DATASET}.deals_synced_v1` d
-  LEFT JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` st ON st.stage_id = d.dealstage_id
+  JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` st ON st.stage_id = d.dealstage_id   -- INNER: no labels loaded → no rows (never PATCH blind)
   WHERE d.pipeline_id IN ('12096408', '13772279')                                   -- scored pipelines only (main.py CR)
-    AND NOT REGEXP_CONTAINS(LOWER(IFNULL(st.label, '')), r'closed')                -- open deals only; label from pipeline_labels
+    AND NOT REGEXP_CONTAINS(LOWER(st.label), r'closed')                             -- open deals only; run sql/refresh_pipeline_labels.sh first
 )
 SELECT deal_id, dealname, final_customer, sales_region, pipeline_id, amount_kusd, closedate,
        hs.score AS hot_score_v1, hs.hot AS hot_flag_v1,
        ROW_NUMBER() OVER (PARTITION BY sales_region ORDER BY hs.score DESC, amount_kusd DESC, deal_id) AS region_rank,
-       RANK()       OVER (ORDER BY hs.score DESC, amount_kusd DESC)                                       AS global_rank,
-       hot_score_v1_synced, hot_flag_v1_synced
+       RANK()       OVER (ORDER BY hs.score DESC, amount_kusd DESC)                                       AS global_rank
 FROM scored;
 
 -- per-region top-5: the arithmetic HubSQL cannot do (window functions)
 CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_top5_by_region` AS
 SELECT * FROM `${PROJECT}.${DATASET}.hot_deals_v1` QUALIFY region_rank <= 5;
 
--- rows the write-back must PATCH: the computed value differs from what HubSpot holds (last successful write-back, else the synced property).
--- Never a NULL score: sending "" would clear the property on unscored pipelines.
+-- rows the write-back must PATCH: the computed value differs from the last value this job wrote successfully (writeback_log).
+-- Never a NULL score: sending "" would clear the property on unscored pipelines. A same-value PATCH is a no-op anyway.
 CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_writeback` AS
-SELECT h.deal_id, h.hot_score_v1, h.hot_flag_v1,
-       COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced) AS previous_score,
-       COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced)  AS previous_flag
+SELECT h.deal_id, h.hot_score_v1, h.hot_flag_v1, w.last.hot_score_v1 AS previous_score, w.last.hot_flag_v1 AS previous_flag
 FROM `${PROJECT}.${DATASET}.hot_deals_v1` h
 LEFT JOIN (SELECT deal_id, ARRAY_AGG(STRUCT(hot_score_v1, hot_flag_v1) ORDER BY run_ts DESC LIMIT 1)[OFFSET(0)] AS last
            FROM `${PROJECT}.${DATASET}.writeback_log` WHERE status = 'OK' AND NOT dry_run GROUP BY deal_id) w USING (deal_id)
 WHERE h.hot_score_v1 IS NOT NULL
-  AND (h.hot_score_v1 IS DISTINCT FROM COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced)
-    OR h.hot_flag_v1  IS DISTINCT FROM COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced));
+  AND (w.last IS NULL OR h.hot_score_v1 IS DISTINCT FROM w.last.hot_score_v1 OR h.hot_flag_v1 IS DISTINCT FROM w.last.hot_flag_v1);

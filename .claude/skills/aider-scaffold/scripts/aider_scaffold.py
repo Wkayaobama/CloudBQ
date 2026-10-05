@@ -53,10 +53,16 @@ def main(argv=None) -> int:
     recipe = Path(a.recipe)
     if not recipe.exists():
         sys.exit(f"aider_scaffold: recipe not found: {recipe}")
+    # a recipe may start with aider-style "/add path…" and "/read-only path…" lines: they become the file lists (so the recipe stands alone)
+    files, reads = list(a.files), list(a.read)
+    for line in recipe.read_text(encoding="utf-8").splitlines():
+        if line.startswith("/add "): files += [f for f in line[5:].split() if f not in files]
+        elif line.startswith("/read-only "): reads += [f for f in line[11:].split() if f not in reads]
+    a.files = files
+    if not reads and (root / "CONVENTIONS.md").exists(): reads = [str(root / "CONVENTIONS.md")]
     for f in a.files:
         if not Path(f).exists():
             Path(f).parent.mkdir(parents=True, exist_ok=True)  # aider creates new files when they are named; keep parents ready
-    reads = a.read or ([str(root / "CONVENTIONS.md")] if (root / "CONVENTIONS.md").exists() else [])
     before = git("rev-parse", "HEAD", cwd=root).strip()
 
     dirty = git("status", "--porcelain", "--untracked-files=no", cwd=root).strip()

@@ -189,7 +189,13 @@ def write_run(client, entity, run_ts, window, rows, written, dry, status, error,
            "row_count": len(rows), "rows_written": written, "duplicate_suspects": sum(1 for r in rows if r.get("duplicate_suspect")),
            "day1_hot": sum(1 for r in rows if r.get("day1_hot_flag")), "status": status, "error": (error or None) and str(error)[:1000],
            "duration_ms": int((time.monotonic() - started) * 1000)}
-    try: client.insert_rows_json(table("new_deals_runs"), [rec])
+    try:   # a query INSERT, not a streaming insert: C's scheduled script DELETEs its own rows in this table and a streaming buffer would block it
+        cols = list(rec); from google.cloud import bigquery
+        types = {"run_ts": "TIMESTAMP", "watermark_in": "TIMESTAMP", "query_start": "TIMESTAMP", "query_end": "TIMESTAMP", "dry_run": "BOOL",
+                 "row_count": "INT64", "rows_written": "INT64", "duplicate_suspects": "INT64", "day1_hot": "INT64", "duration_ms": "INT64"}
+        params = [bigquery.ScalarQueryParameter(c, types.get(c, "STRING"), rec[c]) for c in cols]
+        client.query(f"INSERT INTO `{table('new_deals_runs')}` ({', '.join(cols)}) VALUES ({', '.join('@' + c for c in cols)})",
+                     job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
     except Exception as e: jlog(logging.WARNING, "run log insert failed", error=str(e))
 
 def recent_names(client, days=90):

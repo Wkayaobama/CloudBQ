@@ -15,7 +15,7 @@ const T = (n) => `\`${BQ_PROJECT}.${BQ_DATASET}.${n}\``;
 const log = (o) => console.log(JSON.stringify({ severity: 'INFO', run_ts: RUN_TS.toISOString(), ...o }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const [rows] = await bq.query({ query: `SELECT deal_id, hot_score_v1, hot_flag_v1, previous_score, previous_flag FROM ${T('hot_deals_v1_writeback')} ORDER BY deal_id${MAX_ROWS ? ` LIMIT ${Number(MAX_ROWS)}` : ''}` });
+const [rows] = await bq.query({ query: `SELECT deal_id, hot_score_v1, hot_flag_v1, previous_score, previous_flag FROM ${T('hot_deals_v1_writeback')} ORDER BY deal_id${Number.isInteger(Number(MAX_ROWS)) && Number(MAX_ROWS) > 0 ? ` LIMIT ${Number(MAX_ROWS)}` : ''}` });
 log({ message: 'candidates', candidates: rows.length, dry_run: DRY });
 
 // POST /crm/v3/objects/deals/batch/update — ≤ 100 inputs; 200 = all written, 207 = partial (errors[] names the ids that failed).

@@ -223,7 +223,7 @@
  "settings": {
   "executionOrder": "v1",
   "timezone": "Europe/Zurich",
-  "errorWorkflow": "NEW_DEALS_ERRORS"
+  "errorWorkflow": "REPLACE_WITH_ERRORS_ID"
  },
  "id": "NEW_DEALS_DELIVERY",
  "meta": {
