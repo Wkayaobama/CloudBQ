@@ -1,0 +1,147 @@
+{
+  "name": "NEW_DEALS_DELIVERY",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-deals",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "2776ad39-071b-4eeb-af78-b412b39129e2",
+      "name": "Webhook: new-deals",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "949ffe04-df92-44fb-acd1-871a51d622f8"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.rows",
+        "include": "noOtherFields",
+        "options": {}
+      },
+      "id": "a64d9532-5aaa-467c-8004-7070d9957e20",
+      "name": "Rows",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Flatten the function payload rows into the report column order\nconst COLS = ['entity','deal_id','dealname','final_customer','owner','sales_region','pipeline','stage','probability_pct','amount','currency','amount_kusd','closedate','arr_ky','product_family','product','application','icalps_dealtype','icalps_stage','source','createdate','day1_hot_score','day1_hot_flag','duplicate_suspect','duplicate_of','deal_url'];\nreturn $input.all().map(i => ({ json: Object.fromEntries(COLS.map(c => [c, i.json[c] ?? null])) }));"
+      },
+      "id": "efac5d43-eb60-4414-a13f-a040a6ebf0b1",
+      "name": "Shape columns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "NEW",
+        "options": {
+          "fileName": "={{ $('Webhook: new-deals').item.json.body.report_id }}_{{ $('Webhook: new-deals').item.json.body.run_timestamp.slice(0,10) }}.xlsx",
+          "headerRow": true,
+          "sheetName": "New deals"
+        }
+      },
+      "id": "88d2e327-375f-471e-99f9-2e870d803d9e",
+      "name": "XLSX",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "n8n@example.com",
+        "toEmail": "sales-ops@example.com",
+        "subject": "={{ $('Webhook: new-deals').item.json.body.report_id }} — {{ $('Webhook: new-deals').item.json.body.row_count }} new deal(s), {{ $('Webhook: new-deals').item.json.body.duplicate_suspects }} duplicate suspect(s)",
+        "emailFormat": "text",
+        "text": "={{ (() => { const b = $('Webhook: new-deals').item.json.body; return `${b.report_id} · run ${b.run_timestamp}\\nwindow: ${JSON.stringify(b.window)}\\nrows: ${b.row_count} · written to BigQuery: ${b.rows_written} · duplicate suspects: ${b.duplicate_suspects} · day-1 hot: ${b.day1_hot.join(', ') || 'none'}\\namounts: ${b.currency_note}\\n\\n` + b.rows.map(r => `${r.duplicate_suspect ? '[DUP] ' : ''}${r.day1_hot_flag ? '[HOT] ' : ''}${r.dealname} — ${r.final_customer || '-'} — ${r.pipeline} / ${r.stage} ${r.probability_pct}% — ${r.amount_kusd} — created ${(r.createdate||'').slice(0,10)} — ${r.owner}\\n${r.deal_url}`).join('\\n\\n'); })() }}",
+        "options": {
+          "attachments": "NEW"
+        }
+      },
+      "id": "bbbbfcd8-cc6f-4e7b-a036-dc5ba4f690e6",
+      "name": "Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: new-deals": {
+      "main": [
+        [
+          {
+            "node": "Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rows": {
+      "main": [
+        [
+          {
+            "node": "Shape columns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape columns": {
+      "main": [
+        [
+          {
+            "node": "XLSX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XLSX": {
+      "main": [
+        [
+          {
+            "node": "Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  }
+}

@@ -1,0 +1,9 @@
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+__pycache__/
+.venv/
+.cursorindexingignore
+.specstory/
