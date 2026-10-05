@@ -1,0 +1,14 @@
+# files aider must never add to the chat (secrets, state, generated bulk)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+.aider/
+docs/diffs/
+*.xlsx
+*.manifest.json
+__pycache__/
+node_modules/
+.venv/

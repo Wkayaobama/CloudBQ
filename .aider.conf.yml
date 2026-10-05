@@ -1,0 +1,17 @@
+# aider configuration shared by this project family (copy to the repo root as .aider.conf.yml)
+# Every AI edit is its own commit, marked as aider's, so the diff ledger can turn it into a patch.
+auto-commits: true
+dirty-commits: false          # never fold the operator's uncommitted edits into a suggestion
+attribute-author: true        # author "Name (aider)" on aider commits
+attribute-committer: true
+attribute-co-authored-by: true  # trailer: Co-authored-by: aider (<model>) <aider@aider.chat>
+show-diffs: true
+git-commit-verify: true
+yes-always: false             # the wrapper passes --yes-always for scripted runs; interactive sessions still confirm
+read:
+  - CONVENTIONS.md
+input-history-file: .aider/input.history
+chat-history-file: .aider/chat.history.md
+llm-history-file: .aider/llm.history
+check-update: false
+analytics: false

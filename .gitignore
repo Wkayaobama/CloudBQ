@@ -7,3 +7,7 @@ __pycache__/
 .venv/
 .cursorindexingignore
 .specstory/
+
+# aider / tooling state
+.aider/
+.aider*.history*
