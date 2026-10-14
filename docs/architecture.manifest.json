@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "27DE3AD4 15B9:CF17",
+ "serial": "AC061782 DF98:58D4",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -43,7 +43,7 @@
   "Divergent"
  ],
  "counts": {
-  "dirs": 34,
+  "dirs": 33,
   "files": 101,
   "annotated": 75,
   "proposed": 3,
@@ -2865,13 +2865,6 @@
         }
        }
       ]
-     },
-     {
-      "name": "templates",
-      "kind": "dir",
-      "path": "workflows/templates",
-      "exists": true,
-      "children": []
      },
      {
       "name": "credentials.map.json.example",

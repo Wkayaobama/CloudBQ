@@ -20,6 +20,8 @@ file is project-specific: project name, scenario ids, layer ids and every label 
            child prefix prefix + "│   " (not last) or prefix + "    " (last).
   tail     after a directory that has no sub-directories (files only, or empty) one line equal to its child prefix,
            right-stripped — this is the blank/"│" line that separates sibling directories in a real listing.
+  empty    directories with nothing left in them after the excludes are not listed: git ships no empty directory, so a
+           listing that showed one could never be reproduced from a clone (and --check would fail there).
   order    tree.com does not sort; NTFS enumerates names case-insensitively by up-cased UTF-16 code unit, so the
            renderer sorts by name.upper() (not .lower(): "__init__.py" lands after "workflow_api.py", as on Windows).
 The same algorithm is implemented in assets/template.html so "Copy as tree /f" and --out-ascii are byte-identical.
@@ -132,10 +134,12 @@ def ntfs_key(name: str) -> str:
     return name.upper()
 
 
-def walk(root: Path, excludes: list[str]) -> dict:
-    """Directory tree as nested dicts {name, kind, path, exists, children}; files and dirs each sorted by ntfs_key."""
+def walk(root: Path, excludes: list[str], label: str | None = None) -> dict:
+    """Directory tree as nested dicts {name, kind, path, exists, children}; files and dirs each sorted by ntfs_key.
+    The root node is named `label` (the project name) rather than the checkout directory, and directories that are
+    empty after the excludes are dropped, so the same commit renders byte-identically in any clone."""
     def node(p: Path, rel: str) -> dict:
-        n = {"name": p.name if rel else root.resolve().name, "kind": "dir", "path": rel, "exists": True, "children": []}
+        n = {"name": (label or root.resolve().name) if not rel else p.name, "kind": "dir", "path": rel, "exists": True, "children": []}
         try:
             entries = list(p.iterdir())
         except PermissionError:
@@ -146,7 +150,9 @@ def walk(root: Path, excludes: list[str]) -> dict:
             if _excluded(e.name, r, excludes):
                 continue
             if e.is_dir():
-                n["children"].append(node(e, r))
+                child = node(e, r)
+                if child["children"]:  # an empty directory cannot come out of a clone; leave it out
+                    n["children"].append(child)
             else:
                 n["children"].append({"name": e.name, "kind": "file", "path": r, "exists": True})
         return n
@@ -289,7 +295,7 @@ def render_html(manifest: dict, template_path: Path, standalone: bool = True) ->
 # ----------------------------------------------------------------------------- manifest
 def build_manifest(root: Path, ann: dict, excludes: list[str], scenario: str | None, keep_unannotated: bool,
                    root_label: str, volume: str, serial: str | None) -> dict:
-    tree = walk(root, excludes)
+    tree = walk(root, excludes, root_label)
     graft_proposed(tree, ann["nodes"])
     annotate(tree, ann["nodes"])
     tree = filter_scenario(tree, scenario, keep_unannotated)
@@ -340,7 +346,7 @@ def main(argv=None) -> int:
     ap.add_argument("--keep-unannotated", action="store_true", help="with --scenario: also keep nodes without annotation")
     ap.add_argument("--annotate", action="store_true", help="append {scenarios · layer · status · parity} tags in the ASCII")
     ap.add_argument("--ascii-glyphs", action="store_true", help="tree /f /a glyphs (+--- \\--- |) instead of box drawing")
-    ap.add_argument("--root-label", help="root line of the listing (default: root directory name; Windows prints 'C:.')")
+    ap.add_argument("--root-label", help="root line of the listing (default: the project name from the annotations, else the root directory name; Windows prints 'C:.')")
     ap.add_argument("--volume", help="volume label in the header (default: project name; '' → 'Folder PATH listing')")
     ap.add_argument("--serial", help="serial in the header (default: derived from the tree content)")
     ap.add_argument("--out-json"); ap.add_argument("--out-ascii"); ap.add_argument("--out-html")
@@ -360,7 +366,7 @@ def main(argv=None) -> int:
     project = ann.get("project") or root.resolve().name
     volume = project if a.volume is None else a.volume
     manifest = build_manifest(root, ann, excludes, a.scenario, a.keep_unannotated,
-                              a.root_label or root.resolve().name, volume, a.serial)
+                              a.root_label or project, volume, a.serial)
     glyphs = "ascii" if a.ascii_glyphs else "unicode"
     ascii_text = render_ascii(manifest["tree"], manifest["root_label"], manifest["volume"], manifest["serial"], a.annotate, glyphs)
     outputs: dict[str, str] = {}

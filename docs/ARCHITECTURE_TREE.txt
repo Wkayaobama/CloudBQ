@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is 27DE3AD4 15B9:CF17
+Volume serial number is AC061782 DF98:58D4
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -151,12 +151,10 @@ CloudBQ
 │   │   NEW_DEALS_ERRORS.json
 │   │   NEW_DEALS_FULL.json
 │   │
-│   ├───src
-│   │       build_workflow.py
-│   │       node_code.template.js
-│   │       shape_score.js
-│   │
-│   └───templates
+│   └───src
+│           build_workflow.py
+│           node_code.template.js
+│           shape_score.js
 │
 └───writeback
         bootstrap_property.sh
