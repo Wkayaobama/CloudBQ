@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "C89B48A7 023E:B201",
+ "serial": "6C596755 5069:2285",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -966,7 +966,7 @@
    ],
    "layer": "L0",
    "status": "new",
-   "parity": "Parallel",
+   "parity": "Divergent",
    "role": "the workbook built from execution_surfaces_tooling.yaml (verify OK: Layers 1/6/5, steps 1/5/5)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
    "kind": "file",
@@ -980,7 +980,7 @@
    ],
    "layer": "L0",
    "status": "new",
-   "parity": "Parallel",
+   "parity": "Divergent",
    "role": "pass-sequence spec of the loop itself: surfaces D/C/B, layers U0–U11, steps 1–11, remediation U01–U09 (what this project corrected), equality checks per generated artefact",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
    "kind": "file",
@@ -1758,7 +1758,7 @@
    ],
    "layer": "L0",
    "status": "new",
-   "parity": "Parallel",
+   "parity": "Divergent",
    "role": "Team page for the tooling loop (recipe → apply → verify → commit → ledger → tree → workbook → index → review → replay → push) on its three surfaces: developer shell, CI check, bot commit; per-tool sections, worked example, bootstrap checklist, FAQ",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
    "kind": "file",
@@ -2919,7 +2919,7 @@
        ],
        "layer": "L0",
        "status": "new",
-       "parity": "Parallel",
+       "parity": "Divergent",
        "role": "the workbook built from execution_surfaces_tooling.yaml (verify OK: Layers 1/6/5, steps 1/5/5)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
       }
@@ -2937,7 +2937,7 @@
        ],
        "layer": "L0",
        "status": "new",
-       "parity": "Parallel",
+       "parity": "Divergent",
        "role": "pass-sequence spec of the loop itself: surfaces D/C/B, layers U0–U11, steps 1–11, remediation U01–U09 (what this project corrected), equality checks per generated artefact",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
       }
@@ -3967,7 +3967,7 @@
      ],
      "layer": "L0",
      "status": "new",
-     "parity": "Parallel",
+     "parity": "Divergent",
      "role": "Team page for the tooling loop (recipe → apply → verify → commit → ledger → tree → workbook → index → review → replay → push) on its three surfaces: developer shell, CI check, bot commit; per-tool sections, worked example, bootstrap checklist, FAQ",
      "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
     }

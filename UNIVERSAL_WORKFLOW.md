@@ -174,7 +174,9 @@ scenario and status chips, a path filter, a details panel and "Copy as tree /f" 
 in the header is derived from the content, so an unchanged tree renders byte-identically.
 
 **Pitfalls.** Status words: `existing | modify | new | proposed`. A `proposed` node is the way to show a plan before the file exists —
-flip it to `new` in the commit that creates the file. The walker ignores `.gitignore` patterns and drops empty directories, so a fresh
+flip it to `new` in the commit that creates the file. A node's `parity` must equal the lane workbook's word for that layer:
+`tests/test_docs_consistency.py` compares the two, so annotating a layer-L0 block `Parallel` when the workbook rates L0 `Divergent`
+fails the suite (this page's own first commit did exactly that). The walker ignores `.gitignore` patterns and drops empty directories, so a fresh
 clone reproduces the render (that was a CI-only failure once, see §9).
 
 **In CloudBQ.** 92 annotated nodes across lanes A/B/C and layers L0–L17 (this page adds three); regenerated and checked on every commit; the ledger patches
@@ -403,6 +405,8 @@ argument for running steps 3, 5, 6, 7, 8 and 10 locally before every push, and f
 - **CI says the tree is stale but I changed no file.** You changed an annotation or added a file the walk lists. Regenerate (§4.3) and
   commit the three outputs.
 - **`diff_ledger.py --check` fails.** Run the ledger, commit `docs/diffs/`, push. If it fails only in CI, the checkout is shallow.
+- **`test_docs_consistency.py` fails after annotating a node.** Its `parity` word differs from the workbook's row for that layer. Use the
+  workbook's word, or omit `parity` on the node.
 - **The workbook shows as modified right after `--verify`.** Expected (timestamp). `git checkout docs/*.xlsx` unless you edited the YAML.
 - **`aider_scaffold.py` exits 2.** No key. Apply the recipe by hand and commit with `Recipe:` and `Scaffolded-by: hand (no LLM key)`.
 - **The Actions tab has no "Run workflow" button.** The workflow file is not yet on the default branch. Merge first.
