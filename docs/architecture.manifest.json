@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "7B653248 91C0:9FA1",
+ "serial": "813A07D4 754E:F72B",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,17 +44,17 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 105,
-  "annotated": 79,
+  "files": 106,
+  "annotated": 80,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 70,
+   "new": 71,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 45,
+   "A": 46,
    "B": 51,
    "C": 50
   }
@@ -274,6 +274,7 @@
     "cloud_function_new_deals/deploy.sh",
     "cloud_function_new_deals/main.py",
     "docs/PASS1_SEQUENCE.md",
+    "docs/RUNBOOK_CLOUD_SHELL.md",
     "notebooks",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "notebooks/README.md",
@@ -845,6 +846,18 @@
    "status": "new",
    "role": "The recipe: deploy.sh steps in order with look commands, the dry-run gate, the branch points (delivery, write-back)",
    "parity": "Conditional",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
+   "kind": "file",
+   "exists": true
+  },
+  "docs/RUNBOOK_CLOUD_SHELL.md": {
+   "scenarios": [
+    "A"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "The operator's phased Cloud Shell runbook for wisekeybq: values filled in, a check after every phase, the gate, replay as the idempotency check",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
    "kind": "file",
    "exists": true
@@ -2469,6 +2482,22 @@
        "status": "new",
        "role": "The recipe: deploy.sh steps in order with look commands, the dry-run gate, the branch points (delivery, write-back)",
        "parity": "Conditional",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+      }
+     },
+     {
+      "name": "RUNBOOK_CLOUD_SHELL.md",
+      "kind": "file",
+      "path": "docs/RUNBOOK_CLOUD_SHELL.md",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "The operator's phased Cloud Shell runbook for wisekeybq: values filled in, a check after every phase, the gate, replay as the idempotency check",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
       }
      },

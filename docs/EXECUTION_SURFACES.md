@@ -61,6 +61,9 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 | 2026-10-05 | n8n on Cloud Run with SQLite / `:latest` / Schedule Trigger at minScale 0 / `/healthz` | n8n docs and Google codelab; B-G01/02/13/14 confirmed | `9e7e18a` — `deploy/n8n/service.yaml` (Cloud SQL, pinned image, Scheduler → webhook, `/health`) |
 | 2026-10-05 | C sharing A's `report_state` key would rewind A; the sync is never real-time; write-back blocked by read-only scopes | `discovery/scenario_C.md`; C-G2/G4/G10 confirmed | `913f63a` — `NEW_DEALS_<entity>_C`, 36 h freshness guard; **`hubspot-token-write` app — awaiting the operator** |
 | 2026-10-05 | HubSQL cannot compute the score or a per-region rank; the user's matrix said "BigQuery sync cannot write to HubSpot" | HubSpot docs (C-G12, C-G1 contested: true only without Data Hub Enterprise) | `913f63a` — `hot_deals_v1` views + Node job write-back; reverse sync noted as the Enterprise alternative |
+| 2026-10-14 | the committed `tree /f` renders listed an empty directory and named the root after the checkout folder, so CI's `tree_f --check` failed on every runner; the ledger check needed full history | the first PR run (`verify` job) | `8d14e0d` — walker drops empty dirs, root = project name, `fetch-depth: 0` |
+| 2026-10-16 | pre-run adversarial review (3 critics, 6 confirmed): `secret_version()` returned the Secret Manager resource path, not the number (R47); service-account ID tokens without the URL audience (R48); `enable` not idempotent (R49); `run` passed JSON error bodies as payloads (R50); bare NULLs in the vector SQL (R51) | reading `deploy.sh`, gcloud's formatter, google-auth source | `574e954` — `value(name.basename())`, `--audiences`, state-checked enable/pause, `curl -sSf`, typed NULLs |
+| 2026-10-16 | the operator runbook tied `BQ_LOCATION` to the Cloud Run region, used a second `run` as the idempotency check, blamed a `dry` 403 on `invoker`, carried portal 49610528; its offline tests would have failed on import in Cloud Shell (R52, R53) | review of the draft against `deploy.sh`, mir-load `run_pass1.sh` (mrload in EU), the connected HubSpot account (hub 9201667) | `docs/RUNBOOK_CLOUD_SHELL.md` (this commit), `e88c27a` (PASS1 corrections, notebook) |
 
 (Append-only. Never rewrite a past row; add a new one when the situation changes.)
 
@@ -84,6 +87,7 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 
 ## 6. What stays open (none of it blocks pass 1 on lane A)
 
+- **Pass 1 on `wisekeybq`** — runbook `docs/RUNBOOK_CLOUD_SHELL.md` ready (dataset `mrload`, EU); evidence section still empty.
 - **First authenticated run** of everything: `bq query < tests/hot_score_vectors.sql` (UDF parity), `deploy.sh dry`, the DTS transfer.
 - **`hubspot-token-write` private app** (`crm.objects.deals.write`) and a one-off `crm.schemas.deals.write` token for `bootstrap_property.sh` — **awaiting the operator**.
 - **Synced table and column names** for lane C (`SYNC_DATASET`, `SYNC_DEALS_TABLE`, `SYNC_OWNERS_TABLE`) — known after the first transfer run.

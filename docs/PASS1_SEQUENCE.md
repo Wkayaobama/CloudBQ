@@ -9,7 +9,7 @@ commands run after `gcloud auth login` and `gcloud auth application-default logi
 Pass 1 has not run against Google Cloud yet. Every command below was rehearsed offline (`bash -n`, `DRYRUN=1`,
 `python3 tests/*.py`); the **Evidence** section is empty until the operator pastes the first dry-run payloads.
 
-The same sequence runs cell by cell from `notebooks/cloudbq_deploy_and_witness.ipynb` on a Vertex AI Workbench instance in the
+The operator's phased version for `wisekeybq`, with a check after every phase, is `docs/RUNBOOK_CLOUD_SHELL.md`. The same sequence runs cell by cell from `notebooks/cloudbq_deploy_and_witness.ipynb` on a Vertex AI Workbench instance in the
 project, followed by the SQL witnessed from Python (`notebooks/README.md`).
 
 ## Preconditions on the clone you run from

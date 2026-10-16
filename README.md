@@ -16,6 +16,7 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 
 1. `docs/SCENARIOS.md` — the three lanes condensed and the recommendation.
 2. `docs/PASS1_SEQUENCE.md` — the deploy sequence with look commands and the dry-run gate.
+   `docs/RUNBOOK_CLOUD_SHELL.md` is the same sequence as a phased operator runbook for `wisekeybq`, with a check after every phase.
 3. `docs/EXECUTION_SURFACES.xlsx` (built from `docs/execution_surfaces.yaml`) — the lane matrix: layers L0–L17 × lanes A/B/C,
    parity words, remediation, equality checks; the Overview counts the **parallel lane**. `docs/EXECUTION_SURFACES.md` is the record.
 4. `docs/architecture_tree.html` — the architecture as an interactive `tree /f` (scenario and layer filters, lane view);
