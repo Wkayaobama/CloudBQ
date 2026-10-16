@@ -1,0 +1,218 @@
+commit 43a2d14bdaa188cc517d9a6bfea9543519d40651
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Fri Oct 16 20:05:17 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Fri Oct 16 20:05:17 2026 +0000
+
+    regen-workflow: the reusable workflow declares no concurrency group — the caller owns it (the bot's first run on main was cancelled as a deadlock)
+    
+    GitHub cancelled "Update README index" run 38958479320 on main after 1 s: "Canceling since a deadlock was detected for concurrency
+    group 'regenerate-Update README index-refs/heads/main' between a top level workflow and 'regenerate'". The thin caller and
+    .github/workflows/regenerate.yml both declared the same top-level group; GitHub treats the called workflow's group as the job's and
+    refuses the self-deadlock.
+    
+    - new_regen_workflow.py: reusable_workflow() emits no concurrency block (inline workflows and callers keep theirs); header comment
+      states the rule; .github/workflows/regenerate.yml regenerated (== --emit-reusable --print)
+    - tests/test_regen_workflow.py: the reusable has no top-level concurrency; inline and local callers do
+    - references/github-actions-facts.md and SKILL.md state the rule with the observed error; UNIVERSAL_WORKFLOW.md §4.5 fact 4 and
+      §9 row U10; docs/execution_surfaces_tooling.yaml remediation U10 (workbook rebuilt, verify OK)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .claude/skills/regen-workflow/SKILL.md              |   5 +++--
+ .../references/github-actions-facts.md              |   3 +++
+ .../regen-workflow/scripts/new_regen_workflow.py    |   6 ++----
+ .github/workflows/regenerate.yml                    |   6 ++----
+ UNIVERSAL_WORKFLOW.md                               |  12 +++++++++---
+ docs/EXECUTION_SURFACES_TOOLING.xlsx                | Bin 20992 -> 21338 bytes
+ docs/execution_surfaces_tooling.yaml                |  11 +++++++++--
+ tests/test_regen_workflow.py                        |   3 +++
+ 8 files changed, 31 insertions(+), 15 deletions(-)
+
+diff --git a/.claude/skills/regen-workflow/SKILL.md b/.claude/skills/regen-workflow/SKILL.md
+index 0be1df9..0d464e7 100644
+--- a/.claude/skills/regen-workflow/SKILL.md
++++ b/.claude/skills/regen-workflow/SKILL.md
+@@ -56,8 +56,9 @@ re-run a `push`-triggered regeneration, so every generated job is guarded with
+ idempotent (the pull-request `check` run proves it). The guard skips *every* regen workflow for a bot commit, so a regeneration that
+ depends on another's output belongs in the same workflow (repeat `--run`) or on a schedule.
+ 
+-`permissions: contents: write` is on the job. `concurrency` (group = workflow + ref) serialises runs of one workflow per branch; two
+-different regen workflows writing to the same branch are reconciled by the rebase-and-retry push. `fetch-depth` is an input for
++`permissions: contents: write` is on the job. `concurrency` (group = workflow + ref) serialises runs of one workflow per branch; it is
++declared by the inline workflow or the thin caller, never by `regenerate.yml` (a called workflow claiming its caller's group is cancelled
++by GitHub as a deadlock). Two different regen workflows writing to the same branch are reconciled by the rebase-and-retry push. `fetch-depth` is an input for
+ generators that read history (`0` = full). On a protected branch the bot's push is refused ("the branch did not move: not a race"):
+ add the GitHub Actions app (or the PAT's user) to the ruleset's bypass list, or regenerate on a branch and let `pull_request` run in
+ check mode.
+diff --git a/.claude/skills/regen-workflow/references/github-actions-facts.md b/.claude/skills/regen-workflow/references/github-actions-facts.md
+index 1d25db4..0dcd18d 100644
+--- a/.claude/skills/regen-workflow/references/github-actions-facts.md
++++ b/.claude/skills/regen-workflow/references/github-actions-facts.md
+@@ -17,6 +17,9 @@
+   be pushed to — the skill forces mode `check` on `pull_request`. On `push`, `workflow_dispatch` and `schedule` the default checkout is a
+   local branch named after `github.ref_name`; `github.ref_type` tells a tag run apart (nothing to push to → exit 2).
+ - `concurrency.group` at workflow level serialises runs per ref; `cancel-in-progress: false` lets a queued regeneration run after the current one.
++  The group is declared by the workflow that runs — an inline workflow or a thin caller — never by the reusable workflow: a called
++  workflow whose top-level group equals its caller's is cancelled at startup ("Canceling since a deadlock was detected for concurrency
++  group '…' between a top level workflow and '<job>'"; observed on CloudBQ main, run 38958479320, 2026-10-16).
+ - Action majors in the generated files: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` (node24 runtime; the
+   inputs used — `fetch-depth`, `token`, `persist-credentials`, `python-version`, `node-version` — are unchanged since the v4/v5 majors, checked
+   against each action.yml on 2026-10-16). `persist-credentials: true` is the default but is set explicitly because the commit step pushes with it.
+diff --git a/.claude/skills/regen-workflow/scripts/new_regen_workflow.py b/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
+index 58b12fb..723706c 100644
+--- a/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
++++ b/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
+@@ -165,6 +165,8 @@ def reusable_workflow() -> str:
+ # generated by .claude/skills/regen-workflow (new_regen_workflow.py --emit-reusable). A reusable workflow: run a generator, then
+ # commit what changed (mode commit) or fail if anything changed (mode check; forced on pull_request, whose merge ref cannot be pushed to).
+ # Callers in this repository: uses: ./.github/workflows/regenerate.yml · elsewhere: uses: <owner>/<repo>/.github/workflows/regenerate.yml@<ref>
++# No concurrency group here: the caller declares it. A called workflow that claims the caller's group is cancelled by GitHub
++# ("deadlock detected for concurrency group … between a top level workflow and '<job>'").
+ on:
+   workflow_call:
+     inputs:
+@@ -224,10 +226,6 @@ on:
+         description: Optional PAT; with it the regenerated commit triggers workflows (GITHUB_TOKEN pushes never do)
+         required: false
+ 
+-concurrency:
+-  group: regenerate-${{{{ github.workflow }}}}-${{{{ github.ref }}}}
+-  cancel-in-progress: false
+-
+ jobs:
+   regenerate:
+     runs-on: ubuntu-latest
+diff --git a/.github/workflows/regenerate.yml b/.github/workflows/regenerate.yml
+index 1f387f1..b0119a2 100644
+--- a/.github/workflows/regenerate.yml
++++ b/.github/workflows/regenerate.yml
+@@ -2,6 +2,8 @@ name: Regenerate and commit
+ # generated by .claude/skills/regen-workflow (new_regen_workflow.py --emit-reusable). A reusable workflow: run a generator, then
+ # commit what changed (mode commit) or fail if anything changed (mode check; forced on pull_request, whose merge ref cannot be pushed to).
+ # Callers in this repository: uses: ./.github/workflows/regenerate.yml · elsewhere: uses: <owner>/<repo>/.github/workflows/regenerate.yml@<ref>
++# No concurrency group here: the caller declares it. A called workflow that claims the caller's group is cancelled by GitHub
++# ("deadlock detected for concurrency group … between a top level workflow and '<job>'").
+ on:
+   workflow_call:
+     inputs:
+@@ -61,10 +63,6 @@ on:
+         description: Optional PAT; with it the regenerated commit triggers workflows (GITHUB_TOKEN pushes never do)
+         required: false
+ 
+-concurrency:
+-  group: regenerate-${{ github.workflow }}-${{ github.ref }}
+-  cancel-in-progress: false
+-
+ jobs:
+   regenerate:
+     runs-on: ubuntu-latest
+diff --git a/UNIVERSAL_WORKFLOW.md b/UNIVERSAL_WORKFLOW.md
+index 35f9ad9..9e9606b 100644
+--- a/UNIVERSAL_WORKFLOW.md
++++ b/UNIVERSAL_WORKFLOW.md
+@@ -322,12 +322,15 @@ optional and only adds a parse check of the written file.
+ once)` in local mode). On GitHub the bot prints `No changes to commit` or `Changes:` + a stat + `pushed to <branch>`; in check mode
+ `::error::regeneration changed the files above — run the generator locally and commit the result` and exit 1.
+ 
+-**The three facts you must know.**
++**The four facts you must know.**
+ 1. A push made with the workflow's `GITHUB_TOKEN` starts no other workflow, so the bot's commit does not run CI. Store a PAT as the
+    `REGEN_TOKEN` secret when it should; the generated jobs are guarded so the bot's own commit never re-triggers a regeneration.
+ 2. `workflow_dispatch` appears in the Actions tab only once the workflow file is on the default branch.
+ 3. On a protected branch the bot's push is refused ("the branch did not move: not a race"): put the Actions app or the PAT's user on
+    the ruleset's bypass list, or regenerate on a branch and let `pull_request` run in check mode.
++4. The concurrency group belongs to the workflow that runs (inline, or the thin caller), never to `regenerate.yml`: GitHub cancels a
++   run at startup when the called workflow claims the same group as its caller ("deadlock detected for concurrency group"). The
++   generator no longer emits one in the reusable; regenerate `regenerate.yml` with `--emit-reusable --force` if yours predates this.
+ 
+ **In CloudBQ.** The first consumer is the README's Documents index (`update-readme-index.yml`, on push to `main` and by hand). The
+ skill went through an adversarial review before the push; its test file grew from 13 tests (41a9634) to 15 (610d41e), each new test
+@@ -515,7 +518,7 @@ that block, as here — a `--out docs/…xlsx` leaves the binary modified (§9,
+ 
+ ---
+ 
+-## 9 · What CloudBQ taught us (remediation rows U01–U09 of the tooling workbook)
++## 9 · What CloudBQ taught us (remediation rows U01–U10 of the tooling workbook)
+ 
+ | | Symptom | Cause | Fix, and where it lives |
+ |---|---|---|---|
+@@ -528,8 +531,11 @@ that block, as here — a `--out docs/…xlsx` leaves the binary modified (§9,
+ | U07 | a deleted file stayed tracked | shell-expanded glob | `set -f` around staging (test_commit_step_globs_stage_deletions) |
+ | U08 | every secret handed to a shared workflow | `secrets: inherit` | one named secret (610d41e) |
+ | U09 | generator failed without PyYAML | unstated prerequisite | optional import; install notes (610d41e) |
++| U10 | the bot's first run on `main` cancelled after 1 s ("deadlock detected for concurrency group") | caller and reusable workflow declared the same top-level group | the reusable declares no group; callers own it (test_reusable_workflow_shape) |
+ 
+-The pattern behind the table: every tool failed first on the surface that was *not* the author's — CI or the bot. That is the
++The pattern behind the table: every tool failed first on the surface that was *not* the author's — CI or the bot. U10 is the purest
++case: it could not be caught locally at all (no local tool evaluates GitHub's concurrency rules), only by the bot's first run after
++the merge. That is the
+ argument for running steps 3, 5, 6, 7, 8 and 10 locally before every push, and for turning every finding into a check.
+ 
+ ---
+diff --git a/docs/EXECUTION_SURFACES_TOOLING.xlsx b/docs/EXECUTION_SURFACES_TOOLING.xlsx
+index 5236735..047ceef 100644
+Binary files a/docs/EXECUTION_SURFACES_TOOLING.xlsx and b/docs/EXECUTION_SURFACES_TOOLING.xlsx differ
+diff --git a/docs/execution_surfaces_tooling.yaml b/docs/execution_surfaces_tooling.yaml
+index 11ea08f..fb34da0 100644
+--- a/docs/execution_surfaces_tooling.yaml
++++ b/docs/execution_surfaces_tooling.yaml
+@@ -11,13 +11,13 @@ verdict: |
+   runs one generator and commits what changed as github-actions[bot] with a "Regenerated-by:" trailer that the ledger skips. The README
+   index is the one layer that is Parallel across all three (same script, same arguments, same output); everything else is Conditional
+   on "same commit" or Divergent because only the developer surface creates and only the bot surface commits unattended. Remediation
+-  rows U01–U09 record what this project corrected on the way: the hand path when no key exists, a tree check that failed only in CI,
++  rows U01–U10 record what this project corrected on the way: the hand path when no key exists, a tree check that failed only in CI,
+   a ledger check that needed full history, a workbook that is never byte-reproducible, a YAML pushed unparsed, and four review findings
+   on the GitHub Actions skill fixed before the push.
+ legend: |
+   Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers U0–U11 are the stages of the universal
+   loop (install → recipe → apply → verify → commit → ledger → tree → workbook → index → generate workflows → review → push); Pipeline
+-  steps are the same loop as the operator runs it, in order, with the one LIVE gate (the push); Remediation rows U01–U09 are what
++  steps are the same loop as the operator runs it, in order, with the one LIVE gate (the push); Remediation rows U01–U10 are what
+   CloudBQ corrected between 2026-10-05 and 2026-10-16, each with the commit or test that holds the fix. Source: the repository on
+   branch claude/cloud-run-bigquery-pipeline-e94ziy at d18a95f; the same files live in IC-DBT-BQ at 250dc6d.
+ surfaces:
+@@ -316,6 +316,13 @@ remediation:
+     cause: a non-stdlib import used only for a self-check, unstated in the skill page
+     fix: 'optional import — the parse check is skipped with a note; SKILL.md states the prerequisites and how to install the skill elsewhere'
+     verified: 610d41e; test_generator_without_pyyaml_and_bad_inputs
++  - id: U10
++    symptom: 'the bot''s first run on main ("Update README index", run 38958479320) was cancelled after 1 s: "Canceling since a deadlock was detected for concurrency group ''regenerate-Update README index-refs/heads/main'' between a top level workflow and ''regenerate''"'
++    layer: U9
++    surfaces: B
++    cause: 'the thin caller and the reusable workflow both declared a top-level concurrency group with the same value; GitHub treats the called workflow''s group as the job''s and refuses the self-deadlock'
++    fix: 'regenerate.yml declares no concurrency group; the inline workflow and the thin caller own it (new_regen_workflow.py; test_reusable_workflow_shape asserts the absence)'
++    verified: 'this commit; the first bot run after it merges to main is the proof — no local tool evaluates GitHub''s concurrency rules'
+ equality_checks:
+   - stage: after every block commit
+     compare: ledger rows vs commits (ledger-only and Regenerated-by commits excluded)
+diff --git a/tests/test_regen_workflow.py b/tests/test_regen_workflow.py
+index 2dc899d..a447ab2 100644
+--- a/tests/test_regen_workflow.py
++++ b/tests/test_regen_workflow.py
+@@ -38,6 +38,7 @@ def test_inline_workflow_shape():
+     assert "ref" not in job["steps"][0]["with"], "the event's default ref: a local branch on push, the merge ref on pull_request (forks included)"
+     assert job["steps"][0]["uses"] == "actions/checkout@v7" and job["steps"][0]["with"]["persist-credentials"] is True
+     assert "Regenerated-by:" in job["if"] and "github.ref_type == 'branch'" in job["steps"][-1]["env"]["BRANCH"]
++    assert g["doc"]["concurrency"]["group"].startswith("regenerate-"), "an inline workflow serialises itself per ref"
+     assert "git diff --staged --quiet" in job["steps"][-1]["run"] and "No changes to commit" in job["steps"][-1]["run"]
+     assert job["steps"][-1]["env"]["PATHS"] == "README.md" and "pull_request" in job["steps"][-1]["env"]["MODE"]
+ 
+@@ -48,6 +49,7 @@ def test_local_and_remote_callers():
+     assert local["with"]["paths"] == "docs/*.txt" and local["with"]["mode"] == "check" and local["with"]["run"].strip() == "python3 tree.py"
+     assert "Regenerated-by:" in local["if"]
+     assert local["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "one secret in both caller modes"
++    assert gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs/*.txt", "--mode", "local")["doc"]["concurrency"]["group"].startswith("regenerate-")
+     g = gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "Owner/Repo@v1")
+     remote = g["doc"]["jobs"]["regenerate"]
+     assert remote["uses"] == "Owner/Repo/.github/workflows/regenerate.yml@v1"
+@@ -94,6 +96,7 @@ def test_reusable_workflow_shape():
+     job = g["doc"]["jobs"]["regenerate"]
+     assert job["permissions"] == {"contents": "write"} and job["steps"][-1]["name"] == "Commit or check"
+     assert COMMIT.read_text().splitlines()[-1].strip() in job["steps"][-1]["run"], "the shell is embedded verbatim"
++    assert "concurrency" not in g["doc"], "the caller owns the concurrency group; a called workflow claiming the same group deadlocks (cancelled by GitHub)"
+ 
+ 
+ def _git(cwd: Path, *args: str) -> str:
