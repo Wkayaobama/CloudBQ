@@ -10,7 +10,8 @@
 #
 # Settings come from ../.env (see ../.env.example); placeholders are refused. Secrets never pass through this file
 # except HUBSPOT_TOKEN when `secret` creates or rotates the Secret Manager secret.
-# Every step is create-or-update, so re-running a step is safe. Documented in docs/PASS1_SEQUENCE.md.
+# Every step is create-or-update, so re-running a step is safe (enable/pause check the job state first; `secret` adds a Secret
+# Manager version per run; `run` moves the watermark — `replay` repeats a window). Documented in docs/PASS1_SEQUENCE.md.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -35,6 +36,9 @@ check_env() {
     [[ -n "$val" ]] || die "$v is unset — copy .env.example to .env and fill it"
     [[ "$val" != your-* && "$val" != your_* && "$val" != "<"*">" ]] || die "$v still holds the template placeholder ($val)"
   done
+  if [[ -f "$ROOT/.env" ]] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?HUBSPOT_TOKEN=.+' "$ROOT/.env"; then
+    die "HUBSPOT_TOKEN belongs in the shell for the secret step only, never in .env"
+  fi
   command -v gcloud >/dev/null || die "gcloud not found"; command -v bq >/dev/null || die "bq not found"
   echo "  project=$PROJECT region=$REGION dataset=$DATASET fn=$FN sa=$(sa) schedules: SEALSQ '$SCHEDULE_SEALSQ' ICALPS '$SCHEDULE_ICALPS' (Europe/Zurich)"
 }
@@ -51,7 +55,7 @@ iam() {
     run gcloud iam service-accounts create "$SA_NAME" --project "$PROJECT" --display-name "new deals report function"
   fi
   run gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$(sa)" --role roles/bigquery.jobUser --condition=None
-  # projects created after 2024-05-03: the default compute SA no longer has Editor, Cloud Build needs run.builder for --source deploys
+  # organizations created after 2024-05-03 (iam.automaticIamGrantsForDefaultServiceAccounts): the default compute SA has no Editor grant; Cloud Build needs run.builder for --source deploys
   local pn; pn=$(cap gcloud projects describe "$PROJECT" --format 'value(projectNumber)')
   run gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:${pn}-compute@developer.gserviceaccount.com" --role roles/run.builder --condition=None
 }
@@ -83,12 +87,12 @@ secret() {
     fi
   fi
   run gcloud secrets add-iam-policy-binding hubspot-token --project "$PROJECT" --member "serviceAccount:$(sa)" --role roles/secretmanager.secretAccessor
-  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1)"
+  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name.basename())' --limit 1)"
 }
 
 secret_version() {
   if [[ -n "$SECRET_VERSION" ]]; then echo "$SECRET_VERSION"; return; fi
-  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1
+  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name.basename())' --limit 1
 }
 
 deploy() {
@@ -126,9 +130,12 @@ invoker() {
 
 invoke() {  # invoke ENTITY [extra query]
   local u; u=$(url)
-  local tok; tok=$(cap gcloud auth print-identity-token)
-  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sS -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'" >&2; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "dry_run": true, "window": {"mode": "window", "watermark_in": "<wm>", "query_end": "<run_ts>"}}'
-  else curl -sS -H "Authorization: Bearer $tok" "${u}?entity=$1${2:-}"; fi
+  # a user's gcloud ID token is accepted by Cloud Run as is; a service account's (Workbench, a VM) must carry the service URL as audience
+  local acct; acct=$(cap gcloud auth list --filter status:ACTIVE --format 'value(account)')
+  local tok
+  if [[ "$acct" == *.gserviceaccount.com ]]; then tok=$(cap gcloud auth print-identity-token --audiences "$u"); else tok=$(cap gcloud auth print-identity-token); fi
+  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sSf -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'" >&2; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "dry_run": true, "window": {"mode": "window", "watermark_in": "<wm>", "query_end": "<run_ts>"}}'
+  else curl -sSf -H "Authorization: Bearer $tok" "${u}?entity=$1${2:-}"; fi   # -f: HTTP 403 (no invoker) or 409 (lease held) fails the step instead of passing as a payload
 }
 
 dry() {
@@ -148,9 +155,20 @@ assert p.get("dry_run") is True, "payload not marked dry_run"
   echo "  dry run passed for both entities. Next: deploy.sh run SEALSQ (first live run), deploy.sh probe, deploy.sh enable"
 }
 
-enable() { say "enable — resume the Scheduler jobs"; for e in SEALSQ ICALPS; do run gcloud scheduler jobs resume "new-deals-$e" --project "$PROJECT" --location "$REGION"; done; }
-pause()  { say "pause — pause the Scheduler jobs";  for e in SEALSQ ICALPS; do run gcloud scheduler jobs pause  "new-deals-$e" --project "$PROJECT" --location "$REGION"; done; }
-live()   { say "run — one live window run for ${1:?ENTITY}"; invoke "$1" | python3 -c 'import json,sys; p=json.load(sys.stdin); print(json.dumps({k:p[k] for k in ("report_id","run_timestamp","window","row_count","rows_written","duplicate_suspects","day1_hot") if k in p}, indent=1))'; }
+job_state() { cap gcloud scheduler jobs describe "new-deals-$1" --project "$PROJECT" --location "$REGION" --format 'value(state)'; }
+enable() {  # idempotent: the API refuses to resume a job that is not PAUSED, so only those are resumed
+  say "enable — resume the Scheduler jobs"
+  for e in SEALSQ ICALPS; do
+    if [[ "$DRYRUN" == 1 || "$(job_state "$e")" == PAUSED ]]; then run gcloud scheduler jobs resume "new-deals-$e" --project "$PROJECT" --location "$REGION"; else echo "  new-deals-$e: already enabled"; fi
+  done
+}
+pause() {   # idempotent: only an ENABLED job can be paused
+  say "pause — pause the Scheduler jobs"
+  for e in SEALSQ ICALPS; do
+    if [[ "$DRYRUN" == 1 || "$(job_state "$e")" == ENABLED ]]; then run gcloud scheduler jobs pause "new-deals-$e" --project "$PROJECT" --location "$REGION"; else echo "  new-deals-$e: not enabled (state: $(job_state "$e"))"; fi
+  done
+}
+live()   { say "run — one live window run for ${1:?ENTITY}"; invoke "$1" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert "error" not in p and "rows_written" in p, p.get("error", "payload without rows_written: the run did not succeed"); print(json.dumps({k:p[k] for k in ("report_id","run_timestamp","window","row_count","rows_written","duplicate_suspects","day1_hot") if k in p}, indent=1))'; }
 
 replay() {  # replay ENTITY FROM_ISO — rewind the watermark, then run; MERGE on deal_id keeps it idempotent
   local e="${1:?ENTITY}" from="${2:?FROM_ISO e.g. 2026-09-01T00:00:00Z}"
