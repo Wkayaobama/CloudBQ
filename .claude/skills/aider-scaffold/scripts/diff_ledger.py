@@ -9,7 +9,8 @@
 
 Each commit becomes docs/diffs/NNNN-<shortsha>-<slug>.patch (full `git show --format=... --patch`), and INDEX.md gets
 one row: n · sha · date · author · recipe (from a `Recipe:` or `Scaffolded-by:` trailer when present) · files · +/-.
-Idempotent: commits already listed (by full sha in INDEX.md) are skipped; nothing is rewritten. Works in any git repo
+Idempotent: commits already listed (by full sha in INDEX.md) are skipped; nothing is rewritten. Commits that touch only the ledger
+and commits carrying a `Regenerated-by:` trailer (made by a regen workflow) are never listed. Works in any git repo
 (the root is discovered with `git rev-parse --show-toplevel`); no project-specific strings.
 
 aider 0.86.x marks its commits with: author or committer name ending in " (aider)" (default --attribute-author/
@@ -29,6 +30,7 @@ SEP = "\x1f"
 AIDER_NAME = re.compile(r"\(aider\)\s*$")
 AIDER_TRAILER = re.compile(r"^Co-authored-by: aider \(", re.M)
 RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by):\s*(.+)$", re.M | re.I)
+REGEN_TRAILER = re.compile(r"^Regenerated-by:\s*\S", re.M | re.I)   # commits a regen workflow made (regen-workflow skill): generated files, not suggestions
 
 
 def git(*args: str, cwd: Path | None = None) -> str:
@@ -55,6 +57,8 @@ def commits(root: Path, since: str | None, ledger_rel: str) -> list[dict]:
         files = git("show", "--name-only", "--format=", sha, cwd=root).split()
         if files and all(f.startswith(ledger_rel.rstrip("/") + "/") for f in files):
             continue  # the ledger's own commits are not ledgered (otherwise --check could never pass)
+        if REGEN_TRAILER.search(body):
+            continue  # a regen workflow's commit (Regenerated-by: trailer) carries generated files, not a suggestion
         out.append({"sha": sha, "short": short, "date": date[:10], "author": an, "committer": cn, "subject": subject, "body": body})
     return out
 

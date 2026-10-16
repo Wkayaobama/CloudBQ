@@ -33,6 +33,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
   the recipe and exits 2 without an LLM key); `diff_ledger.py` keeps `docs/diffs/`. Recipes for every block: `assets/recipes/`.
 - `.claude/skills/tree-f-visualizer/` — `tree_f.py` renders `docs/architecture.yaml` + the tree on disk as `tree /f` text, a manifest, and the HTML page.
 - `.claude/skills/pass-sequence/` — the documentation method (ported from mir-load): sequence page → record → YAML → workbook.
+- `.claude/skills/regen-workflow/` — `new_regen_workflow.py` writes "run a generator, commit what changed" GitHub Actions workflows for any repository
+  (inline, or callers of `.github/workflows/regenerate.yml`); `update_readme_index.py` keeps the Documents index below; the ledger skips the bot's commits.
 - `.claude/agents/` — `discovery-agent` and `implementation-agent` definitions.
 
 ## Verify before you push
@@ -48,3 +50,21 @@ python3 .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
 
 Secrets never enter git: `.env` is ignored (`.env.example` carries the names), tokens live in Secret Manager, the n8n SA key in a
 gitignored folder.
+
+## Documents
+
+<!-- regen:docs-index start -->
+- [Execution surfaces — how the three lanes were brought to one idempotent outcome (record)](docs/EXECUTION_SURFACES.md)
+- [Pass 1 — the sequence, on any lane (scenario A shown)](docs/PASS1_SEQUENCE.md)
+- [Pass 2 — L2 likelihood tiers: design, evidence, execution surfaces](docs/PASS2_L2_TIERS.md)
+- [Cloud Shell runbook — CloudBQ lane A on `wisekeybq`](docs/RUNBOOK_CLOUD_SHELL.md)
+- [The three lanes, condensed](docs/SCENARIOS.md)
+- [Discovery reports (2026-10-05)](docs/discovery/README.md)
+- [Porting `pass-sequence` from mir-load to CloudBQ (and IC-DBT-BQ)](docs/discovery/pass_sequence_port.md)
+- [Scenario A — Cloud Run function (gcloud, Scheduler OIDC, Secret Manager, BigQuery MERGE)](docs/discovery/scenario_A.md)
+- [Scenario B — n8n on Cloud Run + workflow JSON (discovery report)](docs/discovery/scenario_B.md)
+- [Scenario C — Hybrid: BigQuery computes, remote JS writes back, Breeze consumes, Claude iterates](docs/discovery/scenario_C.md)
+- [Discovery: hot-deal scorer and remote-JS write-back patterns (Scenario C input)](docs/discovery/scorer_repos.md)
+- [CloudBQ — synthesis of the three scenarios into the lane workbook (2026-10-05, commit 9e7e18a)](docs/discovery/synthesis.md)
+- [notebooks/ — the Pass-1 sequence as a Jupyter notebook (Vertex AI Workbench)](notebooks/README.md)
+<!-- regen:docs-index end -->

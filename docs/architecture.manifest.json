@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "BA640B73 4CE9:09A3",
+ "serial": "CC29A5BD 8390:F261",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -43,20 +43,20 @@
   "Divergent"
  ],
  "counts": {
-  "dirs": 34,
-  "files": 115,
-  "annotated": 88,
+  "dirs": 38,
+  "files": 124,
+  "annotated": 92,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 79,
+   "new": 83,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 51,
-   "B": 56,
-   "C": 58
+   "A": 55,
+   "B": 60,
+   "C": 62
   }
  },
  "lanes": {
@@ -66,7 +66,9 @@
     ".claude/agents/implementation-agent.md",
     ".claude/skills/aider-scaffold",
     ".claude/skills/aider-scaffold/assets/recipes",
+    ".claude/skills/regen-workflow",
     ".claude/skills/tree-f-visualizer",
+    ".github/workflows/regenerate.yml",
     "cloud_function_new_deals",
     "cloud_function_new_deals/.gcloudignore",
     "cloud_function_new_deals/deploy.sh",
@@ -75,6 +77,7 @@
     "docs/architecture.yaml",
     "docs/SCENARIOS.md",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
+    "tests/test_regen_workflow.py",
     ".aider.conf.yml",
     ".aiderignore",
     "CONVENTIONS.md",
@@ -85,7 +88,9 @@
     ".claude/agents/implementation-agent.md",
     ".claude/skills/aider-scaffold",
     ".claude/skills/aider-scaffold/assets/recipes",
+    ".claude/skills/regen-workflow",
     ".claude/skills/tree-f-visualizer",
+    ".github/workflows/regenerate.yml",
     "alternative/cloudcompute.md",
     "deploy/n8n",
     "deploy/n8n/deploy_n8n.sh",
@@ -93,6 +98,7 @@
     "deploy/n8n/service.yaml",
     "docs/architecture.yaml",
     "docs/SCENARIOS.md",
+    "tests/test_regen_workflow.py",
     "workflows/src/build_workflow.py",
     ".aider.conf.yml",
     ".aiderignore",
@@ -104,10 +110,13 @@
     ".claude/agents/implementation-agent.md",
     ".claude/skills/aider-scaffold",
     ".claude/skills/aider-scaffold/assets/recipes",
+    ".claude/skills/regen-workflow",
     ".claude/skills/tree-f-visualizer",
+    ".github/workflows/regenerate.yml",
     "docs/architecture.yaml",
     "docs/SCENARIOS.md",
     "sql/apply.sh",
+    "tests/test_regen_workflow.py",
     "writeback/Dockerfile",
     "writeback/package.json",
     ".aider.conf.yml",
@@ -384,6 +393,8 @@
   },
   "L16": {
    "A": [
+    ".github/workflows/regenerate.yml",
+    ".github/workflows/update-readme-index.yml",
     "cloud_function_new_deals/deploy.sh",
     "cloud_function_new_deals/main.py",
     "docs/architecture.manifest.json",
@@ -392,12 +403,16 @@
     "notebooks/cloudbq_deploy_and_witness.ipynb"
    ],
    "B": [
+    ".github/workflows/regenerate.yml",
+    ".github/workflows/update-readme-index.yml",
     "docs/architecture.manifest.json",
     "docs/architecture_tree.html",
     "docs/ARCHITECTURE_TREE.txt",
     "workflows/NEW_DEALS_ERRORS.json"
    ],
    "C": [
+    ".github/workflows/regenerate.yml",
+    ".github/workflows/update-readme-index.yml",
     "docs/architecture.manifest.json",
     "docs/architecture_tree.html",
     "docs/ARCHITECTURE_TREE.txt",
@@ -482,6 +497,20 @@
    "kind": "dir",
    "exists": true
   },
+  ".claude/skills/regen-workflow": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Divergent",
+   "role": "Reusable tool: writes \"run a generator, commit what changed\" GitHub Actions workflows (inline, local caller, shared caller) from one command; one commit step with change check, PR check mode, retries and a Regenerated-by trailer",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
+   "kind": "dir",
+   "exists": true
+  },
   ".claude/skills/tree-f-visualizer": {
    "scenarios": [
     "A",
@@ -507,6 +536,38 @@
    "role": "Offline checks on every push: tests, bash -n, node --check, generated-file and ledger --check gates, DRYRUN deploy rehearsal",
    "parity": "Conditional",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md",
+   "kind": "file",
+   "exists": true
+  },
+  ".github/workflows/regenerate.yml": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Divergent",
+   "role": "The reusable workflow (workflow_call): checkout → toolchains → run → commit-or-check; emitted by new_regen_workflow.py --emit-reusable",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
+   "layers_list": [
+    "L0",
+    "L16"
+   ],
+   "kind": "file",
+   "exists": true
+  },
+  ".github/workflows/update-readme-index.yml": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L16",
+   "status": "new",
+   "parity": "Divergent",
+   "role": "First consumer: on push to main or by hand, refresh the Documents index block of README.md from docs/ and notebooks/ and commit it as github-actions[bot]",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
    "kind": "file",
    "exists": true
   },
@@ -1364,6 +1425,20 @@
    "kind": "file",
    "exists": true
   },
+  "tests/test_regen_workflow.py": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Divergent",
+   "role": "Generator shapes parse (inline, local, remote, reusable); the commit step in a temporary repository (no change, commit + push with trailer, check mode); README index idempotency; diff ledger skips Regenerated-by commits",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
+   "kind": "file",
+   "exists": true
+  },
   "workflows": {
    "scenarios": [
     "B"
@@ -1780,6 +1855,12 @@
               "exists": true
              },
              {
+              "name": "tooling_regen_workflow.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
+              "exists": true
+             },
+             {
               "name": "tooling_reusable_skills.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md",
@@ -1985,6 +2066,80 @@
         }
        },
        {
+        "name": "regen-workflow",
+        "kind": "dir",
+        "path": ".claude/skills/regen-workflow",
+        "exists": true,
+        "children": [
+         {
+          "name": "assets",
+          "kind": "dir",
+          "path": ".claude/skills/regen-workflow/assets",
+          "exists": true,
+          "children": [
+           {
+            "name": "commit_if_changed.sh",
+            "kind": "file",
+            "path": ".claude/skills/regen-workflow/assets/commit_if_changed.sh",
+            "exists": true
+           },
+           {
+            "name": "update_readme_index.py",
+            "kind": "file",
+            "path": ".claude/skills/regen-workflow/assets/update_readme_index.py",
+            "exists": true
+           }
+          ]
+         },
+         {
+          "name": "references",
+          "kind": "dir",
+          "path": ".claude/skills/regen-workflow/references",
+          "exists": true,
+          "children": [
+           {
+            "name": "github-actions-facts.md",
+            "kind": "file",
+            "path": ".claude/skills/regen-workflow/references/github-actions-facts.md",
+            "exists": true
+           }
+          ]
+         },
+         {
+          "name": "scripts",
+          "kind": "dir",
+          "path": ".claude/skills/regen-workflow/scripts",
+          "exists": true,
+          "children": [
+           {
+            "name": "new_regen_workflow.py",
+            "kind": "file",
+            "path": ".claude/skills/regen-workflow/scripts/new_regen_workflow.py",
+            "exists": true
+           }
+          ]
+         },
+         {
+          "name": "SKILL.md",
+          "kind": "file",
+          "path": ".claude/skills/regen-workflow/SKILL.md",
+          "exists": true
+         }
+        ],
+        "ann": {
+         "scenarios": [
+          "A",
+          "B",
+          "C"
+         ],
+         "layer": "L0",
+         "status": "new",
+         "parity": "Divergent",
+         "role": "Reusable tool: writes \"run a generator, commit what changed\" GitHub Actions workflows (inline, local caller, shared caller) from one command; one commit step with change check, PR check mode, retries and a Regenerated-by trailer",
+         "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md"
+        }
+       },
+       {
         "name": "tree-f-visualizer",
         "kind": "dir",
         "path": ".claude/skills/tree-f-visualizer",
@@ -2084,6 +2239,46 @@
          "role": "Offline checks on every push: tests, bash -n, node --check, generated-file and ledger --check gates, DRYRUN deploy rehearsal",
          "parity": "Conditional",
          "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md"
+        }
+       },
+       {
+        "name": "regenerate.yml",
+        "kind": "file",
+        "path": ".github/workflows/regenerate.yml",
+        "exists": true,
+        "ann": {
+         "scenarios": [
+          "A",
+          "B",
+          "C"
+         ],
+         "layer": "L0",
+         "status": "new",
+         "parity": "Divergent",
+         "role": "The reusable workflow (workflow_call): checkout → toolchains → run → commit-or-check; emitted by new_regen_workflow.py --emit-reusable",
+         "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md",
+         "layers_list": [
+          "L0",
+          "L16"
+         ]
+        }
+       },
+       {
+        "name": "update-readme-index.yml",
+        "kind": "file",
+        "path": ".github/workflows/update-readme-index.yml",
+        "exists": true,
+        "ann": {
+         "scenarios": [
+          "A",
+          "B",
+          "C"
+         ],
+         "layer": "L16",
+         "status": "new",
+         "parity": "Divergent",
+         "role": "First consumer: on push to main or by hand, refresh the Documents index block of README.md from docs/ and notebooks/ and commit it as github-actions[bot]",
+         "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md"
         }
        }
       ]
@@ -3278,6 +3473,24 @@
        "parity": "Conditional",
        "role": "Notebook valid (nbformat), code cells compile, every deploy.sh step mirrored in order, enable flag-guarded, secret prompted, no outputs committed",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md"
+      }
+     },
+     {
+      "name": "test_regen_workflow.py",
+      "kind": "file",
+      "path": "tests/test_regen_workflow.py",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L0",
+       "status": "new",
+       "parity": "Divergent",
+       "role": "Generator shapes parse (inline, local, remote, reusable); the commit step in a temporary repository (no change, commit + push with trailer, check mode); README index idempotency; diff ledger skips Regenerated-by commits",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/tooling_regen_workflow.md"
       }
      }
     ]

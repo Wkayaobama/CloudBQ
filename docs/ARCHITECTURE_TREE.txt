@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is BA640B73 4CE9:09A3
+Volume serial number is CC29A5BD 8390:F261
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -33,6 +33,7 @@ CloudBQ
 │       │   │           c_writeback_job.md
 │       │   │           docs_pass1_set.md
 │       │   │           scoring_hot_score_ports.md
+│       │   │           tooling_regen_workflow.md
 │       │   │           tooling_reusable_skills.md
 │       │   │
 │       │   ├───references
@@ -62,6 +63,19 @@ CloudBQ
 │       │           build_surfaces_xlsx.py
 │       │           dump_surfaces_xlsx.py
 │       │
+│       ├───regen-workflow
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │       commit_if_changed.sh
+│       │   │       update_readme_index.py
+│       │   │
+│       │   ├───references
+│       │   │       github-actions-facts.md
+│       │   │
+│       │   └───scripts
+│       │           new_regen_workflow.py
+│       │
 │       └───tree-f-visualizer
 │           │   SKILL.md
 │           │
@@ -77,6 +91,8 @@ CloudBQ
 ├───.github
 │   └───workflows
 │           ci.yml
+│           regenerate.yml
+│           update-readme-index.yml
 │
 ├───alternative
 │       cloudcompute.md
@@ -160,6 +176,7 @@ CloudBQ
 │       test_main_offline.py
 │       test_n8n_code.py
 │       test_notebook.py
+│       test_regen_workflow.py
 │
 ├───workflows
 │   │   credentials.map.json.example
