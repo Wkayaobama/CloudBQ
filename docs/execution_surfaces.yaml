@@ -1218,7 +1218,7 @@ remediation:
   layer: L0
   surfaces: A
   cause: main.py imports functions_framework at import time; the tests import main.
-  fix: a virtualenv in $HOME (persists in Cloud Shell): python3 -m venv ~/.venvs/cloudbq && pip install -r cloud_function_new_deals/requirements.txt pyyaml pytest; the Workbench notebook installs the same into its kernel.
+  fix: 'a virtualenv in $HOME (persists in Cloud Shell): python3 -m venv ~/.venvs/cloudbq && pip install -r cloud_function_new_deals/requirements.txt pyyaml pytest; the Workbench notebook installs the same into its kernel.'
   verified: this commit (docs); the CI job installs the same requirements before pytest (green)
 equality_checks:
 - stage: after dry runs (same window, nothing written)
