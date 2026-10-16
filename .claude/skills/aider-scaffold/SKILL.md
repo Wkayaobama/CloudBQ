@@ -13,6 +13,8 @@ python3 $S/aider_scaffold.py assets/recipes/<block>.md path/to/file [more files]
 python3 $S/diff_ledger.py                     # docs/diffs/NNNN-<sha>-<slug>.patch + INDEX.md, idempotent
 python3 $S/diff_ledger.py --aider-only        # only aider's commits
 python3 $S/diff_ledger.py --check             # exit 1 if commits are missing from the ledger (pre-push)
+# skipped on purpose: commits that touch only docs/diffs, and commits carrying a `Regenerated-by:` trailer (bot commits of a
+# regen-workflow run — see .claude/skills/regen-workflow); the INDEX.md header is refreshed when this text changes
 ```
 
 ## How a suggestion becomes a diff

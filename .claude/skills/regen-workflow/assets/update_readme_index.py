@@ -42,7 +42,7 @@ def build_block(readme: Path, dirs: list[Path], name: str, heading: str, exclude
     root = readme.resolve().parent
     rows = []
     for d in dirs:
-        for f in sorted(d.rglob("*.md")):
+        for f in sorted(d.rglob("*.md"), key=lambda p: (len(p.relative_to(d).parts), p.as_posix().lower())):   # files of d first, then its sub-directories; case-insensitive
             if f.resolve() == readme.resolve():
                 continue
             if any(part.startswith(".") for part in f.relative_to(d).parts):   # .venv, .git, caches below the given dir

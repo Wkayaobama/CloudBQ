@@ -95,7 +95,17 @@ def existing(index: Path) -> set[str]:
     return set(re.findall(r"\b([0-9a-f]{40})\b", index.read_text(encoding="utf-8")))
 
 
-HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
+HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass), nor are commits carrying a `Regenerated-by:` trailer (a bot's regenerated files are not a suggestion; see `.claude/skills/regen-workflow`). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
+
+
+def refresh_header(index: Path) -> bool:
+    """Rewrite the header block of an existing INDEX.md when HEADER changed; the rows are kept verbatim."""
+    text = index.read_text(encoding="utf-8")
+    if text.startswith(HEADER):
+        return False
+    rows = [l for l in text.splitlines(keepends=True) if re.match(r"\| \d+ \|", l)]
+    index.write_text(HEADER + "".join(rows), encoding="utf-8")
+    return True
 
 
 def main(argv=None) -> int:
@@ -116,6 +126,8 @@ def main(argv=None) -> int:
             print(f"missing: {c['short']} {c['subject']}")
         print(f"diff_ledger --check: {len(todo)} commit(s) not in {index.relative_to(root)}")
         return 1 if todo else 0
+    if index.exists() and refresh_header(index):
+        print(f"ledger: header of {index.relative_to(root)} refreshed")
     if not todo:
         print("diff_ledger: nothing new")
         return 0

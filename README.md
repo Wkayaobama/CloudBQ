@@ -46,6 +46,8 @@ node --check writeback/index.mjs && python3 workflows/src/build_workflow.py --ch
 python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
 python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
 python3 .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
+python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check
+python3 tests/test_regen_workflow.py
 ```
 
 Secrets never enter git: `.env` is ignored (`.env.example` carries the names), tokens live in Secret Manager, the n8n SA key in a
@@ -59,8 +61,8 @@ gitignored folder.
 - [Pass 2 — L2 likelihood tiers: design, evidence, execution surfaces](docs/PASS2_L2_TIERS.md)
 - [Cloud Shell runbook — CloudBQ lane A on `wisekeybq`](docs/RUNBOOK_CLOUD_SHELL.md)
 - [The three lanes, condensed](docs/SCENARIOS.md)
-- [Discovery reports (2026-10-05)](docs/discovery/README.md)
 - [Porting `pass-sequence` from mir-load to CloudBQ (and IC-DBT-BQ)](docs/discovery/pass_sequence_port.md)
+- [Discovery reports (2026-10-05)](docs/discovery/README.md)
 - [Scenario A — Cloud Run function (gcloud, Scheduler OIDC, Secret Manager, BigQuery MERGE)](docs/discovery/scenario_A.md)
 - [Scenario B — n8n on Cloud Run + workflow JSON (discovery report)](docs/discovery/scenario_B.md)
 - [Scenario C — Hybrid: BigQuery computes, remote JS writes back, Breeze consumes, Claude iterates](docs/discovery/scenario_C.md)

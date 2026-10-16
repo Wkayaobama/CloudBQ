@@ -5,10 +5,12 @@
   start runs, the regeneration workflow included: the generated jobs therefore carry
   `if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Regenerated-by:')`, which skips the run the bot's own
   commit would start. Independently of that guard, a generator whose output is not idempotent (timestamps, unordered output) would commit
-  on every run — the `--check` mode on pull requests is the test for it.
+  on every run — the `--check` mode on pull requests is the test for it. The guard tests only the trailer, so a bot commit skips every
+  regen workflow on that branch: chained regenerations belong in one workflow (several `--run`) or on a schedule.
 - `workflow_dispatch` runs appear in the Actions tab only once the workflow file exists on the default branch; the branch to run on is then selectable.
 - A reusable workflow (`on: workflow_call`) in the same repository is referenced as `./.github/workflows/<file>.yml`; in another repository as
-  `owner/repo/.github/workflows/<file>.yml@ref`. A private host repository must allow access under Settings → Actions → General → Access.
+  `owner/repo/.github/workflows/<file>.yml@ref`. A private host repository must allow access under Settings → Actions → General → Access;
+  that setting admits private callers only ("Access is allowed only from private repositories"), so a public caller needs a public host.
 - The caller job sets `permissions:`; the called workflow cannot exceed them. `secrets: inherit` passes the caller's secrets.
 - On `pull_request`, the default checkout is the merge ref `refs/pull/<n>/merge`, which exists for fork PRs too; `github.head_ref` is a bare
   branch name that `actions/checkout` would look for in the base repository, so the generated checkouts set no `ref:`. The merge ref cannot

@@ -18,4 +18,5 @@ jobs:
       - run: python .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify
       - run: python .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
       - run: python .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
+      - run: python .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check
       - run: cd cloud_function_new_deals && DRYRUN=1 PROJECT=ci-project ./deploy.sh all >/dev/null && DRYRUN=1 PROJECT=ci-project ./deploy.sh dry >/dev/null

@@ -47,12 +47,35 @@ def test_local_and_remote_callers():
     assert local["uses"] == "./.github/workflows/regenerate.yml" and local["permissions"] == {"contents": "write"}
     assert local["with"]["paths"] == "docs/*.txt" and local["with"]["mode"] == "check" and local["with"]["run"].strip() == "python3 tree.py"
     assert "Regenerated-by:" in local["if"]
-    assert local["secrets"] == "inherit"
+    assert local["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "one secret in both caller modes"
     g = gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "Owner/Repo@v1")
     remote = g["doc"]["jobs"]["regenerate"]
     assert remote["uses"] == "Owner/Repo/.github/workflows/regenerate.yml@v1"
     assert remote["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "a shared workflow in another repository never inherits every secret"
+    assert "secrets: inherit" not in g["text"]
     assert g["doc"]["concurrency"]["group"].startswith("regenerate-")
+
+
+def test_generator_without_pyyaml_and_bad_inputs():
+    """PyYAML is optional (the parse check is skipped with a note); a schedule without a cron is a usage error, not a traceback."""
+    with tempfile.TemporaryDirectory() as t:
+        (Path(t) / "yaml.py").write_text("raise ImportError('hidden for the test')\n")
+        env = dict(os.environ, PYTHONPATH=t)
+        r = subprocess.run([sys.executable, str(GEN), "--print", "--name", "x", "--run", "true", "--paths", "a"], capture_output=True, text=True, env=env, cwd=ROOT)
+        assert r.returncode == 0 and "jobs:" in r.stdout and "PyYAML is not installed" in r.stderr, r.stderr
+    r = subprocess.run([sys.executable, str(GEN), "--print", "--name", "x", "--run", "true", "--paths", "a", "--on", "schedule"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode != 0 and "needs a cron" in r.stderr and "Traceback" not in r.stderr, r.stderr
+
+
+def test_local_mode_writes_the_reusable_when_missing():
+    with tempfile.TemporaryDirectory() as t:
+        r = subprocess.run([sys.executable, str(GEN), "--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "local"], capture_output=True, text=True, cwd=t)
+        assert r.returncode == 0, r.stderr
+        wf = Path(t) / ".github" / "workflows"
+        assert (wf / "trees.yml").exists() and (wf / "regenerate.yml").exists() and "emitted once" in r.stdout, r.stdout
+        assert (wf / "regenerate.yml").read_text() == gen("--emit-reusable")["text"]
+        r = subprocess.run([sys.executable, str(GEN), "--name", "Other", "--run", "true", "--paths", "x", "--mode", "local"], capture_output=True, text=True, cwd=t)
+        assert r.returncode == 0 and "emitted once" not in r.stdout, "the second caller leaves the existing reusable alone"
 
 
 def test_triggers_merge_by_kind():
@@ -161,7 +184,8 @@ def test_check_mode_exit_code_on_a_large_diff():
 
 def test_readme_index_titles_hidden_dirs_and_line_endings():
     with tempfile.TemporaryDirectory() as t:
-        d = Path(t); docs = d / "docs"; docs.mkdir(); (docs / ".cache").mkdir()
+        d = Path(t); docs = d / "docs"; docs.mkdir(); (docs / ".cache").mkdir(); (docs / "aa").mkdir()
+        (docs / "aa" / "deep.md").write_text("# Deep\n"); (docs / "Zeta.md").write_text("# Zeta\n")
         (docs / "fence.md").write_text("```bash\n# install deps first\n```\n\n# Real Heading\n")
         (docs / "bom.md").write_bytes(b"\xef\xbb\xbf# BOM Title\n")
         (docs / "setext.md").write_text("Setext Title\n============\n\ntext\n")
@@ -172,6 +196,8 @@ def test_readme_index_titles_hidden_dirs_and_line_endings():
         raw = readme.read_bytes(); text = raw.decode()
         assert raw.count(b"\r\n") == raw.count(b"\n"), "CRLF README stays CRLF"
         assert "[Real Heading](docs/fence.md)" in text and "[BOM Title](docs/bom.md)" in text and "[Setext Title](docs/setext.md)" in text and "Hidden" not in text
+        order = [l.split("](")[1].rstrip(")") for l in text.splitlines() if l.startswith("- [")]
+        assert order == ["docs/bom.md", "docs/fence.md", "docs/setext.md", "docs/Zeta.md", "docs/aa/deep.md"], order   # files first, case-insensitive, then sub-directories
         assert run("--dir", str(docs), "--check").returncode == 0
         fresh = d / "NEW.md"; assert subprocess.run([sys.executable, str(INDEX), "--readme", str(fresh), "--dir", str(docs)], capture_output=True).returncode == 0
         assert fresh.read_text().startswith("## Documents\n"), repr(fresh.read_text()[:40])
