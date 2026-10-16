@@ -10,7 +10,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - run: pip install -r cloud_function_new_deals/requirements.txt pyyaml openpyxl pytest
+      - run: pip install -r cloud_function_new_deals/requirements.txt pyyaml openpyxl pytest nbformat
       - run: python -m pytest tests -q
       - run: for f in cloud_function_new_deals/deploy.sh sql/*.sh writeback/*.sh deploy/n8n/*.sh; do bash -n "$f"; done
       - run: node --check writeback/index.mjs

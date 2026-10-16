@@ -9,11 +9,16 @@ commands run after `gcloud auth login` and `gcloud auth application-default logi
 Pass 1 has not run against Google Cloud yet. Every command below was rehearsed offline (`bash -n`, `DRYRUN=1`,
 `python3 tests/*.py`); the **Evidence** section is empty until the operator pastes the first dry-run payloads.
 
+The same sequence runs cell by cell from `notebooks/cloudbq_deploy_and_witness.ipynb` on a Vertex AI Workbench instance in the
+project, followed by the SQL witnessed from Python (`notebooks/README.md`).
+
 ## Preconditions on the clone you run from
 
 - `git fetch origin && git checkout claude/cloud-run-bigquery-pipeline-e94ziy && git pull`
 - `.env` filled from `.env.example` (`PROJECT`, `REGION`, `DATASET`, `FN`, `SA_NAME`, `PORTAL_ID`; `deploy.sh check-env` refuses placeholders).
-- The operator is Owner (or has Cloud Run Admin, Service Account Admin, Secret Manager Admin, BigQuery Admin, Cloud Scheduler Admin).
+- The operator is Owner (or has Cloud Run Admin, Cloud Run Source Developer, Service Account Admin, Service Account User, Project IAM Admin,
+  Service Usage Admin, Secret Manager Admin, BigQuery Admin, Cloud Scheduler Admin, Cloud Build Editor — `enable-apis`, `iam` and the
+  `--source` deploy need more than the Cloud Run and BigQuery roles).
 - The HubSpot private app has `crm.objects.deals.read`, `crm.schemas.deals.read`, `crm.objects.owners.read`; its token is in the
   shell as `HUBSPOT_TOKEN` for the `secret` step only (never in `.env`, never in git).
 - Offline checks are green: `python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py`.
@@ -22,6 +27,7 @@ Pass 1 has not run against Google Cloud yet. Every command below was rehearsed o
 
 ```bash
 D=cloud_function_new_deals/deploy.sh
+set -a; . .env; set +a            # deploy.sh reads .env by itself; the hand-typed look commands below need $PROJECT $DATASET $FN $REGION
 DRYRUN=1 $D all                   # rehearsal: prints every gcloud/bq command, runs nothing
 $D check-env                      # .env complete, no placeholders
 $D enable-apis                    # run, cloudbuild, artifactregistry, secretmanager, cloudscheduler, bigquery
@@ -32,7 +38,9 @@ $D tables                         # CREATE SCHEMA IF NOT EXISTS; report_state (+
 bq ls --project_id=$PROJECT $DATASET                                     # four tables, one view
 bq show --schema --format=prettyjson $PROJECT:$DATASET.new_deals | python3 -m json.tool | head -40
 
-HUBSPOT_TOKEN=... $D secret       # creates hubspot-token or adds a version; prints the version to pin in .env SECRET_VERSION
+IFS= read -rsp 'HUBSPOT_TOKEN: ' HUBSPOT_TOKEN; echo
+HUBSPOT_TOKEN="$HUBSPOT_TOKEN" $D secret; unset HUBSPOT_TOKEN   # typed, not in history; creates hubspot-token or adds a version; prints the
+                                  # version NUMBER (optional to pin in .env SECRET_VERSION; `deploy` uses the latest enabled one)
 $D deploy                         # gcloud run deploy $FN --source … --function new_deals_report --base-image python312 …
 $D invoker                        # run.invoker for the SA; two Scheduler jobs created PAUSED (SEALSQ 07:00, ICALPS 07:20 Zurich)
 
@@ -44,17 +52,19 @@ $D dry                            # THE GATE: ?dry_run=1 for both entities — r
                                   #           asserts rows_written == 0 and dry_run == true
 
 # ── look ──────────────────────────────────────────────────────────────────────────────────────────
-curl -sS -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$($D url)?entity=SEALSQ&dry_run=1" | python3 -m json.tool | less
+URL=$($D url | tail -1)           # `url` prints the check-env lines first; the service URL is the last line
+curl -sSf -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?entity=SEALSQ&dry_run=1" | python3 -m json.tool | less
 $D logs                           # JSON lines: {"severity","message","entity","dry_run","rows","window"}
 
-$D run SEALSQ                     # first LIVE window run (one entity, by hand): per-run staging → MERGE → history → watermark
-$D run ICALPS
+$D run SEALSQ                     # first LIVE window run (one entity, by hand): per-run staging → MERGE → history → watermark;
+$D run ICALPS                     # an HTTP 403 (caller lacks run.invoker) or 409 (lease held) fails the step instead of printing a payload
 
 # ── look, from the warehouse ─────────────────────────────────────────────────────────────────────
 $D probe                          # rows per entity, hot and duplicate counts; last 10 new_deals_runs rows
 $D status                         # watermarks, leases, Scheduler job states
 
-$D run SEALSQ                     # the idempotency check: same window again → rows_written may be > 0 (MERGE) but `probe` counts are unchanged
+$D replay SEALSQ "$FROM"          # the idempotency check: FROM = watermark_in printed by the first run; the same window again —
+                                  # MERGE on deal_id leaves the `probe` counts unchanged (`run` would open the next window instead)
 $D enable                         # resume the two Scheduler jobs — only after the gate passed and the probe looks right
 ```
 

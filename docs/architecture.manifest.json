@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "AC061782 DF98:58D4",
+ "serial": "7B653248 91C0:9FA1",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -43,18 +43,18 @@
   "Divergent"
  ],
  "counts": {
-  "dirs": 33,
-  "files": 101,
-  "annotated": 75,
+  "dirs": 34,
+  "files": 105,
+  "annotated": 79,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 66,
+   "new": 70,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 41,
+   "A": 45,
    "B": 51,
    "C": 50
   }
@@ -74,6 +74,7 @@
     "cloud_function_new_deals/requirements.txt",
     "docs/architecture.yaml",
     "docs/SCENARIOS.md",
+    "notebooks/cloudbq_deploy_and_witness.ipynb",
     ".aider.conf.yml",
     ".aiderignore",
     "CONVENTIONS.md",
@@ -117,7 +118,8 @@
   },
   "L1": {
    "A": [
-    "cloud_function_new_deals/deploy.sh"
+    "cloud_function_new_deals/deploy.sh",
+    "notebooks/cloudbq_deploy_and_witness.ipynb"
    ],
    "B": [
     "deploy/n8n/secrets.sh",
@@ -173,6 +175,7 @@
   "L5": {
    "A": [
     "cloud_function_new_deals/main.py",
+    "notebooks/cloudbq_deploy_and_witness.ipynb",
     "scoring",
     "scoring/hot_score_v1.constants.json",
     "scoring/README.md",
@@ -271,7 +274,11 @@
     "cloud_function_new_deals/deploy.sh",
     "cloud_function_new_deals/main.py",
     "docs/PASS1_SEQUENCE.md",
-    "tests/test_main_offline.py"
+    "notebooks",
+    "notebooks/cloudbq_deploy_and_witness.ipynb",
+    "notebooks/README.md",
+    "tests/test_main_offline.py",
+    "tests/test_notebook.py"
    ],
    "B": [
     ".github/workflows/ci.yml",
@@ -300,6 +307,7 @@
     "docs/EXECUTION_SURFACES.md",
     "docs/EXECUTION_SURFACES.xlsx",
     "docs/execution_surfaces.yaml",
+    "notebooks/cloudbq_deploy_and_witness.ipynb",
     "sql/audit_tables.sql",
     "tests/test_docs_consistency.py"
    ],
@@ -356,7 +364,8 @@
     "cloud_function_new_deals/main.py",
     "docs/architecture.manifest.json",
     "docs/architecture_tree.html",
-    "docs/ARCHITECTURE_TREE.txt"
+    "docs/ARCHITECTURE_TREE.txt",
+    "notebooks/cloudbq_deploy_and_witness.ipynb"
    ],
    "B": [
     "docs/architecture.manifest.json",
@@ -854,6 +863,50 @@
    "kind": "file",
    "exists": true
   },
+  "notebooks": {
+   "scenarios": [
+    "A"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "The Pass-1 sequence as a Jupyter notebook for a Vertex AI Workbench instance: one cell per deploy.sh step, then the SQL witnessed from Python",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+   "kind": "dir",
+   "exists": true
+  },
+  "notebooks/cloudbq_deploy_and_witness.ipynb": {
+   "scenarios": [
+    "A"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "Cells 3.x run bash deploy.sh <step> in order (the gate stops Run-All); cells 4.x execute the schema, hot_score_v1 + golden vectors, audit tables and the dry payload through the BigQuery client with job metadata",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+   "layers_list": [
+    "L11",
+    "L0",
+    "L1",
+    "L5",
+    "L13",
+    "L16"
+   ],
+   "kind": "file",
+   "exists": true
+  },
+  "notebooks/README.md": {
+   "scenarios": [
+    "A"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "How to create the Workbench instance (europe-west6-a), which identity the kernel acts as, what each section evidences",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+   "kind": "file",
+   "exists": true
+  },
   "scoring": {
    "scenarios": [
     "A",
@@ -1138,6 +1191,18 @@
    "parity": "Conditional",
    "role": "Generated n8n Code node == main.shape() on identical deals (every row field)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
+   "kind": "file",
+   "exists": true
+  },
+  "tests/test_notebook.py": {
+   "scenarios": [
+    "A"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "Notebook valid (nbformat), code cells compile, every deploy.sh step mirrored in order, enable flag-guarded, secret prompted, no outputs committed",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
    "kind": "file",
    "exists": true
   },
@@ -1506,6 +1571,12 @@
               "name": "a_main_idempotency.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
+              "exists": true
+             },
+             {
+              "name": "a_notebook_witness.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
               "exists": true
              },
              {
@@ -2422,6 +2493,64 @@
     ]
    },
    {
+    "name": "notebooks",
+    "kind": "dir",
+    "path": "notebooks",
+    "exists": true,
+    "children": [
+     {
+      "name": "cloudbq_deploy_and_witness.ipynb",
+      "kind": "file",
+      "path": "notebooks/cloudbq_deploy_and_witness.ipynb",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "Cells 3.x run bash deploy.sh <step> in order (the gate stops Run-All); cells 4.x execute the schema, hot_score_v1 + golden vectors, audit tables and the dry payload through the BigQuery client with job metadata",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+       "layers_list": [
+        "L11",
+        "L0",
+        "L1",
+        "L5",
+        "L13",
+        "L16"
+       ]
+      }
+     },
+     {
+      "name": "README.md",
+      "kind": "file",
+      "path": "notebooks/README.md",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "How to create the Workbench instance (europe-west6-a), which identity the kernel acts as, what each section evidences",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md"
+      }
+     }
+    ],
+    "ann": {
+     "scenarios": [
+      "A"
+     ],
+     "layer": "L11",
+     "status": "new",
+     "parity": "Conditional",
+     "role": "The Pass-1 sequence as a Jupyter notebook for a Vertex AI Workbench instance: one cell per deploy.sh step, then the SQL witnessed from Python",
+     "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md"
+    }
+   },
+   {
     "name": "scoring",
     "kind": "dir",
     "path": "scoring",
@@ -2800,6 +2929,22 @@
        "parity": "Conditional",
        "role": "Generated n8n Code node == main.shape() on identical deals (every row field)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md"
+      }
+     },
+     {
+      "name": "test_notebook.py",
+      "kind": "file",
+      "path": "tests/test_notebook.py",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "Notebook valid (nbformat), code cells compile, every deploy.sh step mirrored in order, enable flag-guarded, secret prompted, no outputs committed",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md"
       }
      }
     ]

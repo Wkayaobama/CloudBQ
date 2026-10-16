@@ -21,6 +21,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 4. `docs/architecture_tree.html` — the architecture as an interactive `tree /f` (scenario and layer filters, lane view);
    `docs/ARCHITECTURE_TREE.txt` is the plain listing; both come from `docs/architecture.yaml`.
 5. `docs/diffs/INDEX.md` — one patch per commit; every suggestion is a `git diff`.
+6. `notebooks/cloudbq_deploy_and_witness.ipynb` — the same sequence as a notebook for a Vertex AI Workbench instance in the
+   project, plus the SQL (schema, `hot_score_v1`, vectors, audit tables) executed and witnessed from Python; `notebooks/README.md`.
 
 ## Tooling (reusable, project-agnostic — also installed in IC-DBT-BQ)
 

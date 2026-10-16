@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is AC061782 DF98:58D4
+Volume serial number is 7B653248 91C0:9FA1
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -25,6 +25,7 @@ CloudBQ
 │       │   │   └───recipes
 │       │   │           a_deploy_canonical.md
 │       │   │           a_main_idempotency.md
+│       │   │           a_notebook_witness.md
 │       │   │           b_n8n_cloud_run.md
 │       │   │           b_workflows_generated.md
 │       │   │           c_bigquery_compute.md
@@ -120,6 +121,10 @@ CloudBQ
 │           scorer_repos.md
 │           synthesis.md
 │
+├───notebooks
+│       cloudbq_deploy_and_witness.ipynb
+│       README.md
+│
 ├───scoring
 │       hot_score_v1.constants.json
 │       hot_score_v1.mjs
@@ -144,6 +149,7 @@ CloudBQ
 │       test_hot_score_sql_duckdb.py
 │       test_main_offline.py
 │       test_n8n_code.py
+│       test_notebook.py
 │
 ├───workflows
 │   │   credentials.map.json.example
