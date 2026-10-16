@@ -14,6 +14,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 
 ## Read in this order
 
+0. **`UNIVERSAL_WORKFLOW.md`** — the team page: how a block travels recipe → commit → ledger → tree → workbook → index → CI, on
+   three surfaces (developer shell, CI check, bot commit); start here before adding anything.
 1. `docs/SCENARIOS.md` — the three lanes condensed and the recommendation.
 2. `docs/PASS1_SEQUENCE.md` — the deploy sequence with look commands and the dry-run gate.
    `docs/RUNBOOK_CLOUD_SHELL.md` is the same sequence as a phased operator runbook for `wisekeybq`, with a check after every phase.

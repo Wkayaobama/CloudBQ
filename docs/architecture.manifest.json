@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "CC29A5BD 8390:F261",
+ "serial": "C89B48A7 023E:B201",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,19 +44,19 @@
  ],
  "counts": {
   "dirs": 38,
-  "files": 124,
-  "annotated": 92,
+  "files": 128,
+  "annotated": 95,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 83,
+   "new": 86,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 55,
-   "B": 60,
-   "C": 62
+   "A": 58,
+   "B": 63,
+   "C": 65
   }
  },
  "lanes": {
@@ -75,13 +75,16 @@
     "cloud_function_new_deals/README.md",
     "cloud_function_new_deals/requirements.txt",
     "docs/architecture.yaml",
+    "docs/EXECUTION_SURFACES_TOOLING.xlsx",
+    "docs/execution_surfaces_tooling.yaml",
     "docs/SCENARIOS.md",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "tests/test_regen_workflow.py",
     ".aider.conf.yml",
     ".aiderignore",
     "CONVENTIONS.md",
-    "README.md"
+    "README.md",
+    "UNIVERSAL_WORKFLOW.md"
    ],
    "B": [
     ".claude/agents/discovery-agent.md",
@@ -97,13 +100,16 @@
     "deploy/n8n/import_workflows.sh",
     "deploy/n8n/service.yaml",
     "docs/architecture.yaml",
+    "docs/EXECUTION_SURFACES_TOOLING.xlsx",
+    "docs/execution_surfaces_tooling.yaml",
     "docs/SCENARIOS.md",
     "tests/test_regen_workflow.py",
     "workflows/src/build_workflow.py",
     ".aider.conf.yml",
     ".aiderignore",
     "CONVENTIONS.md",
-    "README.md"
+    "README.md",
+    "UNIVERSAL_WORKFLOW.md"
    ],
    "C": [
     ".claude/agents/discovery-agent.md",
@@ -114,6 +120,8 @@
     ".claude/skills/tree-f-visualizer",
     ".github/workflows/regenerate.yml",
     "docs/architecture.yaml",
+    "docs/EXECUTION_SURFACES_TOOLING.xlsx",
+    "docs/execution_surfaces_tooling.yaml",
     "docs/SCENARIOS.md",
     "sql/apply.sh",
     "tests/test_regen_workflow.py",
@@ -122,7 +130,8 @@
     ".aider.conf.yml",
     ".aiderignore",
     "CONVENTIONS.md",
-    "README.md"
+    "README.md",
+    "UNIVERSAL_WORKFLOW.md"
    ]
   },
   "L1": {
@@ -949,6 +958,34 @@
    "kind": "file",
    "exists": true
   },
+  "docs/EXECUTION_SURFACES_TOOLING.xlsx": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "the workbook built from execution_surfaces_tooling.yaml (verify OK: Layers 1/6/5, steps 1/5/5)",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
+   "kind": "file",
+   "exists": true
+  },
+  "docs/execution_surfaces_tooling.yaml": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "pass-sequence spec of the loop itself: surfaces D/C/B, layers U0–U11, steps 1–11, remediation U01–U09 (what this project corrected), equality checks per generated artefact",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
+   "kind": "file",
+   "exists": true
+  },
   "docs/PASS1_SEQUENCE.md": {
    "scenarios": [
     "A",
@@ -1712,6 +1749,20 @@
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
    "kind": "file",
    "exists": true
+  },
+  "UNIVERSAL_WORKFLOW.md": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L0",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Team page for the tooling loop (recipe → apply → verify → commit → ledger → tree → workbook → index → review → replay → push) on its three surfaces: developer shell, CI check, bot commit; per-tool sections, worked example, bootstrap checklist, FAQ",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
+   "kind": "file",
+   "exists": true
   }
  },
  "tree": {
@@ -1846,6 +1897,12 @@
               "name": "docs_pass1_set.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
+              "exists": true
+             },
+             {
+              "name": "docs_universal_workflow.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md",
               "exists": true
              },
              {
@@ -2847,6 +2904,42 @@
        "parity": "Parallel",
        "role": "pass-sequence spec of pass 2: layers M0–M14 × surfaces N (notebook) / Q (BigQuery scheduled MERGE) / W (webhook CDC), 12 steps, T01–T10, 4 equality checks",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+      }
+     },
+     {
+      "name": "EXECUTION_SURFACES_TOOLING.xlsx",
+      "kind": "file",
+      "path": "docs/EXECUTION_SURFACES_TOOLING.xlsx",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L0",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "the workbook built from execution_surfaces_tooling.yaml (verify OK: Layers 1/6/5, steps 1/5/5)",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
+      }
+     },
+     {
+      "name": "execution_surfaces_tooling.yaml",
+      "kind": "file",
+      "path": "docs/execution_surfaces_tooling.yaml",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L0",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "pass-sequence spec of the loop itself: surfaces D/C/B, layers U0–U11, steps 1–11, remediation U01–U09 (what this project corrected), equality checks per generated artefact",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
       }
      },
      {
@@ -3859,6 +3952,24 @@
      "role": "Map of the three lanes, the reading order and the verify-before-push list",
      "parity": "Divergent",
      "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+    }
+   },
+   {
+    "name": "UNIVERSAL_WORKFLOW.md",
+    "kind": "file",
+    "path": "UNIVERSAL_WORKFLOW.md",
+    "exists": true,
+    "ann": {
+     "scenarios": [
+      "A",
+      "B",
+      "C"
+     ],
+     "layer": "L0",
+     "status": "new",
+     "parity": "Parallel",
+     "role": "Team page for the tooling loop (recipe → apply → verify → commit → ledger → tree → workbook → index → review → replay → push) on its three surfaces: developer shell, CI check, bot commit; per-tool sections, worked example, bootstrap checklist, FAQ",
+     "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_universal_workflow.md"
     }
    }
   ]
