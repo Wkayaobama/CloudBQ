@@ -56,8 +56,9 @@ re-run a `push`-triggered regeneration, so every generated job is guarded with
 idempotent (the pull-request `check` run proves it). The guard skips *every* regen workflow for a bot commit, so a regeneration that
 depends on another's output belongs in the same workflow (repeat `--run`) or on a schedule.
 
-`permissions: contents: write` is on the job. `concurrency` (group = workflow + ref) serialises runs of one workflow per branch; two
-different regen workflows writing to the same branch are reconciled by the rebase-and-retry push. `fetch-depth` is an input for
+`permissions: contents: write` is on the job. `concurrency` (group = workflow + ref) serialises runs of one workflow per branch; it is
+declared by the inline workflow or the thin caller, never by `regenerate.yml` (a called workflow claiming its caller's group is cancelled
+by GitHub as a deadlock). Two different regen workflows writing to the same branch are reconciled by the rebase-and-retry push. `fetch-depth` is an input for
 generators that read history (`0` = full). On a protected branch the bot's push is refused ("the branch did not move: not a race"):
 add the GitHub Actions app (or the PAT's user) to the ruleset's bypass list, or regenerate on a branch and let `pull_request` run in
 check mode.

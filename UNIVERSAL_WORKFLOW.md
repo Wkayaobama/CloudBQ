@@ -322,12 +322,15 @@ optional and only adds a parse check of the written file.
 once)` in local mode). On GitHub the bot prints `No changes to commit` or `Changes:` + a stat + `pushed to <branch>`; in check mode
 `::error::regeneration changed the files above — run the generator locally and commit the result` and exit 1.
 
-**The three facts you must know.**
+**The four facts you must know.**
 1. A push made with the workflow's `GITHUB_TOKEN` starts no other workflow, so the bot's commit does not run CI. Store a PAT as the
    `REGEN_TOKEN` secret when it should; the generated jobs are guarded so the bot's own commit never re-triggers a regeneration.
 2. `workflow_dispatch` appears in the Actions tab only once the workflow file is on the default branch.
 3. On a protected branch the bot's push is refused ("the branch did not move: not a race"): put the Actions app or the PAT's user on
    the ruleset's bypass list, or regenerate on a branch and let `pull_request` run in check mode.
+4. The concurrency group belongs to the workflow that runs (inline, or the thin caller), never to `regenerate.yml`: GitHub cancels a
+   run at startup when the called workflow claims the same group as its caller ("deadlock detected for concurrency group"). The
+   generator no longer emits one in the reusable; regenerate `regenerate.yml` with `--emit-reusable --force` if yours predates this.
 
 **In CloudBQ.** The first consumer is the README's Documents index (`update-readme-index.yml`, on push to `main` and by hand). The
 skill went through an adversarial review before the push; its test file grew from 13 tests (41a9634) to 15 (610d41e), each new test
@@ -515,7 +518,7 @@ that block, as here — a `--out docs/…xlsx` leaves the binary modified (§9, 
 
 ---
 
-## 9 · What CloudBQ taught us (remediation rows U01–U09 of the tooling workbook)
+## 9 · What CloudBQ taught us (remediation rows U01–U10 of the tooling workbook)
 
 | | Symptom | Cause | Fix, and where it lives |
 |---|---|---|---|
@@ -528,8 +531,11 @@ that block, as here — a `--out docs/…xlsx` leaves the binary modified (§9, 
 | U07 | a deleted file stayed tracked | shell-expanded glob | `set -f` around staging (test_commit_step_globs_stage_deletions) |
 | U08 | every secret handed to a shared workflow | `secrets: inherit` | one named secret (610d41e) |
 | U09 | generator failed without PyYAML | unstated prerequisite | optional import; install notes (610d41e) |
+| U10 | the bot's first run on `main` cancelled after 1 s ("deadlock detected for concurrency group") | caller and reusable workflow declared the same top-level group | the reusable declares no group; callers own it (test_reusable_workflow_shape) |
 
-The pattern behind the table: every tool failed first on the surface that was *not* the author's — CI or the bot. That is the
+The pattern behind the table: every tool failed first on the surface that was *not* the author's — CI or the bot. U10 is the purest
+case: it could not be caught locally at all (no local tool evaluates GitHub's concurrency rules), only by the bot's first run after
+the merge. That is the
 argument for running steps 3, 5, 6, 7, 8 and 10 locally before every push, and for turning every finding into a check.
 
 ---

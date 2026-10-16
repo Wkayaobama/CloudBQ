@@ -11,13 +11,13 @@ verdict: |
   runs one generator and commits what changed as github-actions[bot] with a "Regenerated-by:" trailer that the ledger skips. The README
   index is the one layer that is Parallel across all three (same script, same arguments, same output); everything else is Conditional
   on "same commit" or Divergent because only the developer surface creates and only the bot surface commits unattended. Remediation
-  rows U01–U09 record what this project corrected on the way: the hand path when no key exists, a tree check that failed only in CI,
+  rows U01–U10 record what this project corrected on the way: the hand path when no key exists, a tree check that failed only in CI,
   a ledger check that needed full history, a workbook that is never byte-reproducible, a YAML pushed unparsed, and four review findings
   on the GitHub Actions skill fixed before the push.
 legend: |
   Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers U0–U11 are the stages of the universal
   loop (install → recipe → apply → verify → commit → ledger → tree → workbook → index → generate workflows → review → push); Pipeline
-  steps are the same loop as the operator runs it, in order, with the one LIVE gate (the push); Remediation rows U01–U09 are what
+  steps are the same loop as the operator runs it, in order, with the one LIVE gate (the push); Remediation rows U01–U10 are what
   CloudBQ corrected between 2026-10-05 and 2026-10-16, each with the commit or test that holds the fix. Source: the repository on
   branch claude/cloud-run-bigquery-pipeline-e94ziy at d18a95f; the same files live in IC-DBT-BQ at 250dc6d.
 surfaces:
@@ -316,6 +316,13 @@ remediation:
     cause: a non-stdlib import used only for a self-check, unstated in the skill page
     fix: 'optional import — the parse check is skipped with a note; SKILL.md states the prerequisites and how to install the skill elsewhere'
     verified: 610d41e; test_generator_without_pyyaml_and_bad_inputs
+  - id: U10
+    symptom: 'the bot''s first run on main ("Update README index", run 38958479320) was cancelled after 1 s: "Canceling since a deadlock was detected for concurrency group ''regenerate-Update README index-refs/heads/main'' between a top level workflow and ''regenerate''"'
+    layer: U9
+    surfaces: B
+    cause: 'the thin caller and the reusable workflow both declared a top-level concurrency group with the same value; GitHub treats the called workflow''s group as the job''s and refuses the self-deadlock'
+    fix: 'regenerate.yml declares no concurrency group; the inline workflow and the thin caller own it (new_regen_workflow.py; test_reusable_workflow_shape asserts the absence)'
+    verified: 'this commit; the first bot run after it merges to main is the proof — no local tool evaluates GitHub''s concurrency rules'
 equality_checks:
   - stage: after every block commit
     compare: ledger rows vs commits (ledger-only and Regenerated-by commits excluded)
