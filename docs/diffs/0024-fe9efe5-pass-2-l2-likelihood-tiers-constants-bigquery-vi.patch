@@ -1,0 +1,850 @@
+commit fe9efe529dd3557f763b3c395c1538efdf962c82
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Fri Oct 16 11:58:18 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Fri Oct 16 11:58:18 2026 +0000
+
+    pass 2 (L2 likelihood tiers): constants, BigQuery views + gold MERGE, adapter columns, lab notebook, tests
+    
+    Second classification layer: every open deal of every pipeline binned by the certainty its pipeline records — icalps_oppocertainty
+    for Icalps (number, 799/800 filled), hs_deal_stage_probability elsewhere — into Tier4_pipeline (< 0.5), Tier3 (≥ 0.5), Tier2 (≥ 0.75),
+    Tier1 (≥ 0.9); closed deals Closed_won / Closed_lost. Both properties are fractions, so the operator's 50/75/90 % are 0.5/0.75/0.9.
+    
+    - scoring/deal_tiers_v1.constants.json: edges, labels, closed labels, certainty source per pipeline, watch properties and webhook
+      events for the event lane, the deal_tier_v1 property definition (enumeration, group dealinformation), the unusable properties.
+    - sql/deal_tiers_v1.sql: deal_certainty_v1 → deal_tiers_v1 (RANGE_BUCKET(certainty, [0.5, 0.75, 0.9]) ≡ numpy.digitize; an unknown
+      closed state is never tiered) → deal_tiers (gold, retired_at) + deal_tiers_history + deal_tiers_summary_v1.
+    - sql/deal_tiers_apply.sql: the scheduled MERGE keyed on @run_time: 36 h freshness guard and half-rows guard, one source row per deal,
+      IS DISTINCT FROM → previous_tier/last_changed_at, unchanged rows touch computed_at only, never-tiered deals not inserted,
+      WHEN NOT MATCHED BY SOURCE retires deals gone from the sync, history rows for this run's changes and retirements only.
+    - sql/deals_synced_v1.sql exposes icalps_oppocertainty, is_closed, is_closed_won; sql/apply.sh applies the tier views last.
+    - notebooks/l2_deal_tiers.ipynb (lane N, the lab): snapshot through main.HubSpot with every stage's hs_v2_date_entered_<id>, fill
+      rates, distributions, numpy.digitize tiers, calibration by stage entry against each stage's configured probability, deal_tiers_lab
+      and a per-deal RANGE_BUCKET == digitize proof, equality with the gold table, the property definition and StackSync mapping rows.
+    - tests/test_deal_tiers.py (constants ↔ SQL ↔ bisect reference, MERGE clauses and guards); tests/test_notebook.py covers every notebook.
+    - .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py accepts any three surface ids (pass-1 workbook byte-identical).
+    
+    Reviewed adversarially before commit (fixed: retirement of cleared/deleted deals, non-existent property group, functions-framework not
+    installed in the kernel, calibration against the entrants' current probability instead of the stage's, NULL-skipping comparisons).
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .../assets/recipes/c_l2_deal_tiers.md              |  11 +
+ .../pass-sequence/scripts/build_surfaces_xlsx.py   |  16 +-
+ notebooks/README.md                                |  10 +
+ notebooks/l2_deal_tiers.ipynb                      | 330 +++++++++++++++++++++
+ scoring/deal_tiers_v1.constants.json               |  61 ++++
+ sql/apply.sh                                       |   4 +-
+ sql/deal_tiers_apply.sql                           |  55 ++++
+ sql/deal_tiers_v1.sql                              |  44 +++
+ sql/deals_synced_v1.sql                            |   5 +-
+ tests/test_deal_tiers.py                           |  92 ++++++
+ tests/test_notebook.py                             |  46 +--
+ 11 files changed, 644 insertions(+), 30 deletions(-)
+
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md b/.claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md
+new file mode 100644
+index 0000000..1e7b4fd
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md
+@@ -0,0 +1,11 @@
++/add scoring/deal_tiers_v1.constants.json sql/deal_tiers_v1.sql sql/deal_tiers_apply.sql sql/deals_synced_v1.sql sql/apply.sh tests/test_deal_tiers.py notebooks/l2_deal_tiers.ipynb
++/read-only cloud_function_new_deals/main.py scoring/hot_score_v1.constants.json docs/execution_surfaces_l2.yaml CONVENTIONS.md
++
++Pass 2, layer L2: classify every open deal of every pipeline by likelihood to close, from the certainty the pipeline records, into tiers.
++
++Rules:
++- One constants file (edges 0.5 / 0.75 / 0.9 as FRACTIONS, labels Tier4_pipeline … Tier1_opportunity, closed labels, certainty source per pipeline: icalps_oppocertainty for 766126206, hs_deal_stage_probability otherwise). The SQL carries the same literals; tests/test_deal_tiers.py fails on drift.
++- Binning is numpy.digitize == bisect_right == BigQuery RANGE_BUCKET; NULL certainty → no tier; closed deals → Closed_won / Closed_lost.
++- deals_synced_v1 exposes icalps_oppocertainty, is_closed, is_closed_won; deal_certainty_v1 → deal_tiers_v1 → deal_tiers (gold) + deal_tiers_history + deal_tiers_summary_v1; apply.sh applies them after hot_deals_v1.sql.
++- deal_tiers_apply.sql is the scheduled MERGE: v_ variables, BEGIN/COMMIT, MERGE on deal_id with IS DISTINCT FROM, history rows for this run's changes only (idempotent).
++- The notebook is the lab (lane N): snapshot through main.HubSpot with hs_v2_date_entered_<stage>, fill rates, distributions, digitize, calibration by stage entry, RANGE_BUCKET parity per deal on deal_tiers_lab, equality with the gold table, the property definition and StackSync mapping sheet. It never writes deal_tiers.
+diff --git a/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py b/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py
+index 3314d95..58eb7b8 100755
+--- a/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py
++++ b/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py
+@@ -78,6 +78,10 @@ def _body(ws, row, values, parity_col=None):
+ def build(spec: dict) -> openpyxl.Workbook:
+     s = {k: v for k, v in spec.items()}
+     surf = s["surfaces"]
++    keys = list(surf.keys())                      # the three surface ids: A/B/C in the mr-load convention, N/Q/W or any other triple elsewhere
++    if len(keys) != 3:
++        raise SystemExit(f"build_surfaces_xlsx: exactly three surfaces are expected (the sheets have three surface columns), got {keys}")
++    k1, k2, k3 = keys; rest = "".join(keys[1:])     # equality checks: first surface vs the other two ("BC", "QW", …)
+     wb = openpyxl.Workbook()
+ 
+     # ---- Overview
+@@ -105,17 +109,17 @@ def build(spec: dict) -> openpyxl.Workbook:
+ 
+     # ---- Layers
+     ly = wb.create_sheet("Layers"); _widths(ly, WIDTHS["Layers"])
+-    _header(ly, 1, ["#", "Layer", surf["A"], surf["B"], surf["C"], "Parity", "Where it diverges", "Remediation", "Verified how"])
++    _header(ly, 1, ["#", "Layer", surf[k1], surf[k2], surf[k3], "Parity", "Where it diverges", "Remediation", "Verified how"])
+     for i, L in enumerate(s["layers"], start=2):
+-        _body(ly, i, [L["id"], L["layer"], L["A"], L["B"], L["C"], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
++        _body(ly, i, [L["id"], L["layer"], L[k1], L[k2], L[k3], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
+     ly.freeze_panes = "A2"
+ 
+     # ---- Pipeline steps
+     ps = wb.create_sheet("Pipeline steps"); _widths(ps, WIDTHS["Pipeline steps"])
+-    _header(ps, 1, ["#", "Step", "Gate", f"{surf['A']} — cell", f"{surf['B']} — command", f"{surf['C']} — command",
++    _header(ps, 1, ["#", "Step", "Gate", f"{surf[k1]} — cell", f"{surf[k2]} — command", f"{surf[k3]} — command",
+                     "Parity", "Identical artefact to compare", "Notes"])
+     for i, st in enumerate(s["steps"], start=2):
+-        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st["A"], st["B"], st["C"], st["parity"],
++        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st[k1], st[k2], st[k3], st["parity"],
+                       st.get("artefact", ""), st.get("notes", "")], parity_col=7)
+     ps.freeze_panes = "A2"
+ 
+@@ -128,9 +132,9 @@ def build(spec: dict) -> openpyxl.Workbook:
+ 
+     # ---- Equality checks
+     eq = wb.create_sheet("Equality checks"); _widths(eq, WIDTHS["Equality checks"])
+-    _header(eq, 1, ["Stage", "What to compare", f"{surf['A']} — cell", f"{surf['B']} / {surf['C']} — command", "Expected"])
++    _header(eq, 1, ["Stage", "What to compare", f"{surf[k1]} — cell", f"{surf[k2]} / {surf[k3]} — command", "Expected"])
+     for i, E in enumerate(s["equality_checks"], start=2):
+-        _body(eq, i, [E["stage"], E["compare"], E["A"], E["BC"], E["expected"]])
++        _body(eq, i, [E["stage"], E["compare"], E[k1], E.get(rest, E.get("BC", "")), E["expected"]])
+     eq.freeze_panes = "A2"
+ 
+     wb.calculation.fullCalcOnLoad = True
+diff --git a/notebooks/README.md b/notebooks/README.md
+index 30dd5dc..adce04f 100644
+--- a/notebooks/README.md
++++ b/notebooks/README.md
+@@ -58,3 +58,13 @@ runbook order, `enable` flag-guarded, the token prompted, and no outputs committ
+ a real kernel in a clone without Google credentials; every cell that needs none ran (repository, settings, identity, `DRYRUN=1 all`,
+ `check-env`, the Python scorer), and every other cell stopped at the credential boundary, as intended. The SQL text of the witness
+ cells was reviewed against the BigQuery `INFORMATION_SCHEMA` and function signatures; it has not yet run against a project.
++
++## `l2_deal_tiers.ipynb` — pass 2, the lab for the L2 likelihood tiers
++
++Lane N of `docs/PASS2_L2_TIERS.md`. It installs the function's requirements into the kernel, takes a snapshot of every deal through the
++function's `HubSpot` client (token from Secret Manager `hubspot-token` or a masked prompt), measures fill rates and distributions of the
++certainty candidates, bins with `numpy.digitize` on the edges of `scoring/deal_tiers_v1.constants.json`, calibrates the bins against the
++stage-entry dates (`hs_v2_date_entered_<stage>`, with each stage's configured probability), loads the snapshot into `deal_tiers_lab` and
++proves per deal that BigQuery's `RANGE_BUCKET` returns the same bin, compares the lab with the gold table when it exists, and prints the
++`deal_tier_v1` property definition and the StackSync mapping rows. It never writes the gold table `deal_tiers`; that is the scheduled
++MERGE `sql/deal_tiers_apply.sql` (lane Q). Same identity notes as above.
+diff --git a/notebooks/l2_deal_tiers.ipynb b/notebooks/l2_deal_tiers.ipynb
+new file mode 100644
+index 0000000..365a5a1
+--- /dev/null
++++ b/notebooks/l2_deal_tiers.ipynb
+@@ -0,0 +1,330 @@
++{
++ "cells": [
++  {
++   "cell_type": "markdown",
++   "id": "a8008021",
++   "metadata": {},
++   "source": [
++    "# CloudBQ pass 2 — L2 likelihood tiers: the lab (Vertex AI Workbench)\n",
++    "\n",
++    "The first layer (L1, `scoring/hot_score_v1`) scores a new deal on the completeness of its information. This second layer (L2) classifies\n",
++    "**every open deal of every pipeline** by its likelihood to close, from the certainty each pipeline actually records, into bins that become\n",
++    "tiers. This notebook is lane **N**, the lab: it takes a snapshot of the CRM through the function's own HubSpot client, measures fill rates\n",
++    "and distributions, bins with `numpy.digitize`, calibrates the bins against what really closed, and proves per deal that BigQuery's\n",
++    "`RANGE_BUCKET` gives the same bin. Lane **Q** (production) is `sql/deal_tiers_v1.sql` + `sql/deal_tiers_apply.sql` over the daily\n",
++    "HubSpot → BigQuery sync; lane **W** (event) is the `deal.propertyChange` webhook. The constants live once in\n",
++    "`scoring/deal_tiers_v1.constants.json`. This notebook writes `deal_tiers_lab` and never the gold table `deal_tiers`.\n",
++    "\n",
++    "What the CRM said on 2026-10-16 (hub 9201667), which fixed four decisions below:\n",
++    "\n",
++    "| Fact | Consequence |\n",
++    "|---|---|\n",
++    "| `icalps_oppocertainty` (number) is filled on 799 of 800 Icalps deals; `icalps_dealcertainty` is a *string* with no values | Icalps certainty = `icalps_oppocertainty`; the string property is unusable |\n",
++    "| every other pipeline has only `hs_deal_stage_probability` (stage-derived: 0.1 / 0.2 / 0.5 / 1.0 on SealSQ); `win_probability` mirrors it; `hs_forecast_probability` is empty | SealSQ certainty = the stage probability; manual edits (0.3, 0.7, 0.75, 0.9 on a handful of deals) are the only values between 0.5 and 1.0 |\n",
++    "| both properties are **fractions 0–1** | the operator's 50 % / 75 % / 90 % are the edges 0.5 / 0.75 / 0.9 |\n",
++    "| 325 of 325 Icalps closed-won deals carry certainty 1.0; losers keep their last value | the snapshot cannot calibrate winners; calibration uses the stage-entry dates `hs_v2_date_entered_<stage>` instead |\n",
++    "| six open Icalps deals sit at exactly 0.49 | a 0.5 edge is already a behavioural boundary for Icalps users |\n",
++    "\n",
++    "Decisions taken as defaults (change them in the constants file): below 0.5 → `Tier4_pipeline`; closed deals → `Closed_won` / `Closed_lost`,\n",
++    "never a tier; the same edges for every pipeline, knowing that SealSQ's stage probabilities make `Tier2_opportunity` reachable only through a\n",
++    "manual probability edit."
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "accce348",
++   "metadata": {},
++   "source": [
++    "## 0. Settings, constants, the binning function"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "872a2802",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "import os, re, sys, json, shlex, pathlib, getpass\n",
++    "from datetime import datetime, timedelta, timezone\n",
++    "import numpy as np, pandas as pd\n",
++    "from IPython.display import display\n",
++    "\n",
++    "_cwd = pathlib.Path.cwd()\n",
++    "REPO = _cwd.parent if (_cwd.name == \"notebooks\" and (_cwd.parent / \".git\").exists()) else pathlib.Path.home() / \"CloudBQ\"\n",
++    "assert (REPO / \".git\").exists(), f\"clone the repo first (see notebooks/README.md): {REPO}\"\n",
++    "os.chdir(REPO)\n",
++    "\n",
++    "def load_env(path):\n",
++    "    env = {}\n",
++    "    for line in path.read_text().splitlines():\n",
++    "        parts = shlex.split(line, comments=True)\n",
++    "        if parts and \"=\" in parts[0]:\n",
++    "            k, v = parts[0].split(\"=\", 1); env[k] = v\n",
++    "    return env\n",
++    "ENV = load_env(REPO / \".env\") if (REPO / \".env\").exists() else {}\n",
++    "PROJECT = ENV.get(\"PROJECT\") or os.environ.get(\"PROJECT\") or input(\"GCP project: \")\n",
++    "DATASET = ENV.get(\"DATASET\") or \"hubspot\"; BQ_LOCATION = ENV.get(\"BQ_LOCATION\") or \"EU\"\n",
++    "assert not PROJECT.startswith((\"your-\", \"<\")), \"PROJECT still holds the placeholder\"\n",
++    "\n",
++    "K = json.loads((REPO / \"scoring\" / \"deal_tiers_v1.constants.json\").read_text())\n",
++    "EDGES = np.array(K[\"edges\"], dtype=float); LABELS = K[\"labels\"]; CLOSED = K[\"closed_labels\"]; SOURCE = K[\"certainty_source\"]\n",
++    "print(\"project\", PROJECT, \"| dataset\", DATASET, \"| edges\", EDGES.tolist(), \"| labels\", LABELS)\n",
++    "\n",
++    "def bin_index(certainty):\n",
++    "    \"\"\"numpy.digitize with the constants' edges: 0 below EDGES[0], k when EDGES[k-1] <= x < EDGES[k], len(EDGES) at or above the last edge.\n",
++    "    Identical to BigQuery RANGE_BUCKET(certainty, EDGES) — section 4 proves it per deal. NaN stays NaN (no tier).\"\"\"\n",
++    "    x = pd.to_numeric(certainty, errors=\"coerce\")\n",
++    "    idx = pd.Series(np.digitize(x.fillna(-1.0), EDGES), index=x.index).astype(\"float\")\n",
++    "    return idx.mask(x.isna())\n",
++    "\n",
++    "def tier(certainty, is_closed, is_closed_won):\n",
++    "    idx = bin_index(certainty)\n",
++    "    out = idx.map(lambda i: None if pd.isna(i) else LABELS[int(i)])\n",
++    "    return out.mask(is_closed.fillna(False).astype(bool), CLOSED[\"lost\"]).mask(is_closed_won.fillna(False).astype(bool), CLOSED[\"won\"])\n",
++    "\n",
++    "demo = pd.DataFrame({\"certainty\": [0.0, 0.49, 0.5, 0.74, 0.75, 0.89, 0.9, 1.0, None]})\n",
++    "demo[\"bin_index\"] = bin_index(demo[\"certainty\"]); demo[\"tier\"] = tier(demo[\"certainty\"], pd.Series(False, index=demo.index), pd.Series(False, index=demo.index))\n",
++    "display(demo)"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "a842fb68",
++   "metadata": {},
++   "source": [
++    "## 1. The snapshot — every deal through the function's HubSpot client\n",
++    "\n",
++    "The token comes from Secret Manager (`hubspot-token`, created by lane A's `secret` step) or, failing that, a masked prompt; it is\n",
++    "never written anywhere. Properties: the function's list plus the certainty candidates, the closed flags, and one stage-entry date\n",
++    "per stage of every pipeline (`hs_v2_date_entered_<stage id>`), which the calibration needs."
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "15cdbb40",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "import subprocess\n",
++    "subprocess.run([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"-r\", str(REPO / \"cloud_function_new_deals\" / \"requirements.txt\"), \"db-dtypes\", \"pyarrow\", \"pandas\", \"numpy\", \"requests\"], check=False)   # main.py imports functions_framework; to_dataframe needs db-dtypes\n",
++    "sys.path.insert(0, str(REPO / \"cloud_function_new_deals\")); import main, requests\n",
++    "try:\n",
++    "    from google.cloud import secretmanager\n",
++    "    token = secretmanager.SecretManagerServiceClient().access_secret_version(name=f\"projects/{PROJECT}/secrets/hubspot-token/versions/latest\").payload.data.decode()\n",
++    "    print(\"token: Secret Manager hubspot-token\")\n",
++    "except Exception as e:\n",
++    "    print(f\"Secret Manager unavailable ({type(e).__name__}); prompting\"); token = getpass.getpass(\"HubSpot private-app token (read scopes): \")\n",
++    "hs = main.HubSpot(token); del token\n",
++    "\n",
++    "pipelines, stages = hs.pipelines()                                   # id → label\n",
++    "_pl = requests.get(f\"{main.HS}/crm/v3/pipelines/deals\", headers=hs.h, timeout=30); _pl.raise_for_status()\n",
++    "stage_prob = {st[\"id\"]: float(st[\"metadata\"][\"probability\"]) for p_ in _pl.json()[\"results\"] for st in p_[\"stages\"]}   # the stage's CONFIGURED probability\n",
++    "stage_pipeline = {st[\"id\"]: p_[\"id\"] for p_ in _pl.json()[\"results\"] for st in p_[\"stages\"]}\n",
++    "stage_entry_props = [f\"hs_v2_date_entered_{sid}\" for sid in stages]  # one per stage of every pipeline\n",
++    "EXTRA = [\"icalps_oppocertainty\", \"icalps_dealcertainty\", \"win_probability\", \"hs_forecast_probability\", \"hs_is_closed\", \"hs_is_closed_won\", \"hs_lastmodifieddate\"]\n",
++    "main.PROPS = list(dict.fromkeys(main.PROPS + EXTRA + stage_entry_props))   # search_created() reads the module-level list\n",
++    "raw = hs.search_created(datetime(2000, 1, 1, tzinfo=timezone.utc), datetime.now(timezone.utc))   # HubSpot search caps at 10,000 results; the portal has ~2,000 deals\n",
++    "deals = pd.DataFrame([{\"deal_id\": str(d[\"id\"]), **d.get(\"properties\", {})} for d in raw])\n",
++    "deals[\"pipeline_label\"] = deals[\"pipeline\"].map(pipelines).fillna(deals[\"pipeline\"]); deals[\"stage_label\"] = deals[\"dealstage\"].map(stages).fillna(deals[\"dealstage\"])\n",
++    "for col in (\"hs_deal_stage_probability\", \"icalps_oppocertainty\", \"win_probability\", \"hs_forecast_probability\", \"amount_in_home_currency\", \"icalps_dealcertainty\"):\n",
++    "    deals[col] = pd.to_numeric(deals[col], errors=\"coerce\") if col in deals and col != \"icalps_dealcertainty\" else (deals[col] if col in deals else np.nan)   # a property with no value anywhere may be absent from the response\n",
++    "for col in (\"hs_is_closed\", \"hs_is_closed_won\"):\n",
++    "    deals[col] = deals[col].map({\"true\": True, \"false\": False}) if col in deals else False\n",
++    "for col in stage_entry_props:\n",
++    "    if col in deals: deals[col] = deals[col].replace(\"\", np.nan)         # an unset date must not count as \"entered\"\n",
++    "print(len(deals), \"deals;\", deals[\"pipeline_label\"].value_counts().to_dict())"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "00171fcf",
++   "metadata": {},
++   "source": [
++    "## 2. Fill rates and distributions of the certainty candidates, per pipeline"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "5fdc9b61",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "cands = [\"hs_deal_stage_probability\", \"icalps_oppocertainty\", \"win_probability\", \"hs_forecast_probability\", \"icalps_dealcertainty\"]\n",
++    "fill = deals.groupby(\"pipeline_label\")[cands].apply(lambda g: g.notna().mean().round(3)); fill[\"deals\"] = deals.groupby(\"pipeline_label\").size()\n",
++    "display(fill)\n",
++    "open_deals = deals[deals[\"hs_is_closed\"] == False]\n",
++    "print(\"open deals:\", len(open_deals))\n",
++    "display(open_deals.groupby([\"pipeline_label\", \"hs_deal_stage_probability\"]).size().unstack(fill_value=0))\n",
++    "display(open_deals[open_deals[\"pipeline\"] == \"766126206\"][\"icalps_oppocertainty\"].value_counts().sort_index().to_frame(\"open Icalps deals\"))"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "94b960d0",
++   "metadata": {},
++   "source": [
++    "## 3. Certainty per pipeline → bins → tiers (the same CASE as `deal_certainty_v1` / `deal_tiers_v1`)"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "00a6210f",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "deals[\"certainty_source\"] = np.where(deals[\"pipeline\"].isin([k for k in SOURCE if k != \"default\"]), deals[\"pipeline\"].map(SOURCE), SOURCE[\"default\"])\n",
++    "deals[\"certainty\"] = np.where(deals[\"certainty_source\"] == \"icalps_oppocertainty\", deals[\"icalps_oppocertainty\"], deals[\"hs_deal_stage_probability\"])\n",
++    "deals[\"bin_index\"] = bin_index(deals[\"certainty\"])\n",
++    "deals[\"tier\"] = tier(deals[\"certainty\"], deals[\"hs_is_closed\"], deals[\"hs_is_closed_won\"])\n",
++    "summary = deals.groupby([\"pipeline_label\", \"tier\"], dropna=False).agg(deals=(\"deal_id\", \"size\"), amount_kusd=(\"amount_in_home_currency\", \"sum\")).reset_index()\n",
++    "display(summary.pivot(index=\"pipeline_label\", columns=\"tier\", values=\"deals\").fillna(0).astype(int))\n",
++    "display(deals[deals[\"hs_is_closed\"] == False].groupby([\"pipeline_label\", \"tier\"], dropna=False).size().unstack(fill_value=0))"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "add99c07",
++   "metadata": {},
++   "source": [
++    "## 4. Calibration — does a higher certainty close more often?\n",
++    "\n",
++    "Winners' certainty is overwritten at close (Icalps) or equals 1.0 by stage (SealSQ), so the snapshot cannot calibrate on the certainty\n",
++    "value itself. The stage-entry dates can: for every pipeline and stage, how many deals ever entered it, and how many of those are won,\n",
++    "lost or still open. The won share among closed deals is the empirical conversion the stage probability claims."
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "871d496a",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "rows = []\n",
++    "for pid, plabel in pipelines.items():\n",
++    "    sub = deals[deals[\"pipeline\"] == pid]\n",
++    "    for sid, slabel in stages.items():\n",
++    "        if stage_pipeline.get(sid) != pid: continue                      # a stage belongs to one pipeline\n",
++    "        col = f\"hs_v2_date_entered_{sid}\"\n",
++    "        if col not in sub or sub[col].notna().sum() == 0: continue\n",
++    "        entered = sub[sub[col].notna()]\n",
++    "        won = int((entered[\"hs_is_closed_won\"] == True).sum()); closed = int((entered[\"hs_is_closed\"] == True).sum()); lost = closed - won\n",
++    "        rows.append({\"pipeline\": plabel, \"stage\": slabel, \"stage_probability\": stage_prob.get(sid),   # the stage's configured probability, not the entrants' current one\n",
++    "                     \"entered\": len(entered), \"open\": len(entered) - closed, \"won\": won, \"lost\": lost, \"won_of_closed\": round(won / closed, 3) if closed else None})\n",
++    "calib = pd.DataFrame(rows).sort_values([\"pipeline\", \"entered\"], ascending=[True, False])\n",
++    "display(calib)"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "2b21d9c5",
++   "metadata": {},
++   "source": [
++    "## 5. Parity with BigQuery — `RANGE_BUCKET` per deal, and the lab table\n",
++    "\n",
++    "The snapshot goes to `deal_tiers_lab` (truncated on every run; the production gold table `deal_tiers` is written only by\n",
++    "`sql/deal_tiers_apply.sql`). BigQuery then bins the same rows with `RANGE_BUCKET(certainty, edges)` and every `bin_index` must equal\n",
++    "numpy's. The job id, bytes and slot time are printed so the execution is witnessed, not assumed."
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "7327ce50",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "from google.cloud import bigquery\n",
++    "client = bigquery.Client(project=PROJECT, location=BQ_LOCATION)\n",
++    "LAB = f\"{PROJECT}.{DATASET}.deal_tiers_lab\"\n",
++    "lab = deals[[\"deal_id\", \"pipeline\", \"dealstage\", \"dealname\", \"certainty_source\", \"certainty\", \"bin_index\", \"tier\", \"hs_is_closed\", \"hs_is_closed_won\", \"amount_in_home_currency\"]].rename(\n",
++    "    columns={\"pipeline\": \"pipeline_id\", \"dealstage\": \"dealstage_id\", \"hs_is_closed\": \"is_closed\", \"hs_is_closed_won\": \"is_closed_won\", \"amount_in_home_currency\": \"amount_kusd\"}).copy()\n",
++    "lab[\"computed_at\"] = pd.Timestamp.now(tz=\"UTC\"); lab[\"orchestrator\"] = \"workbench-notebook-snapshot\"; lab[\"bin_index\"] = lab[\"bin_index\"].astype(\"Int64\")\n",
++    "job = client.load_table_from_dataframe(lab, LAB, job_config=bigquery.LoadJobConfig(write_disposition=\"WRITE_TRUNCATE\")); job.result()\n",
++    "print(f\"loaded {job.output_rows} rows into {LAB} (job {job.job_id})\")\n",
++    "\n",
++    "edges_sql = \"[\" + \", \".join(repr(float(e)) for e in EDGES) + \"]\"\n",
++    "sql = f\"SELECT deal_id, certainty, bin_index AS numpy_bin, RANGE_BUCKET(certainty, {edges_sql}) AS bq_bin FROM `{LAB}`\"\n",
++    "print(sql); qj = client.query(sql); cmp = qj.result().to_dataframe()\n",
++    "print(f\"job {qj.job_id} | bytes processed {qj.total_bytes_processed} | slot ms {qj.slot_millis} | cache hit {qj.cache_hit}\")\n",
++    "same = ((cmp[\"numpy_bin\"].isna() & cmp[\"bq_bin\"].isna()) | (cmp[\"numpy_bin\"] == cmp[\"bq_bin\"])).fillna(False).astype(bool)   # a NULL on one side only must fail, not be skipped\n",
++    "assert same.all(), cmp[~same]\n",
++    "print(f\"RANGE_BUCKET == numpy.digitize on all {len(cmp)} deals\")"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "a12bec97",
++   "metadata": {},
++   "source": [
++    "## 6. Equality with the production gold table, when it exists (lane Q after the first sync and MERGE)"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "780e9c28",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "from google.api_core.exceptions import NotFound\n",
++    "try:\n",
++    "    gold = client.query(f\"SELECT pipeline_id, tier, COUNT(*) AS gold_deals FROM `{PROJECT}.{DATASET}.deal_tiers` WHERE tier IS NOT NULL GROUP BY pipeline_id, tier\").result().to_dataframe()\n",
++    "except NotFound:\n",
++    "    gold = None; print(\"deal_tiers does not exist yet: run sql/apply.sh (step 4) after the first HubSpot → BigQuery transfer (step 3)\")\n",
++    "if gold is not None and gold.empty:\n",
++    "    print(\"deal_tiers exists but holds no rows: run sql/deal_tiers_apply.sql (step 8) and re-run this cell\")\n",
++    "elif gold is not None:\n",
++    "    labn = client.query(f\"SELECT pipeline_id, tier, COUNT(*) AS lab_deals FROM `{LAB}` WHERE tier IS NOT NULL GROUP BY pipeline_id, tier\").result().to_dataframe()\n",
++    "    eq = labn.merge(gold, on=[\"pipeline_id\", \"tier\"], how=\"outer\")\n",
++    "    eq[[\"lab_deals\", \"gold_deals\"]] = eq[[\"lab_deals\", \"gold_deals\"]].fillna(0).astype(int); eq[\"diff\"] = eq[\"lab_deals\"] - eq[\"gold_deals\"]\n",
++    "    display(eq.sort_values([\"pipeline_id\", \"tier\"]))\n",
++    "    print(\"differences come from deals created, edited, deleted or un-tiered between the sync (02:00 UTC) and this snapshot — the retired rows (tier NULL) are excluded on both sides\")"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "c7b7173c",
++   "metadata": {},
++   "source": [
++    "## 7. Hand-off to the CRM — the property StackSync will fill\n",
++    "\n",
++    "StackSync never creates a property definition (mir-load `hs-props` pattern): create `deal_tier_v1` (enumeration, options below, in the\n",
++    "built-in group `dealinformation` like pass 1's `writeback/bootstrap_property.sh`) once with a schema-write token, then map\n",
++    "`deal_tiers.deal_id` → Deals · Record ID and `deal_tiers.tier` → `deal_tier_v1`, direction BigQuery → HubSpot. A retired row (tier NULL)\n",
++    "clears the property on a deal that still exists."
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "id": "b2f8940e",
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "prop = K[\"hubspot_property\"]\n",
++    "print(json.dumps({\"name\": prop[\"name\"], \"label\": prop[\"label\"], \"groupName\": prop[\"group\"], \"type\": prop[\"type\"], \"fieldType\": prop[\"field_type\"], \"description\": prop[\"description\"],\n",
++    "                  \"hasUniqueValue\": False, \"formField\": False, \"options\": [{\"label\": o, \"value\": o, \"displayOrder\": i} for i, o in enumerate(prop[\"options\"])]}, indent=1))\n",
++    "mapping = pd.DataFrame([{\"object_type\": \"deals\", \"bigquery_table\": f\"{PROJECT}.{DATASET}.deal_tiers\", \"bigquery_column\": \"deal_id\", \"hubspot_property\": \"hs_object_id\", \"kind\": \"match_key\"},\n",
++    "                        {\"object_type\": \"deals\", \"bigquery_table\": f\"{PROJECT}.{DATASET}.deal_tiers\", \"bigquery_column\": \"tier\", \"hubspot_property\": prop[\"name\"], \"kind\": \"property\"}])\n",
++    "display(mapping)"
++   ]
++  }
++ ],
++ "metadata": {
++  "kernelspec": {
++   "display_name": "Python 3",
++   "language": "python",
++   "name": "python3"
++  },
++  "language_info": {
++   "name": "python"
++  }
++ },
++ "nbformat": 4,
++ "nbformat_minor": 5
++}
+diff --git a/scoring/deal_tiers_v1.constants.json b/scoring/deal_tiers_v1.constants.json
+new file mode 100644
+index 0000000..fd9d69e
+--- /dev/null
++++ b/scoring/deal_tiers_v1.constants.json
+@@ -0,0 +1,61 @@
++{
++  "version": "v1",
++  "fitted": "2026-10-16",
++  "scale": "fraction 0-1: HubSpot stores hs_deal_stage_probability and icalps_oppocertainty as fractions; the operator's 50 % / 75 % / 90 % are 0.5 / 0.75 / 0.9",
++  "edges": [
++    0.5,
++    0.75,
++    0.9
++  ],
++  "labels": [
++    "Tier4_pipeline",
++    "Tier3_opportunity",
++    "Tier2_opportunity",
++    "Tier1_opportunity"
++  ],
++  "closed_labels": {
++    "won": "Closed_won",
++    "lost": "Closed_lost"
++  },
++  "binning": "bin_index = numpy.digitize(certainty, edges) = BigQuery RANGE_BUCKET(certainty, edges): 0 below the first edge, k when edges[k-1] <= certainty < edges[k], len(edges) at or above the last edge; NULL stays NULL",
++  "certainty_source": {
++    "766126206": "icalps_oppocertainty",
++    "default": "hs_deal_stage_probability"
++  },
++  "watch_properties": {
++    "766126206": [
++      "icalps_oppocertainty",
++      "dealstage"
++    ],
++    "default": [
++      "dealstage",
++      "hs_deal_stage_probability"
++    ]
++  },
++  "hubspot_property": {
++    "name": "deal_tier_v1",
++    "label": "Deal tier (L2, likelihood)",
++    "type": "enumeration",
++    "field_type": "select",
++    "group": "dealinformation",
++    "options": [
++      "Tier1_opportunity",
++      "Tier2_opportunity",
++      "Tier3_opportunity",
++      "Tier4_pipeline",
++      "Closed_won",
++      "Closed_lost"
++    ],
++    "description": "L2 likelihood tier from the deal's certainty (icalps_oppocertainty on Icalps, the stage probability elsewhere); edges 0.5 / 0.75 / 0.9; written daily from BigQuery deal_tiers through StackSync"
++  },
++  "unusable_properties": {
++    "icalps_dealcertainty": "string type, no values on 2026-10-16",
++    "hs_forecast_probability": "no values",
++    "win_probability": "mirror of hs_deal_stage_probability on SealSQ pipelines (manual edits aside)"
++  },
++  "webhook_events": [
++    "deal.creation",
++    "deal.propertyChange"
++  ],
++  "retirement": "a deal whose certainty is cleared, or that leaves the sync, keeps its gold row with tier NULL, previous_tier and retired_at; StackSync then clears deal_tier_v1"
++}
+diff --git a/sql/apply.sh b/sql/apply.sh
+index 4e32145..84e3bc1 100755
+--- a/sql/apply.sh
++++ b/sql/apply.sh
+@@ -14,8 +14,8 @@ for v in PROJECT SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE; do [[ "${!v}"
+ render() { sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${BQ_LOCATION}/$BQ_LOCATION/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" \
+                -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g" -e "s/\${SYNC_OWNERS_TABLE}/$SYNC_OWNERS_TABLE/g" "$1"; }
+ 
+-# order matters: tables (A's schema + audit) → UDF → adapter views → scoring views
+-FILES=("$ROOT/cloud_function_new_deals/bigquery_schema.sql" "$HERE/audit_tables.sql" "$ROOT/scoring/hot_score_v1.sql" "$HERE/deals_synced_v1.sql" "$HERE/hot_deals_v1.sql")
++# order matters: tables (A's schema + audit) → UDF → adapter views → scoring views → pass-2 tier views + gold tables
++FILES=("$ROOT/cloud_function_new_deals/bigquery_schema.sql" "$HERE/audit_tables.sql" "$ROOT/scoring/hot_score_v1.sql" "$HERE/deals_synced_v1.sql" "$HERE/hot_deals_v1.sql" "$HERE/deal_tiers_v1.sql")
+ for f in "${FILES[@]}"; do
+   sql=$(render "$f")
+   if grep -q '\${' <<<"$sql"; then echo "apply.sh: unrendered placeholder in $f:" >&2; grep -n '\${' <<<"$sql" >&2; exit 2; fi
+diff --git a/sql/deal_tiers_apply.sql b/sql/deal_tiers_apply.sql
+new file mode 100644
+index 0000000..d7476ef
+--- /dev/null
++++ b/sql/deal_tiers_apply.sql
+@@ -0,0 +1,55 @@
++-- deal_tiers_apply.sql — the scheduled MERGE of pass 2 (lane Q): deal_tiers_v1 (live over the sync) → deal_tiers (gold) + history.
++-- Register after the daily HubSpot → BigQuery transfer (sql/sync_transfer.sh, 02:00 UTC), e.g. "every day 03:00" UTC; @run_time is
++-- BigQuery's parameter (manual run: bq query --parameter="run_time:TIMESTAMP:$(date -u +%FT%TZ)" < rendered script).
++-- Idempotent: a run without source changes updates computed_at only and writes no history row; replaying a run_time rewrites the
++-- same history slice. Variables carry v_ (a column of the same name would shadow a bare name inside MERGE / INSERT … SELECT).
++-- Retirement: a deal whose certainty was cleared (tier NULL in the view) or that left the sync (deleted / merged in HubSpot) keeps
++-- its row with tier = NULL, previous_tier and retired_at set, and gets a history row — StackSync then clears deal_tier_v1 for a
++-- still-existing deal. Two guards keep a stale or failed transfer from retiring everything: the 36 h freshness guard of pass 1 and
++-- a row-count guard (the batch must hold at least half of the rows the gold table holds).
++DECLARE v_run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(@run_time, SECOND);
++DECLARE v_orchestrator STRING DEFAULT 'bigquery-scheduled-query';
++DECLARE v_freshest TIMESTAMP;
++DECLARE v_batch_rows INT64;
++DECLARE v_gold_rows INT64;
++
++-- freshness guard: never MERGE a stale sync (same rule as sql/new_deals_weekly.sql)
++SET v_freshest = (SELECT MAX(lastmodified) FROM `${PROJECT}.${DATASET}.deals_synced_v1`);
++IF v_freshest IS NULL OR v_freshest < TIMESTAMP_SUB(v_run_ts, INTERVAL 36 HOUR) THEN
++  RAISE USING MESSAGE = 'deals sync is older than 36h; aborting the tier run';
++END IF;
++
++BEGIN TRANSACTION;
++
++CREATE TEMP TABLE batch AS
++SELECT deal_id, pipeline_id, certainty_source, certainty, bin_index, tier, is_closed
++FROM `${PROJECT}.${DATASET}.deal_tiers_v1`
++QUALIFY ROW_NUMBER() OVER (PARTITION BY deal_id ORDER BY lastmodified DESC) = 1;    -- one row per deal even if the transfer appended
++
++-- row-count guard: a half-empty transfer would otherwise retire half the gold table
++SET v_batch_rows = (SELECT COUNT(*) FROM batch);
++SET v_gold_rows = (SELECT COUNT(*) FROM `${PROJECT}.${DATASET}.deal_tiers`);
++IF v_gold_rows > 0 AND v_batch_rows < v_gold_rows / 2 THEN
++  RAISE USING MESSAGE = 'synced deals are fewer than half of the gold rows; aborting the tier run';
++END IF;
++
++MERGE `${PROJECT}.${DATASET}.deal_tiers` t
++USING batch b ON t.deal_id = b.deal_id
++WHEN MATCHED AND (t.tier IS DISTINCT FROM b.tier OR t.certainty IS DISTINCT FROM b.certainty) THEN
++  UPDATE SET previous_tier = t.tier, tier = b.tier, certainty = b.certainty, bin_index = b.bin_index, certainty_source = b.certainty_source,
++             is_closed = b.is_closed, pipeline_id = b.pipeline_id, retired_at = IF(b.tier IS NULL, v_run_ts, NULL),
++             last_changed_at = v_run_ts, computed_at = v_run_ts, orchestrator = v_orchestrator
++WHEN MATCHED THEN
++  UPDATE SET computed_at = v_run_ts
++WHEN NOT MATCHED AND b.tier IS NOT NULL THEN                                        -- a deal is born into the gold table with its first tier
++  INSERT (deal_id, pipeline_id, certainty_source, certainty, bin_index, tier, is_closed, previous_tier, retired_at, first_tiered_at, last_changed_at, computed_at, orchestrator)
++  VALUES (b.deal_id, b.pipeline_id, b.certainty_source, b.certainty, b.bin_index, b.tier, b.is_closed, NULL, NULL, v_run_ts, v_run_ts, v_run_ts, v_orchestrator)
++WHEN NOT MATCHED BY SOURCE AND t.tier IS NOT NULL THEN                              -- gone from the sync: deleted or merged in HubSpot
++  UPDATE SET previous_tier = t.tier, tier = NULL, bin_index = NULL, retired_at = v_run_ts, last_changed_at = v_run_ts, computed_at = v_run_ts, orchestrator = v_orchestrator;
++
++INSERT INTO `${PROJECT}.${DATASET}.deal_tiers_history` (run_ts, deal_id, pipeline_id, certainty_source, certainty, bin_index, tier, previous_tier, orchestrator)
++SELECT v_run_ts, deal_id, pipeline_id, certainty_source, certainty, bin_index, tier, previous_tier, v_orchestrator
++FROM `${PROJECT}.${DATASET}.deal_tiers`
++WHERE last_changed_at = v_run_ts;                         -- new, changed and retired rows of this run only
++
++COMMIT TRANSACTION;
+diff --git a/sql/deal_tiers_v1.sql b/sql/deal_tiers_v1.sql
+new file mode 100644
+index 0000000..fe05ef5
+--- /dev/null
++++ b/sql/deal_tiers_v1.sql
+@@ -0,0 +1,44 @@
++-- deal_tiers_v1.sql — L2 classification (pass 2): likelihood tiers from the certainty each pipeline actually records.
++-- Lane Q of pass 2 (BigQuery-native). Replace ${PROJECT} ${DATASET}; sql/apply.sh applies it after deals_synced_v1.sql.
++-- Edges and labels mirror scoring/deal_tiers_v1.constants.json (tests/test_deal_tiers.py keeps them equal).
++-- Certainty is a FRACTION (0–1): HubSpot stores hs_deal_stage_probability and icalps_oppocertainty that way, so the operator's
++-- "50 % / 75 % / 90 %" are the edges 0.5 / 0.75 / 0.9. RANGE_BUCKET(x, [0.5, 0.75, 0.9]) is numpy.digitize(x, [0.5, 0.75, 0.9]):
++-- 0 below 0.5, 1 in [0.5, 0.75), 2 in [0.75, 0.9), 3 at or above 0.9; NULL stays NULL (the notebook proves it per deal, lane N).
++-- Source per pipeline: Icalps users type IcAlps_OppoCertainty (99.9 % filled); every other pipeline has only the stage probability.
++
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.deal_certainty_v1` AS
++SELECT deal_id, pipeline_id, dealstage_id, dealname, owner_id, amount_kusd, createdate, closedate, lastmodified, is_closed, is_closed_won,
++       CASE WHEN pipeline_id = '766126206' THEN 'icalps_oppocertainty' ELSE 'hs_deal_stage_probability' END AS certainty_source,
++       CASE WHEN pipeline_id = '766126206' THEN icalps_oppocertainty ELSE stage_probability END          AS certainty
++FROM `${PROJECT}.${DATASET}.deals_synced_v1`;
++
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.deal_tiers_v1` AS
++SELECT c.*,
++       RANGE_BUCKET(certainty, [0.5, 0.75, 0.9]) AS bin_index,
++       CASE WHEN is_closed_won THEN 'Closed_won'
++            WHEN is_closed     THEN 'Closed_lost'
++            WHEN is_closed IS NULL OR is_closed_won IS NULL THEN NULL   -- unknown closed state (unexpected connector typing): never tier it
++            WHEN certainty IS NULL THEN NULL
++            ELSE ['Tier4_pipeline', 'Tier3_opportunity', 'Tier2_opportunity', 'Tier1_opportunity'][OFFSET(RANGE_BUCKET(certainty, [0.5, 0.75, 0.9]))]
++       END AS tier
++FROM `${PROJECT}.${DATASET}.deal_certainty_v1` c;
++
++-- gold: one row per deal, the tier it holds now and when it last changed (written by sql/deal_tiers_apply.sql — the scheduled MERGE —
++-- or by the webhook lane for one deal at a time; the lab notebook writes deal_tiers_lab, never this table)
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.deal_tiers` (
++  deal_id STRING NOT NULL, pipeline_id STRING, certainty_source STRING, certainty FLOAT64, bin_index INT64, tier STRING, is_closed BOOL,
++  previous_tier STRING, retired_at TIMESTAMP, first_tiered_at TIMESTAMP, last_changed_at TIMESTAMP, computed_at TIMESTAMP, orchestrator STRING)
++CLUSTER BY pipeline_id, tier;
++ALTER TABLE `${PROJECT}.${DATASET}.deal_tiers` ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP;   -- tier NULL + retired_at: certainty cleared or deal gone from the sync
++
++-- audit: one row per deal per run in which its tier or certainty changed (layer L13 of pass 1 applies here too)
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.deal_tiers_history` (
++  run_ts TIMESTAMP NOT NULL, deal_id STRING NOT NULL, pipeline_id STRING, certainty_source STRING, certainty FLOAT64, bin_index INT64,
++  tier STRING, previous_tier STRING, orchestrator STRING)
++PARTITION BY DATE(run_ts) CLUSTER BY pipeline_id, deal_id
++OPTIONS (partition_expiration_days = 730);
++
++-- what every surface compares: counts and amounts per pipeline and tier (live view) and the same over the gold table
++CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.deal_tiers_summary_v1` AS
++SELECT pipeline_id, tier, COUNT(*) AS deals, ROUND(SUM(amount_kusd), 1) AS amount_kusd, MIN(certainty) AS certainty_min, MAX(certainty) AS certainty_max
++FROM `${PROJECT}.${DATASET}.deal_tiers_v1` GROUP BY pipeline_id, tier;
+diff --git a/sql/deals_synced_v1.sql b/sql/deals_synced_v1.sql
+index 27ada3a..9f397c4 100644
+--- a/sql/deals_synced_v1.sql
++++ b/sql/deals_synced_v1.sql
+@@ -33,7 +33,10 @@ SELECT
+   SAFE_CAST(tpm__k_y AS FLOAT64)                                 AS tpm__k_y,
+   SAFE_CAST(services_value_2026 AS FLOAT64)                      AS services_value_2026,
+   SAFE_CAST(calculation___pipeline_2026__k__ AS FLOAT64)         AS calculation___pipeline_2026__k__,
+-  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes
++  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes,
++  SAFE_CAST(icalps_oppocertainty AS FLOAT64)                     AS icalps_oppocertainty,   -- Icalps users' certainty (pass 2, L2 tiers)
++  SAFE_CAST(hs_is_closed AS BOOL)                                AS is_closed,
++  SAFE_CAST(hs_is_closed_won AS BOOL)                            AS is_closed_won
+   -- the written-back properties (hot_score_v1 / hot_flag_v1) are NOT selected here: they exist in the synced table only after
+   -- bootstrap_property.sh and a later sync, and a view that names a missing column fails to create. The write-back compares
+   -- against writeback_log instead (sql/hot_deals_v1.sql).
+diff --git a/tests/test_deal_tiers.py b/tests/test_deal_tiers.py
+new file mode 100644
+index 0000000..8aaefe7
+--- /dev/null
++++ b/tests/test_deal_tiers.py
+@@ -0,0 +1,92 @@
++#!/usr/bin/env python3
++"""Pass 2 (L2 tiers): the constants, the SQL and the Python reference agree on edges, labels and binning semantics.
++
++    python3 tests/test_deal_tiers.py     or     python3 -m pytest tests -q
++
++numpy.digitize(x, edges) (right=False) == bisect.bisect_right(edges, x) == BigQuery RANGE_BUCKET(x, edges): the index of the
++first edge greater than x. The reference here is the bisect form so the test needs no numpy; the notebook uses numpy.digitize.
++"""
++from __future__ import annotations
++
++import bisect
++import json
++import re
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++C = json.loads((ROOT / "scoring" / "deal_tiers_v1.constants.json").read_text(encoding="utf-8"))
++EDGES, LABELS = C["edges"], C["labels"]
++SQL_VIEWS = (ROOT / "sql" / "deal_tiers_v1.sql").read_text(encoding="utf-8")
++SQL_APPLY = (ROOT / "sql" / "deal_tiers_apply.sql").read_text(encoding="utf-8")
++
++
++def tier_index(certainty):
++    """Reference binning: None stays None; otherwise bisect_right over the edges (== numpy.digitize == RANGE_BUCKET)."""
++    return None if certainty is None else bisect.bisect_right(EDGES, certainty)
++
++
++def tier_label(certainty, is_closed=False, is_closed_won=False):
++    if is_closed_won: return C["closed_labels"]["won"]
++    if is_closed: return C["closed_labels"]["lost"]
++    i = tier_index(certainty)
++    return None if i is None else LABELS[i]
++
++
++def test_constants_are_coherent():
++    assert EDGES == sorted(EDGES) and len(set(EDGES)) == len(EDGES), "edges must be strictly increasing"
++    assert len(LABELS) == len(EDGES) + 1, "one label per bucket: below the first edge, between edges, at or above the last"
++    assert all(0.0 < e < 1.0 for e in EDGES), "certainty is a fraction (HubSpot stores probabilities as 0-1)"
++    assert set(C["hubspot_property"]["options"]) == set(LABELS) | set(C["closed_labels"].values())
++
++
++def test_reference_binning_semantics():
++    cases = {0.0: 0, 0.1: 0, 0.49: 0, 0.5: 1, 0.6: 1, 0.7499: 1, 0.75: 2, 0.8: 2, 0.89: 2, 0.9: 3, 1.0: 3, None: None}
++    for x, expected in cases.items():
++        assert tier_index(x) == expected, (x, tier_index(x), expected)
++    assert tier_label(0.49) == "Tier4_pipeline" and tier_label(0.5) == "Tier3_opportunity"
++    assert tier_label(0.75) == "Tier2_opportunity" and tier_label(0.9) == "Tier1_opportunity" and tier_label(1.0) == "Tier1_opportunity"
++    assert tier_label(1.0, is_closed=True, is_closed_won=True) == "Closed_won" and tier_label(0.3, is_closed=True) == "Closed_lost"
++    assert tier_label(None) is None
++
++
++def test_sql_uses_the_same_edges_and_labels():
++    edges_sql = "[" + ", ".join(repr(e) for e in EDGES) + "]"
++    assert SQL_VIEWS.count(f"RANGE_BUCKET(certainty, {edges_sql})") == 2, "both the bin_index column and the label lookup use the constants' edges"
++    assert "[" + ", ".join(f"'{l}'" for l in LABELS) + "]" in SQL_VIEWS, "labels array in the constants' order (index = RANGE_BUCKET)"
++    for lab in C["closed_labels"].values():
++        assert f"'{lab}'" in SQL_VIEWS
++    assert "WHEN pipeline_id = '766126206' THEN icalps_oppocertainty ELSE stage_probability END" in SQL_VIEWS
++    assert "WHEN certainty IS NULL THEN NULL" in SQL_VIEWS
++    assert "WHEN is_closed IS NULL OR is_closed_won IS NULL THEN NULL" in SQL_VIEWS, "an unknown closed state is never tiered (closed-won at 1.0 would read Tier1)"
++    assert "retired_at TIMESTAMP" in SQL_VIEWS
++
++
++def test_apply_script_is_idempotent_and_shadow_safe():
++    assert "MERGE `${PROJECT}.${DATASET}.deal_tiers` t" in SQL_APPLY and "ON t.deal_id = b.deal_id" in SQL_APPLY
++    assert "IS DISTINCT FROM" in SQL_APPLY, "a changed tier or certainty is the only thing that writes previous_tier / history"
++    assert "BEGIN TRANSACTION" in SQL_APPLY and "COMMIT TRANSACTION" in SQL_APPLY
++    for name in re.findall(r"DECLARE (\w+)", SQL_APPLY):
++        assert name.startswith("v_"), f"{name}: variables carry v_ so no column can shadow them"
++    assert "WHERE last_changed_at = v_run_ts" in SQL_APPLY, "history gets the rows of this run only"
++    second = re.search(r"WHEN MATCHED THEN\s+UPDATE SET (.*?)\n", SQL_APPLY).group(1)
++    assert second.strip() == "computed_at = v_run_ts", f"an unchanged deal must touch computed_at only, else history receives every deal: {second!r}"
++    assert "TIMESTAMP_TRUNC(@run_time, SECOND)" in SQL_APPLY, "pass-1 convention: @run_time keys the run, so a replayed run_time rewrites the same slice"
++    assert "INTERVAL 36 HOUR" in SQL_APPLY and "RAISE USING MESSAGE" in SQL_APPLY, "freshness guard as in new_deals_weekly.sql"
++    assert "v_batch_rows < v_gold_rows / 2" in SQL_APPLY, "row-count guard: a half-empty transfer must not retire the gold table"
++    assert "WHEN NOT MATCHED AND b.tier IS NOT NULL THEN" in SQL_APPLY, "never-tiered deals are not inserted"
++    assert "WHEN NOT MATCHED BY SOURCE AND t.tier IS NOT NULL THEN" in SQL_APPLY and "retired_at = v_run_ts" in SQL_APPLY, "deals gone from the sync are retired with a history row"
++    assert "QUALIFY ROW_NUMBER() OVER (PARTITION BY deal_id" in SQL_APPLY, "one source row per deal even if the transfer appended"
++
++
++def test_adapter_view_and_apply_order_carry_the_new_columns():
++    adapter = (ROOT / "sql" / "deals_synced_v1.sql").read_text(encoding="utf-8")
++    for col in ("icalps_oppocertainty", "AS is_closed,", "AS is_closed_won"):
++        assert col in adapter, col
++    apply = (ROOT / "sql" / "apply.sh").read_text(encoding="utf-8")
++    assert apply.index("deals_synced_v1.sql") < apply.index("deal_tiers_v1.sql"), "views before the tier views that read them"
++
++
++if __name__ == "__main__":
++    for t in (test_constants_are_coherent, test_reference_binning_semantics, test_sql_uses_the_same_edges_and_labels, test_apply_script_is_idempotent_and_shadow_safe, test_adapter_view_and_apply_order_carry_the_new_columns):
++        t()
++    print("deal tiers OK")
+diff --git a/tests/test_notebook.py b/tests/test_notebook.py
+index 99e2c49..e80db82 100644
+--- a/tests/test_notebook.py
++++ b/tests/test_notebook.py
+@@ -10,33 +10,37 @@ import re
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+-NB = ROOT / "notebooks" / "cloudbq_deploy_and_witness.ipynb"
++NB = ROOT / "notebooks" / "cloudbq_deploy_and_witness.ipynb"            # the Pass-1 sequence notebook (step checks below)
++NOTEBOOKS = sorted((ROOT / "notebooks").glob("*.ipynb"))                   # every notebook: valid, compilable, output-free
+ STEPS = ["check-env", "enable-apis", "iam", "tables", "secret", "deploy", "invoker", "dry", "run SEALSQ", "run ICALPS", "probe", "enable", "status"]
+ 
+ 
+-def _nb():
+-    return json.loads(NB.read_text(encoding="utf-8"))
++def _nb(path=NB):
++    return json.loads(path.read_text(encoding="utf-8"))
+ 
+ 
+ def _code(cell):
+     return "".join(cell["source"])
+ 
+ 
+-def test_notebook_is_valid():
+-    nb = _nb()
+-    assert nb["nbformat"] == 4 and nb["metadata"]["kernelspec"]["language"] == "python"
+-    try:
+-        import nbformat
+-    except ImportError:
+-        return
+-    nbformat.validate(nbformat.reads(NB.read_text(encoding="utf-8"), as_version=4))
++def test_notebooks_are_valid():
++    assert NB in NOTEBOOKS
++    for path in NOTEBOOKS:
++        nb = _nb(path)
++        assert nb["nbformat"] == 4 and nb["metadata"]["kernelspec"]["language"] == "python", path.name
++        try:
++            import nbformat
++        except ImportError:
++            continue
++        nbformat.validate(nbformat.reads(path.read_text(encoding="utf-8"), as_version=4))
+ 
+ 
+ def test_code_cells_compile():
+-    for i, c in enumerate(_nb()["cells"]):
+-        if c["cell_type"] == "code":
+-            src = "\n".join(l for l in _code(c).splitlines() if not l.lstrip().startswith(("!", "%")))   # IPython magics stripped
+-            compile(src, f"{NB.name}#cell{i}", "exec")
++    for path in NOTEBOOKS:
++        for i, c in enumerate(_nb(path)["cells"]):
++            if c["cell_type"] == "code":
++                src = "\n".join(l for l in _code(c).splitlines() if not l.lstrip().startswith(("!", "%")))   # IPython magics stripped
++                compile(src, f"{path.name}#cell{i}", "exec")
+ 
+ 
+ def test_every_deploy_step_is_mirrored_in_order():
+@@ -56,14 +60,14 @@ def test_enable_is_flag_guarded_and_secret_is_prompted():
+ 
+ 
+ def test_no_outputs_and_no_secrets_committed():
+-    for c in _nb()["cells"]:
+-        if c["cell_type"] == "code":
+-            assert c["outputs"] == [] and c["execution_count"] is None, "commit the notebook without outputs"
+-    text = NB.read_text(encoding="utf-8")
+-    assert not re.search(r"pat-(na|eu)\d-[0-9a-f-]{20,}", text), "HubSpot token pattern in the notebook"
++    for path in NOTEBOOKS:
++        for c in _nb(path)["cells"]:
++            if c["cell_type"] == "code":
++                assert c["outputs"] == [] and c["execution_count"] is None, f"{path.name}: commit the notebook without outputs"
++        assert not re.search(r"pat-(na|eu)\d-[0-9a-f-]{20,}", path.read_text(encoding="utf-8")), f"{path.name}: HubSpot token pattern"
+ 
+ 
+ if __name__ == "__main__":
+-    for t in (test_notebook_is_valid, test_code_cells_compile, test_every_deploy_step_is_mirrored_in_order, test_enable_is_flag_guarded_and_secret_is_prompted, test_no_outputs_and_no_secrets_committed):
++    for t in (test_notebooks_are_valid, test_code_cells_compile, test_every_deploy_step_is_mirrored_in_order, test_enable_is_flag_guarded_and_secret_is_prompted, test_no_outputs_and_no_secrets_committed):
+         t()
+     print("notebook OK")
