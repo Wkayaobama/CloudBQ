@@ -1,6 +1,6 @@
 # Diff ledger
 
-One patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand.
+One patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass), nor are commits carrying a `Regenerated-by:` trailer (a bot's regenerated files are not a suggestion; see `.claude/skills/regen-workflow`). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.
 
 | # | commit | date | author | aider | recipe | files | +/- | patch |
 |---|---|---|---|---|---|---|---|---|
@@ -30,3 +30,4 @@ One patch per commit; read any suggestion with `git show <sha>` or open the `.pa
 | 24 | `fe9efe5` fe9efe529dd3557f763b3c395c1538efdf962c82 | 2026-10-16 | Claude | no | — | 11 | +644/−30 | [0024-fe9efe5-pass-2-l2-likelihood-tiers-constants-bigquery-vi.patch](0024-fe9efe5-pass-2-l2-likelihood-tiers-constants-bigquery-vi.patch) |
 | 25 | `de6f286` de6f286fa88eb1122dd17f1ad7253a5d5e4b5d66 | 2026-10-16 | Claude | no | — | 8 | +881/−10 | [0025-de6f286-docs-pass-2-design-evidence-pass2-l2-tiers-md-pa.patch](0025-de6f286-docs-pass-2-design-evidence-pass2-l2-tiers-md-pa.patch) |
 | 26 | `41a9634` 41a96343c93f50b0a37ac7fb26aa4583b9681fb5 | 2026-10-16 | Claude | no | — | 15 | +1223/−11 | [0026-41a9634-tooling-regen-workflow-skill-one-command-writes.patch](0026-41a9634-tooling-regen-workflow-skill-one-command-writes.patch) |
+| 27 | `610d41e` 610d41e5746cf788c5539a1aad64a892fad9300c | 2026-10-16 | Claude | no | — | 10 | +124/−29 | [0027-610d41e-regen-workflow-review-follow-ups-pyyaml-optional.patch](0027-610d41e-regen-workflow-review-follow-ups-pyyaml-optional.patch) |
