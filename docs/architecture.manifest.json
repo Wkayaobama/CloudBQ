@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "813A07D4 754E:F72B",
+ "serial": "BA640B73 4CE9:09A3",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,19 +44,19 @@
  ],
  "counts": {
   "dirs": 34,
-  "files": 106,
-  "annotated": 80,
+  "files": 115,
+  "annotated": 88,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 71,
+   "new": 79,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 46,
-   "B": 51,
-   "C": 50
+   "A": 51,
+   "B": 56,
+   "C": 58
   }
  },
  "lanes": {
@@ -177,28 +177,36 @@
     "cloud_function_new_deals/main.py",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "scoring",
+    "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
     "scoring/README.md",
     "tests/hot_score_vectors.json",
+    "tests/test_deal_tiers.py",
     "tests/test_hot_score.py"
    ],
    "B": [
     "scoring",
+    "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
     "scoring/hot_score_v1.mjs",
     "scoring/README.md",
     "tests/hot_score_vectors.json",
+    "tests/test_deal_tiers.py",
     "tests/test_hot_score.py"
    ],
    "C": [
+    "notebooks/l2_deal_tiers.ipynb",
     "scoring",
+    "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
     "scoring/hot_score_v1.mjs",
     "scoring/hot_score_v1.sql",
     "scoring/README.md",
+    "sql/deal_tiers_v1.sql",
     "sql/hot_deals_v1.sql",
     "tests/hot_score_vectors.json",
     "tests/hot_score_vectors.sql",
+    "tests/test_deal_tiers.py",
     "tests/test_hot_score.py",
     "tests/test_hot_score_sql_duckdb.py"
    ]
@@ -232,6 +240,8 @@
    "C": [
     "cloud_function_new_deals/bigquery_schema.sql",
     "sql",
+    "sql/deal_tiers_apply.sql",
+    "sql/deal_tiers_v1.sql",
     "sql/new_deals_weekly.sql"
    ]
   },
@@ -274,6 +284,7 @@
     "cloud_function_new_deals/deploy.sh",
     "cloud_function_new_deals/main.py",
     "docs/PASS1_SEQUENCE.md",
+    "docs/PASS2_L2_TIERS.md",
     "docs/RUNBOOK_CLOUD_SHELL.md",
     "notebooks",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
@@ -284,11 +295,14 @@
    "B": [
     ".github/workflows/ci.yml",
     "docs/PASS1_SEQUENCE.md",
+    "docs/PASS2_L2_TIERS.md",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
     ".github/workflows/ci.yml",
     "docs/PASS1_SEQUENCE.md",
+    "docs/PASS2_L2_TIERS.md",
+    "notebooks/l2_deal_tiers.ipynb",
     "sql/scheduled_query.sh"
    ]
   },
@@ -308,6 +322,8 @@
     "docs/EXECUTION_SURFACES.md",
     "docs/EXECUTION_SURFACES.xlsx",
     "docs/execution_surfaces.yaml",
+    "docs/EXECUTION_SURFACES_L2.xlsx",
+    "docs/execution_surfaces_l2.yaml",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "sql/audit_tables.sql",
     "tests/test_docs_consistency.py"
@@ -320,6 +336,8 @@
     "docs/EXECUTION_SURFACES.md",
     "docs/EXECUTION_SURFACES.xlsx",
     "docs/execution_surfaces.yaml",
+    "docs/EXECUTION_SURFACES_L2.xlsx",
+    "docs/execution_surfaces_l2.yaml",
     "sql/audit_tables.sql",
     "tests/test_docs_consistency.py"
    ],
@@ -330,7 +348,11 @@
     "docs/EXECUTION_SURFACES.md",
     "docs/EXECUTION_SURFACES.xlsx",
     "docs/execution_surfaces.yaml",
+    "docs/EXECUTION_SURFACES_L2.xlsx",
+    "docs/execution_surfaces_l2.yaml",
     "sql/audit_tables.sql",
+    "sql/deal_tiers_apply.sql",
+    "sql/deal_tiers_v1.sql",
     "sql/new_deals_weekly.sql",
     "tests/test_docs_consistency.py",
     "writeback/index.mjs"
@@ -355,6 +377,7 @@
     "deploy/n8n/service.yaml"
    ],
    "C": [
+    "sql/deal_tiers_apply.sql",
     "writeback/deploy_job.sh",
     "writeback/index.mjs"
    ]
@@ -377,7 +400,8 @@
    "C": [
     "docs/architecture.manifest.json",
     "docs/architecture_tree.html",
-    "docs/ARCHITECTURE_TREE.txt"
+    "docs/ARCHITECTURE_TREE.txt",
+    "notebooks/l2_deal_tiers.ipynb"
    ]
   },
   "L17": {
@@ -836,6 +860,34 @@
    "kind": "file",
    "exists": true
   },
+  "docs/EXECUTION_SURFACES_L2.xlsx": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L13",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "The pass-2 lane workbook built from the YAML (verify OK): 15 layers M0–M14 × N/Q/W, 12 steps, T01–T12, 4 equality checks; steps 1 and 7 are the Parallel rows, the arithmetic layers read Conditional until W is written",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
+   "kind": "file",
+   "exists": true
+  },
+  "docs/execution_surfaces_l2.yaml": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L13",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "pass-sequence spec of pass 2: layers M0–M14 × surfaces N (notebook) / Q (BigQuery scheduled MERGE) / W (webhook CDC), 12 steps, T01–T10, 4 equality checks",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
+   "kind": "file",
+   "exists": true
+  },
   "docs/PASS1_SEQUENCE.md": {
    "scenarios": [
     "A",
@@ -846,6 +898,20 @@
    "status": "new",
    "role": "The recipe: deploy.sh steps in order with look commands, the dry-run gate, the branch points (delivery, write-back)",
    "parity": "Conditional",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
+   "kind": "file",
+   "exists": true
+  },
+  "docs/PASS2_L2_TIERS.md": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "Pass 2 design + evidence: what the CRM holds (2026-10-16), the binning spec, the three execution surfaces, the dynamic options (scheduled MERGE, materialized view, webhook CDC), the decisions pending, the sequence",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
    "kind": "file",
    "exists": true
@@ -908,6 +974,23 @@
    "kind": "file",
    "exists": true
   },
+  "notebooks/l2_deal_tiers.ipynb": {
+   "scenarios": [
+    "C"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "Pass 2 lane N (the lab, Vertex AI Workbench): CRM snapshot via main.HubSpot, fill rates, distributions, numpy.digitize tiers, calibration by stage-entry dates, RANGE_BUCKET parity per deal on deal_tiers_lab, equality with the gold table, property definition + StackSync mapping",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+   "layers_list": [
+    "L11",
+    "L5",
+    "L16"
+   ],
+   "kind": "file",
+   "exists": true
+  },
   "notebooks/README.md": {
    "scenarios": [
     "A"
@@ -932,6 +1015,20 @@
    "role": "One hot score, three runtimes, pinned by shared vectors",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
    "kind": "dir",
+   "exists": true
+  },
+  "scoring/deal_tiers_v1.constants.json": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L5",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 2 (L2 tiers): edges 0.5/0.75/0.9 as fractions, labels, closed labels, certainty source per pipeline, the deal_tier_v1 property definition, the unusable properties",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+   "kind": "file",
    "exists": true
   },
   "scoring/hot_score_v1.constants.json": {
@@ -1038,6 +1135,40 @@
    "kind": "file",
    "exists": true
   },
+  "sql/deal_tiers_apply.sql": {
+   "scenarios": [
+    "C"
+   ],
+   "layer": "L7",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 2 scheduled MERGE: deal_tiers_v1 → deal_tiers (IS DISTINCT FROM, previous_tier, last_changed_at) + history rows for this run's changes; idempotent",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+   "layers_list": [
+    "L7",
+    "L13",
+    "L15"
+   ],
+   "kind": "file",
+   "exists": true
+  },
+  "sql/deal_tiers_v1.sql": {
+   "scenarios": [
+    "C"
+   ],
+   "layer": "L5",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 2 lane Q: deal_certainty_v1 (source per pipeline) → deal_tiers_v1 (RANGE_BUCKET ≡ digitize, labels) → deal_tiers gold + deal_tiers_history + deal_tiers_summary_v1",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+   "layers_list": [
+    "L5",
+    "L7",
+    "L13"
+   ],
+   "kind": "file",
+   "exists": true
+  },
   "sql/hot_deals_v1.sql": {
    "scenarios": [
     "C"
@@ -1140,6 +1271,20 @@
    "parity": "Parallel",
    "role": "bq query that proves the UDF on the same vectors (ok = TRUE per row)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
+   "kind": "file",
+   "exists": true
+  },
+  "tests/test_deal_tiers.py": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L5",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Constants ↔ SQL equality (edges, labels, source CASE, NULL branch), bisect reference of digitize/RANGE_BUCKET semantics, MERGE idempotency and v_ variables, adapter columns and apply order",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
    "kind": "file",
    "exists": true
   },
@@ -1608,6 +1753,12 @@
               "name": "c_bigquery_compute.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
+              "exists": true
+             },
+             {
+              "name": "c_l2_deal_tiers.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
               "exists": true
              },
              {
@@ -2468,6 +2619,42 @@
       }
      },
      {
+      "name": "EXECUTION_SURFACES_L2.xlsx",
+      "kind": "file",
+      "path": "docs/EXECUTION_SURFACES_L2.xlsx",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L13",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "The pass-2 lane workbook built from the YAML (verify OK): 15 layers M0–M14 × N/Q/W, 12 steps, T01–T12, 4 equality checks; steps 1 and 7 are the Parallel rows, the arithmetic layers read Conditional until W is written",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+      }
+     },
+     {
+      "name": "execution_surfaces_l2.yaml",
+      "kind": "file",
+      "path": "docs/execution_surfaces_l2.yaml",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L13",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "pass-sequence spec of pass 2: layers M0–M14 × surfaces N (notebook) / Q (BigQuery scheduled MERGE) / W (webhook CDC), 12 steps, T01–T10, 4 equality checks",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+      }
+     },
+     {
       "name": "PASS1_SEQUENCE.md",
       "kind": "file",
       "path": "docs/PASS1_SEQUENCE.md",
@@ -2482,6 +2669,24 @@
        "status": "new",
        "role": "The recipe: deploy.sh steps in order with look commands, the dry-run gate, the branch points (delivery, write-back)",
        "parity": "Conditional",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
+      }
+     },
+     {
+      "name": "PASS2_L2_TIERS.md",
+      "kind": "file",
+      "path": "docs/PASS2_L2_TIERS.md",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "Pass 2 design + evidence: what the CRM holds (2026-10-16), the binning spec, the three execution surfaces, the dynamic options (scheduled MERGE, materialized view, webhook CDC), the decisions pending, the sequence",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md"
       }
      },
@@ -2552,6 +2757,27 @@
       }
      },
      {
+      "name": "l2_deal_tiers.ipynb",
+      "kind": "file",
+      "path": "notebooks/l2_deal_tiers.ipynb",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "C"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "Pass 2 lane N (the lab, Vertex AI Workbench): CRM snapshot via main.HubSpot, fill rates, distributions, numpy.digitize tiers, calibration by stage-entry dates, RANGE_BUCKET parity per deal on deal_tiers_lab, equality with the gold table, property definition + StackSync mapping",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+       "layers_list": [
+        "L11",
+        "L5",
+        "L16"
+       ]
+      }
+     },
+     {
       "name": "README.md",
       "kind": "file",
       "path": "notebooks/README.md",
@@ -2585,6 +2811,24 @@
     "path": "scoring",
     "exists": true,
     "children": [
+     {
+      "name": "deal_tiers_v1.constants.json",
+      "kind": "file",
+      "path": "scoring/deal_tiers_v1.constants.json",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L5",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 2 (L2 tiers): edges 0.5/0.75/0.9 as fractions, labels, closed labels, certainty source per pipeline, the deal_tier_v1 property definition, the unusable properties",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md"
+      }
+     },
      {
       "name": "hot_score_v1.constants.json",
       "kind": "file",
@@ -2723,6 +2967,48 @@
        "role": "Adapter views over the HubSpot → BigQuery sync (SAFE_CAST; names from .env) + pipeline_labels table/views",
        "notes": "the sync is scheduled, never real-time: lookback + 36 h freshness guard replace A's exact createdate window",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md"
+      }
+     },
+     {
+      "name": "deal_tiers_apply.sql",
+      "kind": "file",
+      "path": "sql/deal_tiers_apply.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "C"
+       ],
+       "layer": "L7",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 2 scheduled MERGE: deal_tiers_v1 → deal_tiers (IS DISTINCT FROM, previous_tier, last_changed_at) + history rows for this run's changes; idempotent",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+       "layers_list": [
+        "L7",
+        "L13",
+        "L15"
+       ]
+      }
+     },
+     {
+      "name": "deal_tiers_v1.sql",
+      "kind": "file",
+      "path": "sql/deal_tiers_v1.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "C"
+       ],
+       "layer": "L5",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 2 lane Q: deal_certainty_v1 (source per pipeline) → deal_tiers_v1 (RANGE_BUCKET ≡ digitize, labels) → deal_tiers gold + deal_tiers_history + deal_tiers_summary_v1",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+       "layers_list": [
+        "L5",
+        "L7",
+        "L13"
+       ]
       }
      },
      {
@@ -2874,6 +3160,24 @@
        "parity": "Parallel",
        "role": "bq query that proves the UDF on the same vectors (ok = TRUE per row)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md"
+      }
+     },
+     {
+      "name": "test_deal_tiers.py",
+      "kind": "file",
+      "path": "tests/test_deal_tiers.py",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L5",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Constants ↔ SQL equality (edges, labels, source CASE, NULL branch), bisect reference of digitize/RANGE_BUCKET semantics, MERGE idempotency and v_ variables, adapter columns and apply order",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md"
       }
      },
      {

@@ -24,6 +24,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 5. `docs/diffs/INDEX.md` — one patch per commit; every suggestion is a `git diff`.
 6. `notebooks/cloudbq_deploy_and_witness.ipynb` — the same sequence as a notebook for a Vertex AI Workbench instance in the
    project, plus the SQL (schema, `hot_score_v1`, vectors, audit tables) executed and witnessed from Python; `notebooks/README.md`.
+7. **Pass 2 (L2 likelihood tiers)** — `docs/PASS2_L2_TIERS.md` (evidence from the CRM, binning spec, lanes N/Q/W, dynamic storage),
+   `docs/EXECUTION_SURFACES_L2.xlsx`, `scoring/deal_tiers_v1.constants.json`, `sql/deal_tiers_v1.sql` + `sql/deal_tiers_apply.sql`, `notebooks/l2_deal_tiers.ipynb`.
 
 ## Tooling (reusable, project-agnostic — also installed in IC-DBT-BQ)
 
