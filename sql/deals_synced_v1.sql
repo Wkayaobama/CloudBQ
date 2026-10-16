@@ -33,7 +33,10 @@ SELECT
   SAFE_CAST(tpm__k_y AS FLOAT64)                                 AS tpm__k_y,
   SAFE_CAST(services_value_2026 AS FLOAT64)                      AS services_value_2026,
   SAFE_CAST(calculation___pipeline_2026__k__ AS FLOAT64)         AS calculation___pipeline_2026__k__,
-  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes
+  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes,
+  SAFE_CAST(icalps_oppocertainty AS FLOAT64)                     AS icalps_oppocertainty,   -- Icalps users' certainty (pass 2, L2 tiers)
+  SAFE_CAST(hs_is_closed AS BOOL)                                AS is_closed,
+  SAFE_CAST(hs_is_closed_won AS BOOL)                            AS is_closed_won
   -- the written-back properties (hot_score_v1 / hot_flag_v1) are NOT selected here: they exist in the synced table only after
   -- bootstrap_property.sh and a later sync, and a view that names a missing column fails to create. The write-back compares
   -- against writeback_log instead (sql/hot_deals_v1.sql).

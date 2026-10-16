@@ -10,33 +10,37 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NB = ROOT / "notebooks" / "cloudbq_deploy_and_witness.ipynb"
+NB = ROOT / "notebooks" / "cloudbq_deploy_and_witness.ipynb"            # the Pass-1 sequence notebook (step checks below)
+NOTEBOOKS = sorted((ROOT / "notebooks").glob("*.ipynb"))                   # every notebook: valid, compilable, output-free
 STEPS = ["check-env", "enable-apis", "iam", "tables", "secret", "deploy", "invoker", "dry", "run SEALSQ", "run ICALPS", "probe", "enable", "status"]
 
 
-def _nb():
-    return json.loads(NB.read_text(encoding="utf-8"))
+def _nb(path=NB):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _code(cell):
     return "".join(cell["source"])
 
 
-def test_notebook_is_valid():
-    nb = _nb()
-    assert nb["nbformat"] == 4 and nb["metadata"]["kernelspec"]["language"] == "python"
-    try:
-        import nbformat
-    except ImportError:
-        return
-    nbformat.validate(nbformat.reads(NB.read_text(encoding="utf-8"), as_version=4))
+def test_notebooks_are_valid():
+    assert NB in NOTEBOOKS
+    for path in NOTEBOOKS:
+        nb = _nb(path)
+        assert nb["nbformat"] == 4 and nb["metadata"]["kernelspec"]["language"] == "python", path.name
+        try:
+            import nbformat
+        except ImportError:
+            continue
+        nbformat.validate(nbformat.reads(path.read_text(encoding="utf-8"), as_version=4))
 
 
 def test_code_cells_compile():
-    for i, c in enumerate(_nb()["cells"]):
-        if c["cell_type"] == "code":
-            src = "\n".join(l for l in _code(c).splitlines() if not l.lstrip().startswith(("!", "%")))   # IPython magics stripped
-            compile(src, f"{NB.name}#cell{i}", "exec")
+    for path in NOTEBOOKS:
+        for i, c in enumerate(_nb(path)["cells"]):
+            if c["cell_type"] == "code":
+                src = "\n".join(l for l in _code(c).splitlines() if not l.lstrip().startswith(("!", "%")))   # IPython magics stripped
+                compile(src, f"{path.name}#cell{i}", "exec")
 
 
 def test_every_deploy_step_is_mirrored_in_order():
@@ -56,14 +60,14 @@ def test_enable_is_flag_guarded_and_secret_is_prompted():
 
 
 def test_no_outputs_and_no_secrets_committed():
-    for c in _nb()["cells"]:
-        if c["cell_type"] == "code":
-            assert c["outputs"] == [] and c["execution_count"] is None, "commit the notebook without outputs"
-    text = NB.read_text(encoding="utf-8")
-    assert not re.search(r"pat-(na|eu)\d-[0-9a-f-]{20,}", text), "HubSpot token pattern in the notebook"
+    for path in NOTEBOOKS:
+        for c in _nb(path)["cells"]:
+            if c["cell_type"] == "code":
+                assert c["outputs"] == [] and c["execution_count"] is None, f"{path.name}: commit the notebook without outputs"
+        assert not re.search(r"pat-(na|eu)\d-[0-9a-f-]{20,}", path.read_text(encoding="utf-8")), f"{path.name}: HubSpot token pattern"
 
 
 if __name__ == "__main__":
-    for t in (test_notebook_is_valid, test_code_cells_compile, test_every_deploy_step_is_mirrored_in_order, test_enable_is_flag_guarded_and_secret_is_prompted, test_no_outputs_and_no_secrets_committed):
+    for t in (test_notebooks_are_valid, test_code_cells_compile, test_every_deploy_step_is_mirrored_in_order, test_enable_is_flag_guarded_and_secret_is_prompted, test_no_outputs_and_no_secrets_committed):
         t()
     print("notebook OK")

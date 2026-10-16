@@ -14,8 +14,8 @@ for v in PROJECT SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE; do [[ "${!v}" 
 render() { sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${BQ_LOCATION}/$BQ_LOCATION/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" \
                -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g" -e "s/\${SYNC_OWNERS_TABLE}/$SYNC_OWNERS_TABLE/g" "$1"; }
 
-# order matters: tables (A's schema + audit) → UDF → adapter views → scoring views
-FILES=("$ROOT/cloud_function_new_deals/bigquery_schema.sql" "$HERE/audit_tables.sql" "$ROOT/scoring/hot_score_v1.sql" "$HERE/deals_synced_v1.sql" "$HERE/hot_deals_v1.sql")
+# order matters: tables (A's schema + audit) → UDF → adapter views → scoring views → pass-2 tier views + gold tables
+FILES=("$ROOT/cloud_function_new_deals/bigquery_schema.sql" "$HERE/audit_tables.sql" "$ROOT/scoring/hot_score_v1.sql" "$HERE/deals_synced_v1.sql" "$HERE/hot_deals_v1.sql" "$HERE/deal_tiers_v1.sql")
 for f in "${FILES[@]}"; do
   sql=$(render "$f")
   if grep -q '\${' <<<"$sql"; then echo "apply.sh: unrendered placeholder in $f:" >&2; grep -n '\${' <<<"$sql" >&2; exit 2; fi

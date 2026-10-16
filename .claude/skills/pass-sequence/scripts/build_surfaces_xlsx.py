@@ -78,6 +78,10 @@ def _body(ws, row, values, parity_col=None):
 def build(spec: dict) -> openpyxl.Workbook:
     s = {k: v for k, v in spec.items()}
     surf = s["surfaces"]
+    keys = list(surf.keys())                      # the three surface ids: A/B/C in the mr-load convention, N/Q/W or any other triple elsewhere
+    if len(keys) != 3:
+        raise SystemExit(f"build_surfaces_xlsx: exactly three surfaces are expected (the sheets have three surface columns), got {keys}")
+    k1, k2, k3 = keys; rest = "".join(keys[1:])     # equality checks: first surface vs the other two ("BC", "QW", …)
     wb = openpyxl.Workbook()
 
     # ---- Overview
@@ -105,17 +109,17 @@ def build(spec: dict) -> openpyxl.Workbook:
 
     # ---- Layers
     ly = wb.create_sheet("Layers"); _widths(ly, WIDTHS["Layers"])
-    _header(ly, 1, ["#", "Layer", surf["A"], surf["B"], surf["C"], "Parity", "Where it diverges", "Remediation", "Verified how"])
+    _header(ly, 1, ["#", "Layer", surf[k1], surf[k2], surf[k3], "Parity", "Where it diverges", "Remediation", "Verified how"])
     for i, L in enumerate(s["layers"], start=2):
-        _body(ly, i, [L["id"], L["layer"], L["A"], L["B"], L["C"], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
+        _body(ly, i, [L["id"], L["layer"], L[k1], L[k2], L[k3], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
     ly.freeze_panes = "A2"
 
     # ---- Pipeline steps
     ps = wb.create_sheet("Pipeline steps"); _widths(ps, WIDTHS["Pipeline steps"])
-    _header(ps, 1, ["#", "Step", "Gate", f"{surf['A']} — cell", f"{surf['B']} — command", f"{surf['C']} — command",
+    _header(ps, 1, ["#", "Step", "Gate", f"{surf[k1]} — cell", f"{surf[k2]} — command", f"{surf[k3]} — command",
                     "Parity", "Identical artefact to compare", "Notes"])
     for i, st in enumerate(s["steps"], start=2):
-        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st["A"], st["B"], st["C"], st["parity"],
+        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st[k1], st[k2], st[k3], st["parity"],
                       st.get("artefact", ""), st.get("notes", "")], parity_col=7)
     ps.freeze_panes = "A2"
 
@@ -128,9 +132,9 @@ def build(spec: dict) -> openpyxl.Workbook:
 
     # ---- Equality checks
     eq = wb.create_sheet("Equality checks"); _widths(eq, WIDTHS["Equality checks"])
-    _header(eq, 1, ["Stage", "What to compare", f"{surf['A']} — cell", f"{surf['B']} / {surf['C']} — command", "Expected"])
+    _header(eq, 1, ["Stage", "What to compare", f"{surf[k1]} — cell", f"{surf[k2]} / {surf[k3]} — command", "Expected"])
     for i, E in enumerate(s["equality_checks"], start=2):
-        _body(eq, i, [E["stage"], E["compare"], E["A"], E["BC"], E["expected"]])
+        _body(eq, i, [E["stage"], E["compare"], E[k1], E.get(rest, E.get("BC", "")), E["expected"]])
     eq.freeze_panes = "A2"
 
     wb.calculation.fullCalcOnLoad = True

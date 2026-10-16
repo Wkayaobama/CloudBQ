@@ -58,3 +58,13 @@ runbook order, `enable` flag-guarded, the token prompted, and no outputs committ
 a real kernel in a clone without Google credentials; every cell that needs none ran (repository, settings, identity, `DRYRUN=1 all`,
 `check-env`, the Python scorer), and every other cell stopped at the credential boundary, as intended. The SQL text of the witness
 cells was reviewed against the BigQuery `INFORMATION_SCHEMA` and function signatures; it has not yet run against a project.
+
+## `l2_deal_tiers.ipynb` — pass 2, the lab for the L2 likelihood tiers
+
+Lane N of `docs/PASS2_L2_TIERS.md`. It installs the function's requirements into the kernel, takes a snapshot of every deal through the
+function's `HubSpot` client (token from Secret Manager `hubspot-token` or a masked prompt), measures fill rates and distributions of the
+certainty candidates, bins with `numpy.digitize` on the edges of `scoring/deal_tiers_v1.constants.json`, calibrates the bins against the
+stage-entry dates (`hs_v2_date_entered_<stage>`, with each stage's configured probability), loads the snapshot into `deal_tiers_lab` and
+proves per deal that BigQuery's `RANGE_BUCKET` returns the same bin, compares the lab with the gold table when it exists, and prints the
+`deal_tier_v1` property definition and the StackSync mapping rows. It never writes the gold table `deal_tiers`; that is the scheduled
+MERGE `sql/deal_tiers_apply.sql` (lane Q). Same identity notes as above.
