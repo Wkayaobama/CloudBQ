@@ -45,7 +45,7 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py
 for f in cloud_function_new_deals/deploy.sh sql/*.sh writeback/*.sh deploy/n8n/*.sh; do bash -n "$f"; done
 node --check writeback/index.mjs && python3 workflows/src/build_workflow.py --check
-python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
+python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify   # to /tmp: rebuild the committed workbook only when the YAML changed (UNIVERSAL_WORKFLOW.md §4.4)
 python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
 python3 .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
 python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check

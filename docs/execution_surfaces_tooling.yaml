@@ -1,7 +1,7 @@
 title: Universal workflow — the tooling's three execution surfaces (developer shell · CI check · bot commit)
 verdict: |
-  Verdict (2026-10-16, branch claude/cloud-run-bigquery-pipeline-e94ziy at d18a95f, 42 commits since 2026-10-05): the five reusable
-  skills — aider-scaffold with its diff ledger, tree-f-visualizer, pass-sequence, regen-workflow — ran on every building block of
+  Verdict (2026-10-16, branch claude/cloud-run-bigquery-pipeline-e94ziy at d18a95f, 42 commits since 2026-10-05): the four reusable
+  skills (five tools, counting the diff ledger inside aider-scaffold) — aider-scaffold, tree-f-visualizer, pass-sequence, regen-workflow — ran on every building block of
   CloudBQ and were installed unchanged in IC-DBT-BQ. They execute on three surfaces. D, the developer's shell on a clone, is the only
   surface that creates: it writes the recipe, applies the block (aider when an LLM key is present, by hand otherwise — in this project
   aider never answered, 17 commits carry "Scaffolded-by: hand (no LLM key)"), verifies, commits with trailers, appends the ledger,
@@ -52,7 +52,7 @@ layers:
     parity: Conditional
     diverges: The developer may be ahead of the pushed commit; C and B always run what was pushed.
     remediation: 'Push before relying on CI; the fresh-clone replay (step 10) runs the suite on exactly what will be pushed.'
-    verified: 'IC-DBT-BQ carries the four skill folders byte-identical to CloudBQ (reusability probe #2, commits a96fae0, 4f48d42, 250dc6d)'
+    verified: 'IC-DBT-BQ (250dc6d) carries the four skills'' pages, scripts, references and config assets byte-identical to CloudBQ d18a95f; only aider-scaffold/assets/recipes/ differs, by design (ports be0b280, a96fae0, 041a528, 541127d)'
   - id: U1
     layer: Conventions and recipe
     D: 'CONVENTIONS.md (rules every block follows); one recipe per block in .claude/skills/aider-scaffold/assets/recipes/<block>.md: purpose, files, contract, what not to do'
@@ -61,7 +61,7 @@ layers:
     parity: Divergent
     diverges: Only the developer surface reads the recipe.
     remediation: 'The recipe path travels: "Recipe:" trailer in the commit, recipe: key of the block''s node in docs/architecture.yaml, recipe column of the ledger — so a reader on any surface finds it.'
-    verified: 'at d18a95f: 12 recipes on disk; 17 commits carry a Recipe trailer; 92 annotated nodes name theirs (this page adds one recipe and three nodes)'
+    verified: 'at d18a95f: 12 recipes on disk; 17 commits carry Scaffolded-by, 13 of them also a Recipe trailer; 85 of the 92 annotated nodes name a recipe (this page adds one recipe and three nodes)'
   - id: U2
     layer: Apply the block
     D: 'aider_scaffold.py <recipe> <files>: with an LLM key aider edits and auto-commits each step (author "<you> (aider)", Recipe trailer); without one the wrapper prints the recipe and exits 2 and the block is applied by hand'
@@ -88,7 +88,7 @@ layers:
     parity: Divergent
     diverges: Three authorships (person, aider, bot).
     remediation: 'The trailer vocabulary tells them apart and drives the ledger: Recipe → recipe column; aider attribution → aider column; Regenerated-by → skipped; ledger-only commits → skipped.'
-    verified: 'git log trailers: 17 Scaffolded-by, 17 Recipe; tests/test_regen_workflow.py::test_commit_step_actions_shape asserts the Regenerated-by URL'
+    verified: 'git log trailers at d18a95f: 17 Scaffolded-by, 13 Recipe (the four earliest tooling commits carry Scaffolded-by alone); tests/test_regen_workflow.py::test_commit_step_actions_shape asserts the Regenerated-by URL'
   - id: U5
     layer: Diff ledger
     D: 'diff_ledger.py appends docs/diffs/NNNN-<sha>-<slug>.patch and a row to INDEX.md for every commit not yet listed; committed as "docs: diff ledger update"'
@@ -106,16 +106,16 @@ layers:
     parity: Conditional
     diverges: Same render from the same tree; the output depends only on the clone's files and the annotations.
     remediation: 'The walker drops empty directories and labels the root from the annotations'' project: key, so a clone reproduces the developer''s render byte for byte (8d14e0d).'
-    verified: 'tree_f --check: up to date on every CI run since 8d14e0d; 92 nodes; exclude: [''*.patch''] keeps the ledger out of the tree'
+    verified: 'the tree check has not failed in CI since 8d14e0d (it failed at 9d0a184 and a7e64de before; later red runs stopped earlier, at pytest: 0a54e5f, 298c7db); 92 nodes at d18a95f; exclude: [''*.patch''] keeps the ledger out of the tree'
   - id: U7
     layer: Surfaces workbook (pass-sequence)
     D: 'edit docs/execution_surfaces*.yaml, then build_surfaces_xlsx.py --spec … --out docs/EXECUTION_SURFACES*.xlsx --verify; commit YAML and workbook together'
     C: 'build_surfaces_xlsx.py --spec … --out /tmp/surfaces.xlsx --verify (builds and checks the formulas'' values; never compares the committed binary)'
-    B: prospective — the same rebuild on push; not configured today
+    B: 'not a bot job: the builder''s output is never byte-identical, so a scheduled rebuild would commit a changed file every run; the developer rebuilds when the YAML changes'
     parity: Conditional
     diverges: The YAML is the source of truth; the workbook is derived and not byte-reproducible (openpyxl writes a timestamp).
     remediation: 'Rebuild only when the YAML changed; otherwise git checkout the committed workbook before committing (a --verify run rewrites it). CI verifies the spec, not the bytes.'
-    verified: 'verify: OK on execution_surfaces.yaml (Layers 2/5/6 … ), execution_surfaces_l2.yaml and this spec; the 1-byte xlsx churn observed on 2026-10-16 and reverted'
+    verified: 'verify: OK on execution_surfaces.yaml (Layers 4/4/10, steps 2/5/6), execution_surfaces_l2.yaml (Layers 0/6/9, steps 2/6/4) and this spec (Layers 1/6/5, steps 1/5/5); the 1-byte xlsx churn observed on 2026-10-16 and reverted'
   - id: U8
     layer: README index (the first regenerated artefact)
     D: 'update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude ''docs/diffs/*'' (writes the block between the regen:docs-index markers)'
@@ -133,7 +133,7 @@ layers:
     parity: Conditional
     diverges: CI tests the generator, not that the committed workflow files equal its current output.
     remediation: 'After changing the generator, regenerate with --force and compare: diff <(new_regen_workflow.py --emit-reusable --print) .github/workflows/regenerate.yml (empty); actionlint when available.'
-    verified: 'both committed workflows equal to --print output at d18a95f; actionlint 1.7.12 clean on all three workflow files'
+    verified: 'both committed workflows equal to --print output at d18a95f; actionlint 1.7.12 clean on all three workflow files on 2026-10-16 (a local run, not reproducible from the clone)'
   - id: U10
     layer: Review before the push
     D: 'adversarial review of the block (independent critics per dimension, skeptics that try to refute each finding, fixes, tests added for every confirmed finding)'
@@ -141,8 +141,8 @@ layers:
     B: n/a
     parity: Divergent
     diverges: Only a person or an agent reviews.
-    remediation: 'Every confirmed finding becomes a test or a --check so C holds it afterwards (regen-workflow: 6 → 15 tests across two review rounds).'
-    verified: 'review rounds on deploy.sh (574e954), the notebooks (e88c27a) and the GitHub Actions skill (41a9634, 610d41e — three critics, 33 findings with duplicates across critics, every non-duplicate one fixed before the push and held by 15 tests)'
+    remediation: 'Every confirmed finding becomes a test or a --check so C holds it afterwards (regen-workflow: 13 → 15 tests between 41a9634 and 610d41e).'
+    verified: 'review rounds on deploy.sh (574e954), the notebooks (e88c27a) and the GitHub Actions skill (41a9634 → 610d41e: tests 13 → 15, each new test holding one finding); the review records themselves are not kept in the repository'
   - id: U11
     layer: Push, PR, CI
     D: 'fresh-clone replay of the whole verify block, then git push -u origin <branch>; the PR is opened from the UI'
@@ -151,7 +151,7 @@ layers:
     parity: Divergent
     diverges: A person pushes a reviewed series; the bot pushes one derived commit.
     remediation: 'Branch protection: add the Actions app or the PAT user to the bypass list, or let the bot regenerate on a branch and run pull_request in check mode.'
-    verified: 'PR Wkayaobama/CloudBQ#1: every head green (c978940, 5c777c9, d18a95f); test_commit_step_retries_a_race_and_stops_on_a_refusal'
+    verified: 'PR Wkayaobama/CloudBQ#1: heads c978940, 5c777c9, d18a95f green (check on github.com; not derivable from the clone); test_commit_step_retries_a_race_and_stops_on_a_refusal'
 steps:
   - n: 1
     step: recipe
@@ -197,7 +197,7 @@ steps:
     B: n/a (skipped by design)
     parity: Conditional
     artefact: 'docs/diffs/NNNN-<sha>-<slug>.patch + one INDEX.md row (n · sha · date · author · aider · recipe · files · +/− · patch)'
-    notes: Last local step after every block commit; re-running adds only unlisted commits.
+    notes: Runs after the last commit of the block (including the docs commit of steps 6–8); re-running adds only unlisted commits.
   - n: 6
     step: tree
     gate: ''
@@ -212,7 +212,7 @@ steps:
     gate: ''
     D: 'edit docs/execution_surfaces*.yaml; python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec <yaml> --out <xlsx> --verify'
     C: the same with --out /tmp/surfaces.xlsx --verify
-    B: prospective regen consumer
+    B: 'n/a — not a bot job (the output is never byte-identical)'
     parity: Conditional
     artefact: 'the workbook and the printed parity counts ("verify: OK")'
     notes: Only when a layer, step, remediation or equality row changed; otherwise restore the committed xlsx.
@@ -266,7 +266,7 @@ remediation:
     surfaces: C
     cause: 'An empty directory (workflows/templates) existed in the clone but not in git; the root label came from the folder name, which differs on the runner'
     fix: 'The walker drops empty directories; the root is labelled from the annotations'' project: key'
-    verified: 8d14e0d (2026-10-14); every CI run since
+    verified: 8d14e0d (2026-10-14); the tree check has not failed in CI since
   - id: U03
     symptom: 'diff_ledger.py --check in CI reports commits missing that INDEX.md lists'
     layer: U5
@@ -285,16 +285,16 @@ remediation:
     symptom: 'a pushed docs/execution_surfaces.yaml did not parse (plain scalars containing ": "); the chained command had not stopped'
     layer: U7
     surfaces: D C
-    cause: a multi-step one-liner without a failure guard per step; no parse before write
-    fix: 'yaml.safe_load every spec before writing; "|| fail" after each step of a chained command; the generators parse their own output before writing'
-    verified: 40e9544 (2026-10-16); new_regen_workflow.py parses before it writes
+    cause: 'a plain scalar containing ": " was not quoted; the spec was committed without a --verify build'
+    fix: 'quote plain scalars containing ": "; build with --verify before committing (the builder''s yaml.safe_load is the parse check); CI''s workbook step catches an unparsable spec; the regen generator parses its own output before writing'
+    verified: 40e9544 (the quoted scalar, 2026-10-16); CI red at 0a54e5f, green from fdb5e39
   - id: U06
-    symptom: 'a regen workflow on pull_request would fail at checkout for a fork PR'
+    symptom: 'a regen workflow on pull_request would have failed at checkout for a fork PR (found in the pre-push review of a draft)'
     layer: U9
     surfaces: B
     cause: 'ref: ${{ github.head_ref || github.ref }} names a branch that exists only in the fork'
-    fix: 'no ref: on the checkout — the event''s default ref (merge ref on pull_request)'
-    verified: 41a9634; references/github-actions-facts.md; test_inline_workflow_shape
+    fix: 'no ref: on the checkout — the event''s default ref (merge ref on pull_request); 41a9634 never emitted ref:'
+    verified: 'references/github-actions-facts.md; test_inline_workflow_shape asserts no ref:'
   - id: U07
     symptom: 'a file the generator deleted stayed tracked after the bot''s commit when --paths held a glob'
     layer: U9
