@@ -1,0 +1,60 @@
+{
+ "id": "NEW_DEALS_ERRORS",
+ "name": "NEW_DEALS_ERRORS",
+ "active": false,
+ "settings": {
+  "executionOrder": "v1",
+  "timezone": "Europe/Zurich"
+ },
+ "nodes": [
+  {
+   "parameters": {},
+   "name": "Error Trigger",
+   "type": "n8n-nodes-base.errorTrigger",
+   "typeVersion": 1,
+   "position": [
+    0,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "fromEmail": "={{ $env.MAIL_FROM }}",
+    "toEmail": "={{ $env.MAIL_TO }}",
+    "subject": "=[n8n] {{ $json.workflow.name }} failed at {{ $json.execution.lastNodeExecuted }}",
+    "emailFormat": "text",
+    "text": "=workflow: {{ $json.workflow.name }}\nexecution: {{ $json.execution.url }}\nnode: {{ $json.execution.lastNodeExecuted }}\nerror: {{ $json.execution.error.message }}\n\nNothing after the failed node ran; BigQuery state is unchanged unless the failed node was after 'MERGE new_deals' (then re-run the window — the MERGE is idempotent).",
+    "options": {}
+   },
+   "name": "Email error",
+   "type": "n8n-nodes-base.emailSend",
+   "typeVersion": 2.1,
+   "position": [
+    220,
+    300
+   ],
+   "credentials": {
+    "smtp": {
+     "id": "REPLACE_WITH_SMTP",
+     "name": "SMTP relay"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Error Trigger": {
+   "main": [
+    [
+     {
+      "node": "Email error",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "meta": {
+  "generated_by": "workflows/src/build_workflow.py"
+ }
+}

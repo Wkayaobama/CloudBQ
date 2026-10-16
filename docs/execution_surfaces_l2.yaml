@@ -1,0 +1,397 @@
+title: CloudBQ pass 2 — L2 likelihood tiers, three execution surfaces, one gold table
+verdict: |
+  Verdict (pre-flight, 2026-10-16, no surface has yet run against wisekeybq): the second classification layer bins every open deal of
+  every pipeline by the certainty the pipeline actually records — IcAlps_OppoCertainty for Icalps (99.9 % filled), the stage probability
+  everywhere else — into Tier1 (≥ 0.9), Tier2 (≥ 0.75), Tier3 (≥ 0.5) and Tier4 (below), closed deals labelled Closed_won / Closed_lost.
+  Three surfaces compute it: N, a Vertex AI Workbench notebook (the lab: snapshot through the function's HubSpot client, numpy.digitize,
+  calibration from stage-entry dates, per-deal proof that RANGE_BUCKET agrees); Q, BigQuery-native (deal_tiers_v1 views over the daily
+  HubSpot → BigQuery sync, a scheduled MERGE into deal_tiers + deal_tiers_history); W, a deal.propertyChange webhook into the Cloud Run
+  function for one deal at a time. The arithmetic, the labels and the source resolution are the same between N and Q in evidence (one
+  constants file; step 7 proves RANGE_BUCKET ≡ digitize per deal) and read Conditional only until W is written; source, trigger, freshness,
+  identity and the idempotency mechanism diverge; the gold table and the StackSync write-back are the convergence point. Facts that constrain the
+  design: both certainty properties are fractions (0–1); SealSQ's stage probabilities are 0.1 / 0.2 / 0.5 / 1.0, so Tier2 is reachable
+  there only through a manual probability edit; Icalps overwrites certainty to 1.0 on closed-won, so calibration cannot use the snapshot
+  value; the warehouse holds no synced deals yet (the DTS transfer of scenario C is the prerequisite of Q).
+legend: |
+  Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers M0–M14 are the pass-2 layers (prefix M to
+  keep them apart from pass 1's L0–L17); Pipeline steps are the pass-2 sequence in order (constants → adapter columns → sync → apply → lab
+  snapshot → bins → parity → gold MERGE → equality → property → StackSync → schedule); Remediation rows T01– record what the CRM evidence
+  of 2026-10-16 corrected. Source: branch claude/cloud-run-bigquery-pipeline-e94ziy at 2026-10-16; CRM hub 9201667 via the HubSpot connector.
+surfaces:
+  N: N · Vertex AI Workbench notebook notebooks/l2_deal_tiers.ipynb (lab — HubSpot API snapshot, numpy.digitize, calibration, deal_tiers_lab)
+  Q: Q · BigQuery-native (sql/deal_tiers_v1.sql views + sql/deal_tiers_apply.sql scheduled MERGE over the daily HubSpot → BigQuery transfer)
+  W: W · Webhook CDC (HubSpot deal.propertyChange on dealstage / icalps_oppocertainty → Cloud Run function event path → MERGE one deal)
+motions:
+  - motion: N · Workbench notebook (lab)
+    acquire: git clone the branch on the instance; open notebooks/l2_deal_tiers.ipynb; constants from scoring/deal_tiers_v1.constants.json
+    ubuntu: 'Python 3 kernel: main.HubSpot (the function''s client) fetches every deal with the certainty candidates and hs_v2_date_entered_<stage>; pandas + numpy.digitize bin; google-cloud-bigquery loads deal_tiers_lab and runs RANGE_BUCKET on it'
+    driver: the operator runs the cells; no schedule
+    state: '`deal_tiers_lab` (truncated per run); nothing in HubSpot'
+    assessment: 'Fastest to iterate (minutes, orthogonal to Cloud Shell); the only surface that calibrates; a snapshot, not a feed — its result is evidence for Q, never the operational tier'
+  - motion: Q · BigQuery scheduled MERGE (production)
+    acquire: sql/apply.sh applies deals_synced_v1 (+ icalps_oppocertainty, is_closed, is_closed_won) → deal_certainty_v1 → deal_tiers_v1 → deal_tiers / deal_tiers_history / deal_tiers_summary_v1
+    ubuntu: 'bq: a scheduled query running sql/deal_tiers_apply.sql daily after the 02:00 UTC transfer; RANGE_BUCKET; MERGE on deal_id with IS DISTINCT FROM so unchanged deals write nothing'
+    driver: 'BigQuery scheduled query (UTC), after the DTS HubSpot transfer; manual: bq query < rendered script'
+    state: 'deal_tiers (gold, one row per deal, previous_tier, first/last change), deal_tiers_history (per change), deal_tiers_lab untouched'
+    assessment: 'Cheapest steady state (2,000 rows, pennies); freshness bounded by the transfer (≤ 26 h); blocked until the transfer exists (sql/sync_transfer.sh) and its table name is in .env'
+  - motion: W · Webhook CDC (event)
+    acquire: 'a HubSpot developer app with deal.creation and deal.propertyChange subscriptions (constants.watch_properties: dealstage, hs_deal_stage_probability, icalps_oppocertainty) → a dedicated route accepting HubSpot''s JSON array of events (not the function''s objectId event path) → GET the deal → MERGE one deal into deal_tiers'
+    ubuntu: 'Cloud Run function: validate the X-HubSpot-Signature, read the deal, resolve certainty by pipeline, RANGE_BUCKET-equivalent in Python (same constants), MERGE; HubSpot retries failed deliveries'
+    driver: HubSpot webhook (seconds after the edit); a public HTTPS endpoint — the private service needs a relay or an unauthenticated route with signature validation
+    state: deal_tiers / deal_tiers_history rows for the changed deal only; orchestrator = cloud-run-webhook
+    assessment: 'Near-real-time, but the one surface that needs a public endpoint, a developer app and signature validation; justified only if the tier must change within minutes of the edit — the daily Q lane covers the weekly reporting cadence'
+layers:
+  - id: M0
+    layer: Code acquisition & surface
+    N: notebooks/l2_deal_tiers.ipynb on a Workbench instance in wisekeybq (notebooks/README.md); constants read from the clone
+    Q: sql/deal_tiers_v1.sql + sql/deal_tiers_apply.sql via sql/apply.sh and a scheduled query (sql/scheduled_query.sh pattern)
+    W: cloud_function_new_deals/main.py event path extended for propertyChange (proposed, not written)
+    parity: Divergent
+    diverges: Three artefacts (notebook, SQL, Python function) from one constants file.
+    remediation: scoring/deal_tiers_v1.constants.json is the single source of edges, labels, sources; tests/test_deal_tiers.py keeps the SQL equal to it; the notebook reads it.
+    verified: tests/test_deal_tiers.py (edges/labels in SQL == constants; bisect reference == digitize semantics); notebook compiles (tests/test_notebook.py)
+  - id: M1
+    layer: Identity
+    N: 'the kernel''s ADC (instance SA or the operator after gcloud auth login --update-adc): BigQuery jobUser + dataEditor on the dataset, secretAccessor on hubspot-token'
+    Q: 'scheduled-query SA new-deals-sql@: jobUser, dataEditor on the dataset, dataViewer on the sync dataset (sql/scheduled_query.sh grants)'
+    W: 'the function SA new-deals-fn@ (dataEditor already granted by deploy.sh tables)'
+    parity: Divergent
+    diverges: Three principals; the same dataset-level grants.
+    remediation: Same DCL GRANT on the dataset for every identity (deploy.sh tables, scheduled_query.sh).
+    verified: grants read in deploy.sh / scheduled_query.sh; not yet applied — first authenticated run
+  - id: M2
+    layer: Source of certainty
+    N: 'HubSpot search API snapshot (≤ 10,000 results; ~2,000 deals): icalps_oppocertainty, hs_deal_stage_probability, hs_is_closed(_won), hs_v2_date_entered_<stage>'
+    Q: 'deals_synced_v1 over the DTS HubSpot transfer (full refresh daily 02:00 UTC) — icalps_oppocertainty, is_closed, is_closed_won added to the adapter view'
+    W: the webhook payload (objectId, propertyName, propertyValue) then GET /crm/v3/objects/deals/{id} for the rest
+    parity: Divergent
+    diverges: Same CRM, three transports; the sync is up to 26 h behind the API, the webhook is seconds behind.
+    remediation: deal_tiers_summary_v1 (Q) vs the lab summary (N) vs a CRM count per tier (query_crm_data) — differences must be explained by creation/edit timestamps after the sync.
+    verified: 'CRM facts of 2026-10-16: 799/800 Icalps deals carry icalps_oppocertainty; icalps_dealcertainty is a string with no values; win_probability mirrors the stage probability; hs_forecast_probability empty'
+  - id: M3
+    layer: Trigger & cadence
+    N: manual (Run All)
+    Q: scheduled query daily after the transfer (e.g. 03:00 UTC); manual bq query
+    W: deal.propertyChange on dealstage (SealSQ users move stages) and icalps_oppocertainty (Icalps users type certainty), plus hs_deal_stage_probability for manual edits
+    parity: Divergent
+    diverges: Operator / daily / event.
+    remediation: The gold table carries computed_at and orchestrator so a row says which lane wrote it and when.
+    verified: not yet — first authenticated run
+  - id: M4
+    layer: Certainty resolution per pipeline
+    N: 'certainty_source = icalps_oppocertainty for 766126206, hs_deal_stage_probability otherwise (constants certainty_source)'
+    Q: the same CASE in deal_certainty_v1
+    W: the same mapping in Python from the constants (not written yet)
+    parity: Conditional
+    diverges: Parallel for N and Q today; W is proposed, so its parity holds only once it is written from the constants and covered by tests/test_deal_tiers.py.
+    remediation: One constants file; the test asserts the SQL; W must import the same file.
+    verified: the CASE text is asserted by tests/test_deal_tiers.py; the notebook builds the column from the same constants
+  - id: M5
+    layer: Binning arithmetic
+    N: numpy.digitize(certainty, [0.5, 0.75, 0.9]) (right=False)
+    Q: RANGE_BUCKET(certainty, [0.5, 0.75, 0.9])
+    W: bisect.bisect_right(edges, certainty) (the pure-Python form the test uses; W not written yet)
+    parity: Conditional
+    diverges: N and Q are proven equal per deal (notebook §5); W inherits the parity only once written against the same constants.
+    remediation: ''
+    verified: 'tests/test_deal_tiers.py reference cases (0.49 → 0, 0.5 → 1, 0.75 → 2, 0.9 → 3, 1.0 → 3, None → None); notebook section 5 asserts RANGE_BUCKET == digitize per deal on the lab table (first authenticated run pending)'
+  - id: M6
+    layer: Labels and closed deals
+    N: Tier4_pipeline / Tier3 / Tier2 / Tier1 by bin_index; Closed_won / Closed_lost override; NULL certainty → no tier
+    Q: the same CASE in deal_tiers_v1 (array literal indexed by RANGE_BUCKET)
+    W: the same from the constants (not written yet)
+    parity: Conditional
+    diverges: N and Q share the labels and the closed override; an unknown closed state (NULL flag) is never tiered in Q; W pending.
+    remediation: ''
+    verified: tests/test_deal_tiers.py (labels array order, closed labels, NULL branches present in the SQL)
+  - id: M7
+    layer: Gold write
+    N: deal_tiers_lab (WRITE_TRUNCATE on every run) — never deal_tiers
+    Q: MERGE deal_tiers on deal_id keyed on @run_time; IS DISTINCT FROM on tier/certainty → previous_tier, last_changed_at; unchanged rows touch computed_at only; WHEN NOT MATCHED BY SOURCE retires deals gone from the sync (tier NULL, retired_at); 36 h freshness and half-rows guards
+    W: the same MERGE for one deal (orchestrator = cloud-run-webhook)
+    parity: Conditional
+    diverges: N writes a separate table; Q and W write the same gold table with the same MERGE semantics.
+    remediation: Equality check "lab vs gold" per pipeline × tier; differences must be deals edited after the sync.
+    verified: MERGE read (tests/test_deal_tiers.py asserts key, IS DISTINCT FROM, v_ variables); not yet executed
+  - id: M8
+    layer: History / audit
+    N: none (a snapshot)
+    Q: deal_tiers_history — one row per deal whose tier or certainty changed in the run (WHERE last_changed_at = v_run_ts)
+    W: the same table, one row per webhook-driven change
+    parity: Divergent
+    diverges: The lab keeps no history.
+    remediation: Accepted — the lab is evidence; the history belongs to the production lanes.
+    verified: DDL + INSERT … SELECT read; not yet executed
+  - id: M9
+    layer: Write-back to the CRM (deal_tier_v1)
+    N: 'prints the property definition (enumeration) and the StackSync mapping sheet rows (match key deal_id ↔ Record ID; tier → deal_tier_v1)'
+    Q: StackSync sync BigQuery → HubSpot from deal_tiers (one-way, scheduled or real-time per StackSync plan) after the property exists
+    W: could PATCH the deal directly (needs a write-scoped app) — not planned; StackSync stays the one writer
+    parity: Conditional
+    diverges: Only after `deal_tier_v1` exists in the portal (StackSync never creates definitions — mir-load hs-props pattern) and the sync is mapped.
+    remediation: One writer to the CRM (StackSync from deal_tiers); the function never writes the tier.
+    verified: open — property not created, StackSync not configured
+  - id: M10
+    layer: Calibration & statistics
+    N: 'fill rates per pipeline, value distributions, and per stage: deals that entered the stage (hs_v2_date_entered_<id>), won / lost / open, won share of closed vs the stage probability'
+    Q: n/a (the summary view counts tiers; it does not calibrate)
+    W: n/a
+    parity: Divergent
+    diverges: Only the lab calibrates; the production lanes apply the edges the lab justified.
+    remediation: 'Edges change in one place (constants) after a calibration round; tests and SQL follow.'
+    verified: 'CRM evidence 2026-10-16 — SealSQ Hardware: entered Qualified 271 (19 won / 157 lost / 95 open, 10.8 % of closed), entered Design In 173 (26 won / 62 lost / 85 open, 29.5 % of closed), entered Design Win 61 (43 won / 16 lost / 2 open, 72.9 % of closed); SealSQ Services entered Design In 68 (28 won / 31 lost / 9 open, 47.5 %); Icalps entered Design Win 30 (5 won / 1 lost / 24 open)'
+  - id: M11
+    layer: Dry run / gate
+    N: the lab table is the dry run; the gold table is never written from the notebook
+    Q: bq query --dry_run of the rendered scripts (sql/scheduled_query.sh DRYRUN=1 pattern); DISABLE_SCHEDULE=1 before the first backfill
+    W: dry_run=1 on the event path returns the tier without MERGE (to be written)
+    parity: Conditional
+    diverges: Same principle (compute, write nothing) with different switches.
+    remediation: ''
+    verified: not yet — first authenticated run
+  - id: M12
+    layer: Idempotency
+    N: WRITE_TRUNCATE of the lab table — re-run gives the same table for the same snapshot
+    Q: MERGE on deal_id keyed on @run_time; unchanged rows produce no history; a replayed run_time rewrites the same slice (f(f(x)) = f(x))
+    W: the same MERGE; a replayed webhook changes nothing
+    parity: Divergent
+    diverges: Truncate-and-reload of a separate table (N) vs MERGE into the gold table (Q, W) — different mechanism, different table.
+    remediation: Equality check 2 (lab vs gold per pipeline × tier) is what makes the outcomes comparable.
+    verified: tests/test_deal_tiers.py (IS DISTINCT FROM, second WHEN MATCHED touches computed_at only, @run_time, guards, retirement); not yet executed
+  - id: M13
+    layer: Freshness
+    N: at run time (API)
+    Q: ≤ 25 h (transfer at 02:00 UTC, MERGE at 03:00); the 36 h freshness guard aborts the MERGE on a stale sync instead of re-tiering from old data
+    W: seconds
+    parity: Divergent
+    diverges: Snapshot / daily / event.
+    remediation: computed_at per row; the weekly report cadence is served by Q.
+    verified: by design
+  - id: M14
+    layer: Cost & footprint
+    N: a Workbench instance while it runs (stop it); API calls
+    Q: pennies (2,000 rows/day); the DTS HubSpot connector's pricing is the Preview's (assumption — verify on the pricing page before relying on it)
+    W: a Cloud Run invocation per edit; a developer app; signature validation code
+    parity: Divergent
+    diverges: ''
+    remediation: Q is the default; W only if minutes matter.
+    verified: by design
+steps:
+  - n: 1
+    step: constants
+    gate: ''
+    N: read scoring/deal_tiers_v1.constants.json (edges 0.5 / 0.75 / 0.9, labels, sources)
+    Q: the SQL carries the same literals; tests/test_deal_tiers.py fails on drift
+    W: the function would import the same file
+    parity: Parallel
+    artefact: EDGES / LABELS printed; test green
+    notes: Change edges here only.
+  - n: 2
+    step: adapter columns
+    gate: ''
+    N: n/a (the notebook reads the API)
+    Q: deals_synced_v1 now exposes icalps_oppocertainty, is_closed, is_closed_won (sql/deals_synced_v1.sql)
+    W: n/a
+    parity: Conditional
+    artefact: 'the view creates only if bq show --schema lists icalps_oppocertainty, hs_is_closed and hs_is_closed_won after the first transfer run (the connector "transfers all available data"; its Deals columns are undocumented until then) — otherwise it fails to create'
+    notes: If a column is missing in the synced table the view fails to create — the sync table name and columns are known only after the first transfer.
+  - n: 3
+    step: sync
+    gate: LIVE TRANSFER
+    N: n/a
+    Q: sql/sync_transfer.sh (DTS HubSpot connector, Deals + Owners, daily 02:00 UTC) then SYNC_DEALS_TABLE / SYNC_OWNERS_TABLE in .env
+    W: n/a
+    parity: Divergent
+    artefact: bq ls hubspot_sync shows the deals table; a row count close to the CRM's ~2,000
+    notes: The prerequisite of lane Q; scenario C's first step.
+  - n: 4
+    step: apply
+    gate: LIVE DDL
+    N: n/a
+    Q: sql/apply.sh — views deal_certainty_v1, deal_tiers_v1, deal_tiers_summary_v1; tables deal_tiers, deal_tiers_history
+    W: n/a
+    parity: Divergent
+    artefact: INFORMATION_SCHEMA lists the five objects
+    notes: Idempotent (OR REPLACE / IF NOT EXISTS).
+  - n: 5
+    step: snapshot
+    gate: ''
+    N: notebook §1 — every deal through main.HubSpot with the certainty candidates and stage-entry dates
+    Q: n/a (reads the sync)
+    W: n/a
+    parity: Divergent
+    artefact: '~2,000 rows; per-pipeline counts match the CRM (736 / 308 / 140 / 1 / 800 on 2026-10-16)'
+    notes: Token from Secret Manager hubspot-token or a masked prompt.
+  - n: 6
+    step: bins
+    gate: ''
+    N: notebook §3 — certainty per pipeline, numpy.digitize, labels, closed overrides; counts per pipeline × tier
+    Q: SELECT * FROM deal_tiers_summary_v1
+    W: n/a
+    parity: Conditional
+    artefact: the pipeline × tier matrix (same shape from N and Q when the snapshot and the sync are taken within the same day)
+    notes: 'Expected shape from the CRM: SealSQ Hardware open deals mostly Tier4 (187) and Tier3 (79), Tier2 4, Tier1 1; Icalps open: Tier4 61, Tier3 12, Tier2 5, Tier1 7.'
+  - n: 7
+    step: parity
+    gate: LIVE LAB_TABLE
+    N: notebook §5 — load deal_tiers_lab, RANGE_BUCKET on it, assert bq_bin == numpy_bin for every deal
+    Q: the same RANGE_BUCKET expression inside deal_tiers_v1
+    W: n/a (W would use the bisect form; its parity is asserted by the test, not by this step)
+    parity: Parallel
+    artefact: '"RANGE_BUCKET == numpy.digitize on all N deals"; job id, bytes, slot ms printed'
+    notes: The equality check that makes M5 Parallel in evidence, not only by construction.
+  - n: 8
+    step: gold merge
+    gate: LIVE GOLD_WRITE
+    N: n/a (never from the notebook)
+    Q: bq query < rendered sql/deal_tiers_apply.sql (first backfill by hand), then the scheduled query daily 03:00 UTC
+    W: the same MERGE per webhook
+    parity: Conditional
+    artefact: deal_tiers rows == tiered deals; deal_tiers_history has one row per deal on the first run, then only changes
+    notes: Run twice in a row — the second run must add no history rows.
+  - n: 9
+    step: equality
+    gate: ''
+    N: notebook §6 — lab vs gold per pipeline × tier
+    Q: deal_tiers_summary_v1 vs SELECT … FROM deal_tiers GROUP BY pipeline_id, tier
+    W: n/a
+    parity: Conditional
+    artefact: identical counts when the snapshot and the sync are of the same state; otherwise differences explained by deals created, edited, deleted or un-tiered in between
+    notes: The CRM itself can be the third witness (query_crm_data counts per certainty range).
+  - n: 10
+    step: property
+    gate: LIVE PROPERTY_CREATE
+    N: notebook §7 prints the definition (deal_tier_v1, enumeration, 6 options, built-in group dealinformation as in writeback/bootstrap_property.sh)
+    Q: POST /crm/v3/properties/deals with a schema-write token (mir-load hs-props pattern; one-off)
+    W: n/a
+    parity: Conditional
+    artefact: Settings → Properties shows deal_tier_v1
+    notes: StackSync never creates definitions.
+  - n: 11
+    step: stacksync
+    gate: LIVE CRM_WRITE
+    N: notebook §7 prints the mapping sheet rows
+    Q: StackSync UI — source deal_tiers, destination Deals, match deal_id ↔ Record ID, tier → deal_tier_v1, direction BigQuery → HubSpot
+    W: n/a
+    parity: Conditional
+    artefact: deal_tier_v1 filled on every tiered deal; a CRM count per tier equal to the gold summary
+    notes: One writer to the CRM. In lane Q the daily MERGE re-tiers edited deals and retires cleared or deleted ones (a retired row clears deal_tier_v1); only lane W updates within minutes (decision D5).
+  - n: 12
+    step: schedule
+    gate: LIVE SCHEDULE
+    N: n/a
+    Q: register sql/deal_tiers_apply.sql as a scheduled query (daily, after the transfer); DISABLE_SCHEDULE=1 until step 8 ran twice cleanly
+    W: later — subscriptions in the developer app, only if minutes matter
+    parity: Divergent
+    artefact: bq ls --transfer_config shows the scheduled query; deal_tiers_history grows only on changes
+    notes: ''
+remediation:
+  - id: T01
+    symptom: 'The operator''s thresholds read "50 % / 75 % / 90 %"; the CRM stores both certainty properties as fractions 0–1'
+    layer: M5
+    surfaces: N Q W
+    cause: HubSpot number properties hs_deal_stage_probability and icalps_oppocertainty hold 0.1 … 1.0 (query_crm_data distributions, 2026-10-16).
+    fix: edges 0.5 / 0.75 / 0.9 in scoring/deal_tiers_v1.constants.json; the SQL and the notebook read them; tests/test_deal_tiers.py asserts the scale.
+    verified: this commit (constants + test)
+  - id: T02
+    symptom: 'Tier2_opportunity (0.75 ≤ certainty < 0.9) is empty for SealSQ pipelines: stage probabilities are 0.1 / 0.2 / 0.5 / 1.0'
+    layer: M10
+    surfaces: N Q W
+    cause: SealSQ users record no certainty beyond the stage; only manual edits of hs_deal_stage_probability (0.7 ×1, 0.75 ×4, 0.9 ×1 on 2026-10-16; one edit at 0.3 sits below the first edge) fall between 0.5 and 1.0.
+    fix: 'Decision for the operator: keep one edge set (Tier2 stays a manual-edit tier on SealSQ), or per-pipeline edges, or a calibrated certainty (won share of closed deals after entering a stage, SealSQ Hardware: Qualified 10.8 %, Design In 29.5 %, Design Win 72.9 %; SealSQ Services Design In 47.5 %) — the notebook''s calibration table is the input.'
+    verified: open — decision pending; evidence in the notebook §4 and the verified column of M10
+  - id: T03
+    symptom: '"Deal_certainty" named by the operator does not exist; icalps_dealcertainty exists but is a string with no values'
+    layer: M2
+    surfaces: N Q W
+    cause: search_properties / get_properties on 2026-10-16.
+    fix: Icalps → icalps_oppocertainty (number, 799/800 filled); SealSQ → hs_deal_stage_probability (100 % by definition). The string property is listed as unusable in the constants.
+    verified: this commit (constants.unusable_properties)
+  - id: T04
+    symptom: Calibration on the certainty value is impossible from a snapshot — all 325 Icalps closed-won deals carry 1.0; SealSQ closed-won carry the stage''s 1.0
+    layer: M10
+    surfaces: N
+    cause: Certainty is overwritten / implied at close.
+    fix: Calibrate on stage-entry dates (hs_v2_date_entered_<stage>) — notebook §4; or HubSpot property history (propertiesWithHistory) in a later pass.
+    verified: this commit (notebook §4); CRM evidence 2026-10-16 (M10 verified)
+  - id: T05
+    symptom: win_probability looked like an independent certainty for SealSQ
+    layer: M2
+    surfaces: N Q W
+    cause: It mirrors hs_deal_stage_probability on every SealSQ Hardware deal but five (query_crm_data 2026-10-16).
+    fix: Not used as a source; listed as a mirror in the constants.
+    verified: this commit
+  - id: T06
+    symptom: Six open Icalps deals sit at exactly 0.49
+    layer: M10
+    surfaces: N
+    cause: Users already treat 0.5 as a boundary (forecast inclusion); a tier edge at 0.5 will inherit that behaviour.
+    fix: Report it; consider whether 0.49 should read as Tier3 (edge 0.45) — operator decision.
+    verified: CRM evidence 2026-10-16
+  - id: T07
+    symptom: deals_synced_v1 did not expose icalps_oppocertainty, hs_is_closed, hs_is_closed_won
+    layer: M2
+    surfaces: Q
+    cause: The adapter view was written for the L1 scorer only.
+    fix: Three columns added (sql/deals_synced_v1.sql); sql/apply.sh applies deal_tiers_v1.sql after it.
+    verified: this commit (tests/test_deal_tiers.py)
+  - id: T08
+    symptom: Lane Q cannot run before the HubSpot → BigQuery transfer exists
+    layer: M2
+    surfaces: Q
+    cause: The warehouse (mrload) holds Drive-derived silver tables, no CRM deals; scenario C''s sync_transfer.sh has not been run.
+    fix: Step 3 (sync) first; until then the lab (N) is the only surface with data, and its deal_tiers_lab is the evidence.
+    verified: open — first authenticated run
+  - id: T09
+    symptom: 'A webhook lane needs a public HTTPS endpoint; the function is private (--no-allow-unauthenticated)'
+    layer: M3
+    surfaces: W
+    cause: HubSpot webhooks cannot present a Google OIDC token.
+    fix: Either an unauthenticated route that validates X-HubSpot-Signature v3, or the n8n relay of scenario B; W stays proposed until the daily Q lane proves insufficient.
+    verified: open — design only
+  - id: T10
+    symptom: StackSync cannot fill deal_tier_v1 before the property exists
+    layer: M9
+    surfaces: Q
+    cause: StackSync never creates property definitions (mir-load RUNBOOK_PASS1 §P).
+    fix: Step 10 (property) with a schema-write token, then step 11; the notebook prints the exact definition.
+    verified: open — operator steps
+  - id: T11
+    symptom: 'Pre-commit review: the gold MERGE never un-tiered or retired a deal — a cleared certainty or a deal deleted/merged in HubSpot kept its last tier forever, with no history row, and StackSync would have kept pushing it'
+    layer: M7
+    surfaces: Q W
+    cause: The batch filtered tier IS NOT NULL and the MERGE had no NOT MATCHED BY SOURCE clause.
+    fix: 'batch keeps NULL-tier rows (a cleared certainty is a change → previous_tier, retired_at, history); WHEN NOT MATCHED BY SOURCE AND t.tier IS NOT NULL retires deals gone from the sync; never-tiered deals are not inserted; the 36 h freshness guard and a half-rows guard keep a failed transfer from retiring the table.'
+    verified: this commit — tests/test_deal_tiers.py asserts the clauses and guards; live run not yet
+  - id: T12
+    symptom: 'Pre-commit review: the printed deal_tier_v1 definition named a property group cloudbq_l2 that nothing creates; HubSpot rejects an unknown groupName'
+    layer: M9
+    surfaces: N Q
+    cause: Property groups are created through their own endpoint; pass 1 used the built-in group.
+    fix: 'group dealinformation (as writeback/bootstrap_property.sh); description, hasUniqueValue:false, formField:false carried like pass 1.'
+    verified: this commit (constants, notebook §7)
+equality_checks:
+  - stage: after the lab snapshot
+    compare: per-deal bin_index — numpy.digitize (N) vs RANGE_BUCKET (Q) on deal_tiers_lab
+    N: notebook §5 assert (bq_bin == numpy_bin for every row)
+    QW: 'SELECT COUNTIF(bin_index != RANGE_BUCKET(certainty, [0.5, 0.75, 0.9])) FROM deal_tiers_lab → 0'
+    expected: zero differences on every deal with a certainty; NULL on both sides without one
+  - stage: after the first gold MERGE
+    compare: counts per pipeline × tier — deal_tiers_lab (N) vs deal_tiers (Q) vs deal_tiers_summary_v1 (live view)
+    N: notebook §6
+    QW: 'SELECT pipeline_id, tier, COUNT(*) FROM deal_tiers GROUP BY 1, 2'
+    expected: identical (retired rows, tier NULL, excluded on both sides), or differences explained by deals created, edited, deleted or un-tiered between the sync (02:00 UTC) and the snapshot
+  - stage: after a second gold MERGE with no CRM change
+    compare: deal_tiers_history row count before and after
+    N: n/a
+    QW: 'SELECT COUNT(*) FROM deal_tiers_history WHERE run_ts = TIMESTAMP ''<the run_time you passed with --parameter>'''
+    expected: 0 rows (idempotent MERGE)
+  - stage: after the StackSync write-back
+    compare: CRM counts per deal_tier_v1 value vs deal_tiers counts per tier
+    N: query_crm_data — SELECT deal_tier_v1, COUNT(*) FROM DEAL GROUP BY deal_tier_v1
+    QW: 'SELECT tier, COUNT(*) FROM deal_tiers GROUP BY tier'
+    expected: identical per label
+parity_meanings:
+  Parallel: same arithmetic, same result on every surface (one constants file)
+  Conditional: same result when the stated condition holds (the sync exists, the property exists, the same snapshot)
+  Divergent: different mechanism (snapshot / daily / event); the gold table and the write-back make the outcome equivalent

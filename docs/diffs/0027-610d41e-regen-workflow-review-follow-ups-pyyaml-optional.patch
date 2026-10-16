@@ -1,0 +1,409 @@
+commit 610d41e5746cf788c5539a1aad64a892fad9300c
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Fri Oct 16 15:39:09 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Fri Oct 16 15:39:09 2026 +0000
+
+    regen-workflow: review follow-ups — PyYAML optional, install notes, local mode emits its callee, one secret in both callers, index order
+    
+    - new_regen_workflow.py runs on the standard library (PyYAML only adds the parse check, with a note when absent); --mode local writes
+      regenerate.yml when it is missing (a caller without its callee fails on GitHub at parse time); both caller modes pass exactly
+      REGEN_TOKEN; --on schedule without a cron is a usage error; a note names the branch the triggers were written for when the clone's
+      origin/HEAD differs; --help names REGEN_TOKEN
+    - update_readme_index.py lists the files of a directory first, then its sub-directories, case-insensitive
+    - SKILL.md: prerequisites, "In another repository" (copy the folder, inline is self-contained, local is one command, remote needs the
+      host's file, private callers only), protected-branch remedy, concurrency and loop-guard wording, examples aligned with the committed
+      caller; github-actions-facts.md updated
+    - diff_ledger.py: the INDEX.md header names the Regenerated-by skip and is refreshed when the header text changes; aider-scaffold
+      SKILL.md notes both skips
+    - ci.yml and the README verify block check the README index; tests: 15 (optional PyYAML, schedule error, local emits its callee,
+      index order, one secret in both callers)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .claude/skills/aider-scaffold/SKILL.md             |  2 +
+ .../skills/aider-scaffold/scripts/diff_ledger.py   | 14 ++++++-
+ .claude/skills/regen-workflow/SKILL.md             | 44 +++++++++++++++-----
+ .../regen-workflow/assets/update_readme_index.py   |  2 +-
+ .../references/github-actions-facts.md             |  6 ++-
+ .../regen-workflow/scripts/new_regen_workflow.py   | 47 +++++++++++++++++-----
+ .github/workflows/ci.yml                           |  1 +
+ .github/workflows/update-readme-index.yml          |  3 +-
+ README.md                                          |  4 +-
+ tests/test_regen_workflow.py                       | 30 +++++++++++++-
+ 10 files changed, 124 insertions(+), 29 deletions(-)
+
+diff --git a/.claude/skills/aider-scaffold/SKILL.md b/.claude/skills/aider-scaffold/SKILL.md
+index 15916b7..52a69aa 100644
+--- a/.claude/skills/aider-scaffold/SKILL.md
++++ b/.claude/skills/aider-scaffold/SKILL.md
+@@ -13,6 +13,8 @@ python3 $S/aider_scaffold.py assets/recipes/<block>.md path/to/file [more files]
+ python3 $S/diff_ledger.py                     # docs/diffs/NNNN-<sha>-<slug>.patch + INDEX.md, idempotent
+ python3 $S/diff_ledger.py --aider-only        # only aider's commits
+ python3 $S/diff_ledger.py --check             # exit 1 if commits are missing from the ledger (pre-push)
++# skipped on purpose: commits that touch only docs/diffs, and commits carrying a `Regenerated-by:` trailer (bot commits of a
++# regen-workflow run — see .claude/skills/regen-workflow); the INDEX.md header is refreshed when this text changes
+ ```
+ 
+ ## How a suggestion becomes a diff
+diff --git a/.claude/skills/aider-scaffold/scripts/diff_ledger.py b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+index 263c8b1..1e72f19 100644
+--- a/.claude/skills/aider-scaffold/scripts/diff_ledger.py
++++ b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+@@ -95,7 +95,17 @@ def existing(index: Path) -> set[str]:
+     return set(re.findall(r"\b([0-9a-f]{40})\b", index.read_text(encoding="utf-8")))
+ 
+ 
+-HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
++HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass), nor are commits carrying a `Regenerated-by:` trailer (a bot's regenerated files are not a suggestion; see `.claude/skills/regen-workflow`). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
++
++
++def refresh_header(index: Path) -> bool:
++    """Rewrite the header block of an existing INDEX.md when HEADER changed; the rows are kept verbatim."""
++    text = index.read_text(encoding="utf-8")
++    if text.startswith(HEADER):
++        return False
++    rows = [l for l in text.splitlines(keepends=True) if re.match(r"\| \d+ \|", l)]
++    index.write_text(HEADER + "".join(rows), encoding="utf-8")
++    return True
+ 
+ 
+ def main(argv=None) -> int:
+@@ -116,6 +126,8 @@ def main(argv=None) -> int:
+             print(f"missing: {c['short']} {c['subject']}")
+         print(f"diff_ledger --check: {len(todo)} commit(s) not in {index.relative_to(root)}")
+         return 1 if todo else 0
++    if index.exists() and refresh_header(index):
++        print(f"ledger: header of {index.relative_to(root)} refreshed")
+     if not todo:
+         print("diff_ledger: nothing new")
+         return 0
+diff --git a/.claude/skills/regen-workflow/SKILL.md b/.claude/skills/regen-workflow/SKILL.md
+index 84d0610..0be1df9 100644
+--- a/.claude/skills/regen-workflow/SKILL.md
++++ b/.claude/skills/regen-workflow/SKILL.md
+@@ -11,18 +11,33 @@ One generator, one commit step, three shapes of the same job: checkout → toolc
+ ```bash
+ S=.claude/skills/regen-workflow/scripts
+ python3 $S/new_regen_workflow.py --emit-reusable                                   # once per repo: .github/workflows/regenerate.yml
+-python3 $S/new_regen_workflow.py --name "Update README" --paths README.md \
+-    --run "python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs" \
++python3 $S/new_regen_workflow.py --name "Update README index" --paths README.md \
++    --run "python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*'" \
+     --on push:main --on workflow_dispatch --mode local                             # thin caller of ./.github/workflows/regenerate.yml
+ python3 $S/new_regen_workflow.py --name "Update README" --paths README.md --run "python3 update_readme.py"    # self-contained (inline)
+-python3 $S/new_regen_workflow.py --name "Trees" --paths "docs/*.txt docs/*.json" --run "python3 tree.py" --mode Owner/Repo@main
++python3 $S/new_regen_workflow.py --name "Trees" --paths "docs/*.txt docs/*.json" --run "python3 tree.py" --mode Owner/Repo@v1
+ ```
+ 
++Prerequisites: Python 3.10+ and git. PyYAML is optional — when installed, the generated file is parsed before it is written.
++
++## In another repository
++
++1. Copy the folder `.claude/skills/regen-workflow/` (the generator reads `assets/commit_if_changed.sh` next to it, so copy the folder,
++   not the one script). `git subtree` or a plain `cp -r` both work; nothing in it names a repository.
++2. From that repository's root, run the inline command above — the generated file is self-contained and needs only your `--run`
++   program. `--out other/repo/.github/workflows/x.yml` writes it elsewhere without copying anything there.
++3. `--mode local` also writes `regenerate.yml` the first time (a caller without its callee fails on GitHub at parse time).
++4. `--mode Owner/Repo@ref` needs the host's `regenerate.yml` at that ref; a private host must allow access (Settings → Actions →
++   General → Access) and that setting admits private callers only — a public caller needs a public host.
++5. Triggers default to `main`; the generator prints a note when the clone's `origin/HEAD` says otherwise (`--on push:master`).
++
+ | `--mode` | What is written | When |
+ |---|---|---|
+ | `inline` (default) | the whole job in the file; the commit step embedded | any repository, no dependency, nothing to configure |
+-| `local` | `uses: ./.github/workflows/regenerate.yml` with `with:` inputs | several regenerations in one repository share one implementation |
+-| `Owner/Repo@ref` | `uses: Owner/Repo/.github/workflows/regenerate.yml@ref`, passing only `REGEN_TOKEN` (never `secrets: inherit` across repositories) | a shared copy — pin `@ref` to a tag or SHA; a private host needs Settings → Actions → General → Access → "Accessible from repositories owned by …" |
++| `local` | `uses: ./.github/workflows/regenerate.yml` with `with:` inputs; `regenerate.yml` is written too when missing | several regenerations in one repository share one implementation |
++| `Owner/Repo@ref` | `uses: Owner/Repo/.github/workflows/regenerate.yml@ref` | a shared copy — pin `@ref` to a tag or SHA; a private host needs Settings → Actions → General → Access → "Accessible from repositories owned by …" (private callers only) |
++
++Both callers pass exactly one secret, `REGEN_TOKEN` (never `secrets: inherit`): it is the only one the reusable workflow reads.
+ 
+ Triggers: `--on push[:branch,branch]`, `--on pull_request[:branch]`, `--on schedule:"0 6 * * 1"`, `--on workflow_dispatch`
+ (default `push:main` + `workflow_dispatch`, like the Update README original; a repeated kind merges, so `--on push:main --on push:dev` is one `push:`). `--check` makes the job fail when regeneration changes
+@@ -38,19 +53,25 @@ unexpanded, so `docs/*.txt` also stages the files the generator deleted. Pushes
+ when the regenerated commit must run CI, store a PAT as the `REGEN_TOKEN` secret — the checkout uses it when present. A PAT push *would*
+ re-run a `push`-triggered regeneration, so every generated job is guarded with
+ `if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Regenerated-by:')`; the generator itself must still be
+-idempotent (the pull-request `check` run proves it).
++idempotent (the pull-request `check` run proves it). The guard skips *every* regen workflow for a bot commit, so a regeneration that
++depends on another's output belongs in the same workflow (repeat `--run`) or on a schedule.
+ 
+-`permissions: contents: write` is on the job, `concurrency` keys on workflow + ref so two regenerations never race, `fetch-depth`
+-is an input for generators that read history (`0` = full).
++`permissions: contents: write` is on the job. `concurrency` (group = workflow + ref) serialises runs of one workflow per branch; two
++different regen workflows writing to the same branch are reconciled by the rebase-and-retry push. `fetch-depth` is an input for
++generators that read history (`0` = full). On a protected branch the bot's push is refused ("the branch did not move: not a race"):
++add the GitHub Actions app (or the PAT's user) to the ruleset's bypass list, or regenerate on a branch and let `pull_request` run in
++check mode.
+ 
+ ## The first consumer: a README index (`assets/update_readme_index.py`)
+ 
+ ```bash
+-python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks          # write
+-python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --check                  # exit 1 if stale
++python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*'          # write
++python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check  # exit 1 if stale (CI)
+ ```
+ Keeps `- [first H1 title](path)` lines for every `*.md` under the directories between `<!-- regen:docs-index start/end -->` markers
+-(appended once as a "## Documents" section). Idempotent; several blocks can coexist (`--name`).
++(appended once as a "## Documents" section): the files of each directory first, then its sub-directories, case-insensitive; titles
++are read outside fenced code (setext and BOM handled); hidden directories are skipped; CRLF is preserved. Idempotent; several blocks can
++coexist (`--name`). The `--check` form belongs in CI next to the other generated-artefact checks.
+ 
+ ## Generated commits and the diff ledger
+ 
+@@ -61,4 +82,5 @@ suggestion, and the ledger's `--check` must stay green after the bot commits.
+ 
+ ```bash
+ python3 -m pytest tests/test_regen_workflow.py -q      # generator shapes, commit step in a temporary repository, index idempotency, ledger skip
++python3 tests/test_regen_workflow.py                   # the same without pytest
+ ```
+diff --git a/.claude/skills/regen-workflow/assets/update_readme_index.py b/.claude/skills/regen-workflow/assets/update_readme_index.py
+index 019cc5e..14058f8 100644
+--- a/.claude/skills/regen-workflow/assets/update_readme_index.py
++++ b/.claude/skills/regen-workflow/assets/update_readme_index.py
+@@ -42,7 +42,7 @@ def build_block(readme: Path, dirs: list[Path], name: str, heading: str, exclude
+     root = readme.resolve().parent
+     rows = []
+     for d in dirs:
+-        for f in sorted(d.rglob("*.md")):
++        for f in sorted(d.rglob("*.md"), key=lambda p: (len(p.relative_to(d).parts), p.as_posix().lower())):   # files of d first, then its sub-directories; case-insensitive
+             if f.resolve() == readme.resolve():
+                 continue
+             if any(part.startswith(".") for part in f.relative_to(d).parts):   # .venv, .git, caches below the given dir
+diff --git a/.claude/skills/regen-workflow/references/github-actions-facts.md b/.claude/skills/regen-workflow/references/github-actions-facts.md
+index ea8fdd0..1d25db4 100644
+--- a/.claude/skills/regen-workflow/references/github-actions-facts.md
++++ b/.claude/skills/regen-workflow/references/github-actions-facts.md
+@@ -5,10 +5,12 @@
+   start runs, the regeneration workflow included: the generated jobs therefore carry
+   `if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Regenerated-by:')`, which skips the run the bot's own
+   commit would start. Independently of that guard, a generator whose output is not idempotent (timestamps, unordered output) would commit
+-  on every run — the `--check` mode on pull requests is the test for it.
++  on every run — the `--check` mode on pull requests is the test for it. The guard tests only the trailer, so a bot commit skips every
++  regen workflow on that branch: chained regenerations belong in one workflow (several `--run`) or on a schedule.
+ - `workflow_dispatch` runs appear in the Actions tab only once the workflow file exists on the default branch; the branch to run on is then selectable.
+ - A reusable workflow (`on: workflow_call`) in the same repository is referenced as `./.github/workflows/<file>.yml`; in another repository as
+-  `owner/repo/.github/workflows/<file>.yml@ref`. A private host repository must allow access under Settings → Actions → General → Access.
++  `owner/repo/.github/workflows/<file>.yml@ref`. A private host repository must allow access under Settings → Actions → General → Access;
++  that setting admits private callers only ("Access is allowed only from private repositories"), so a public caller needs a public host.
+ - The caller job sets `permissions:`; the called workflow cannot exceed them. `secrets: inherit` passes the caller's secrets.
+ - On `pull_request`, the default checkout is the merge ref `refs/pull/<n>/merge`, which exists for fork PRs too; `github.head_ref` is a bare
+   branch name that `actions/checkout` would look for in the base repository, so the generated checkouts set no `ref:`. The merge ref cannot
+diff --git a/.claude/skills/regen-workflow/scripts/new_regen_workflow.py b/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
+index 53bd150..58b12fb 100644
+--- a/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
++++ b/.claude/skills/regen-workflow/scripts/new_regen_workflow.py
+@@ -5,7 +5,7 @@
+     python3 $S/new_regen_workflow.py --name "Update README" --run "python3 update_readme.py" --paths README.md \
+         --on push:main --on workflow_dispatch                                   # self-contained workflow (default: --mode inline)
+     python3 $S/new_regen_workflow.py --name "Update README" --run "…" --paths README.md --mode local        # calls ./.github/workflows/regenerate.yml
+-    python3 $S/new_regen_workflow.py --name "Update README" --run "…" --paths README.md --mode Owner/Repo@main   # calls a shared copy
++    python3 $S/new_regen_workflow.py --name "Update README" --run "…" --paths README.md --mode Owner/Repo@v1     # calls a shared copy
+     python3 $S/new_regen_workflow.py --emit-reusable                            # writes .github/workflows/regenerate.yml (the shared one)
+ 
+ Three ways to the same job (checkout → toolchains → run → commit-or-check), one commit step (assets/commit_if_changed.sh):
+@@ -15,16 +15,21 @@ Three ways to the same job (checkout → toolchains → run → commit-or-check)
+            Actions → General → Access → "Accessible from repositories owned by …")
+ Triggers: --on push[:branch[,branch]] · --on pull_request[:branch] (forces mode check: a PR cannot be pushed to) · --on schedule:"cron"
+ · --on workflow_dispatch. Commits made with GITHUB_TOKEN do not trigger workflows, so a push-triggered regeneration never loops;
+-pass a PAT through the `token` secret when the regenerated commit must itself run CI. Project-agnostic: nothing here names a repository.
++store a PAT as the `REGEN_TOKEN` secret when the regenerated commit must itself run CI. Project-agnostic: nothing here names a repository.
++Needs only the standard library; with PyYAML installed the generated file is parsed before it is written (pip install pyyaml).
+ """
+ from __future__ import annotations
+ 
+ import argparse
+ import re
++import subprocess
+ import sys
+ from pathlib import Path
+ 
+-import yaml
++try:
++    import yaml                                   # optional: only proves the generated file parses before it is written
++except ImportError:                               # pragma: no cover
++    yaml = None
+ 
+ HERE = Path(__file__).resolve().parent
+ COMMIT_SH = (HERE.parent / "assets" / "commit_if_changed.sh").read_text(encoding="utf-8")
+@@ -48,7 +53,7 @@ def on_block(specs: list[str]) -> str:
+         if kind in ("push", "pull_request"):
+             kinds.setdefault(kind, []).extend(b for b in arg.split(",") if b)
+         elif kind == "schedule":
+-            assert arg, "--on schedule:'<cron>'"
++            if not arg: raise SystemExit("--on schedule needs a cron expression: --on schedule:'0 6 * * 1'")
+             kinds.setdefault(kind, []).append(arg)
+         elif kind == "workflow_dispatch":
+             kinds.setdefault(kind, [])
+@@ -124,9 +129,8 @@ jobs:
+ 
+ def caller_workflow(a, uses: str) -> str:
+     run = "\n".join(a.run)
+-    # a workflow in this repository may inherit the caller's secrets; a shared one in another repository gets only the one it reads
+-    secrets = ("    secrets: inherit\n" if uses.startswith("./") else
+-               "    secrets:\n      REGEN_TOKEN: ${{ secrets.REGEN_TOKEN }}   # the only secret the shared workflow reads — never `inherit` across repositories\n")
++    # least privilege in both modes: the reusable workflow reads one secret, so one is passed (never `secrets: inherit`)
++    secrets = "    secrets:\n      REGEN_TOKEN: ${{ secrets.REGEN_TOKEN }}   # the only secret the reusable workflow reads\n"
+     opt = ""
+     if a.node: opt += f"      node-version: {yaml_str(a.node)}\n"
+     if a.install: opt += f"      install: {yaml_str(a.install)}\n"
+@@ -245,6 +249,15 @@ jobs:
+ """
+ 
+ 
++def origin_head() -> str | None:
++    """The clone's idea of the remote default branch (origin/HEAD), or None when unknown."""
++    try:
++        ref = subprocess.run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True, text=True, check=True).stdout.strip()
++        return ref.split("/", 1)[1] if ref.startswith("origin/") else ref
++    except (subprocess.CalledProcessError, FileNotFoundError):
++        return None
++
++
+ def main(argv=None) -> int:
+     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--name", help="workflow name, e.g. 'Update README'")
+@@ -279,14 +292,28 @@ def main(argv=None) -> int:
+             owner_repo, ref = a.mode.split("@", 1); text = caller_workflow(a, f"{owner_repo}/.github/workflows/regenerate.yml@{ref}")
+         else: ap.error("--mode must be inline, local or <owner>/<repo>@<ref>")
+         out = Path(a.out or f".github/workflows/{slug(a.name)}.yml")
+-    doc = yaml.safe_load(text)                                            # the file must parse before it is written
+-    assert "jobs" in doc and (True in doc or "on" in doc), "generated workflow lacks on:/jobs:"
++    if yaml is not None:                                                  # the file must parse before it is written
++        doc = yaml.safe_load(text)
++        assert "jobs" in doc and (True in doc or "on" in doc), "generated workflow lacks on:/jobs:"
++    else:
++        print("note: PyYAML is not installed, so the generated file was not parse-checked (pip install pyyaml)", file=sys.stderr)
++    if not a.emit_reusable:
++        implicit = [s for s in (a.on or ["push:main"]) if s.partition(":")[0] in ("push", "pull_request") and not s.partition(":")[2]]
++        head = origin_head()
++        if (implicit or not a.on) and head and head != "main":
++            print(f"note: triggers were written for branch 'main'; this clone's origin/HEAD is '{head}' — pass --on push:{head} if that is the default branch", file=sys.stderr)
+     if a.print:
++        if a.mode == "local" and not Path(".github/workflows/regenerate.yml").exists():
++            print("note: ./.github/workflows/regenerate.yml does not exist here — the caller needs it (run --emit-reusable)", file=sys.stderr)
+         sys.stdout.write(text); return 0
+     if out.exists() and not a.force:
+         sys.exit(f"{out} exists (use --force to overwrite)")
+     out.parent.mkdir(parents=True, exist_ok=True); out.write_text(text, encoding="utf-8")
+-    print(f"wrote {out}"); return 0
++    print(f"wrote {out}")
++    reusable = out.parent / "regenerate.yml"
++    if a.mode == "local" and not reusable.exists():                       # a caller without its callee fails on GitHub at parse time
++        reusable.write_text(reusable_workflow(), encoding="utf-8"); print(f"wrote {reusable} (the caller needs it; emitted once)")
++    return 0
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 198234a..2e1043b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -18,4 +18,5 @@ jobs:
+       - run: python .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify
+       - run: python .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
+       - run: python .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
++      - run: python .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check
+       - run: cd cloud_function_new_deals && DRYRUN=1 PROJECT=ci-project ./deploy.sh all >/dev/null && DRYRUN=1 PROJECT=ci-project ./deploy.sh dry >/dev/null
+diff --git a/.github/workflows/update-readme-index.yml b/.github/workflows/update-readme-index.yml
+index 9b30762..cbbc1d5 100644
+--- a/.github/workflows/update-readme-index.yml
++++ b/.github/workflows/update-readme-index.yml
+@@ -15,7 +15,8 @@ jobs:
+     if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'Regenerated-by:') }}   # a PAT push of the bot commit must not re-run this
+     permissions:
+       contents: write
+-    secrets: inherit
++    secrets:
++      REGEN_TOKEN: ${{ secrets.REGEN_TOKEN }}   # the only secret the reusable workflow reads
+     with:
+       run: |
+         python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*'
+diff --git a/README.md b/README.md
+index 22d3694..4fa77b6 100644
+--- a/README.md
++++ b/README.md
+@@ -46,6 +46,8 @@ node --check writeback/index.mjs && python3 workflows/src/build_workflow.py --ch
+ python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
+ python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py --root . --annotations docs/architecture.yaml --out-json docs/architecture.manifest.json --out-ascii docs/ARCHITECTURE_TREE.txt --out-html docs/architecture_tree.html --check
+ python3 .claude/skills/aider-scaffold/scripts/diff_ledger.py --check
++python3 .claude/skills/regen-workflow/assets/update_readme_index.py --readme README.md --dir docs --dir notebooks --exclude 'docs/diffs/*' --check
++python3 tests/test_regen_workflow.py
+ ```
+ 
+ Secrets never enter git: `.env` is ignored (`.env.example` carries the names), tokens live in Secret Manager, the n8n SA key in a
+@@ -59,8 +61,8 @@ gitignored folder.
+ - [Pass 2 — L2 likelihood tiers: design, evidence, execution surfaces](docs/PASS2_L2_TIERS.md)
+ - [Cloud Shell runbook — CloudBQ lane A on `wisekeybq`](docs/RUNBOOK_CLOUD_SHELL.md)
+ - [The three lanes, condensed](docs/SCENARIOS.md)
+-- [Discovery reports (2026-10-05)](docs/discovery/README.md)
+ - [Porting `pass-sequence` from mir-load to CloudBQ (and IC-DBT-BQ)](docs/discovery/pass_sequence_port.md)
++- [Discovery reports (2026-10-05)](docs/discovery/README.md)
+ - [Scenario A — Cloud Run function (gcloud, Scheduler OIDC, Secret Manager, BigQuery MERGE)](docs/discovery/scenario_A.md)
+ - [Scenario B — n8n on Cloud Run + workflow JSON (discovery report)](docs/discovery/scenario_B.md)
+ - [Scenario C — Hybrid: BigQuery computes, remote JS writes back, Breeze consumes, Claude iterates](docs/discovery/scenario_C.md)
+diff --git a/tests/test_regen_workflow.py b/tests/test_regen_workflow.py
+index 8e7a4f0..2dc899d 100644
+--- a/tests/test_regen_workflow.py
++++ b/tests/test_regen_workflow.py
+@@ -47,14 +47,37 @@ def test_local_and_remote_callers():
+     assert local["uses"] == "./.github/workflows/regenerate.yml" and local["permissions"] == {"contents": "write"}
+     assert local["with"]["paths"] == "docs/*.txt" and local["with"]["mode"] == "check" and local["with"]["run"].strip() == "python3 tree.py"
+     assert "Regenerated-by:" in local["if"]
+-    assert local["secrets"] == "inherit"
++    assert local["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "one secret in both caller modes"
+     g = gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "Owner/Repo@v1")
+     remote = g["doc"]["jobs"]["regenerate"]
+     assert remote["uses"] == "Owner/Repo/.github/workflows/regenerate.yml@v1"
+     assert remote["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "a shared workflow in another repository never inherits every secret"
++    assert "secrets: inherit" not in g["text"]
+     assert g["doc"]["concurrency"]["group"].startswith("regenerate-")
+ 
+ 
++def test_generator_without_pyyaml_and_bad_inputs():
++    """PyYAML is optional (the parse check is skipped with a note); a schedule without a cron is a usage error, not a traceback."""
++    with tempfile.TemporaryDirectory() as t:
++        (Path(t) / "yaml.py").write_text("raise ImportError('hidden for the test')\n")
++        env = dict(os.environ, PYTHONPATH=t)
++        r = subprocess.run([sys.executable, str(GEN), "--print", "--name", "x", "--run", "true", "--paths", "a"], capture_output=True, text=True, env=env, cwd=ROOT)
++        assert r.returncode == 0 and "jobs:" in r.stdout and "PyYAML is not installed" in r.stderr, r.stderr
++    r = subprocess.run([sys.executable, str(GEN), "--print", "--name", "x", "--run", "true", "--paths", "a", "--on", "schedule"], capture_output=True, text=True, cwd=ROOT)
++    assert r.returncode != 0 and "needs a cron" in r.stderr and "Traceback" not in r.stderr, r.stderr
++
++
++def test_local_mode_writes_the_reusable_when_missing():
++    with tempfile.TemporaryDirectory() as t:
++        r = subprocess.run([sys.executable, str(GEN), "--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "local"], capture_output=True, text=True, cwd=t)
++        assert r.returncode == 0, r.stderr
++        wf = Path(t) / ".github" / "workflows"
++        assert (wf / "trees.yml").exists() and (wf / "regenerate.yml").exists() and "emitted once" in r.stdout, r.stdout
++        assert (wf / "regenerate.yml").read_text() == gen("--emit-reusable")["text"]
++        r = subprocess.run([sys.executable, str(GEN), "--name", "Other", "--run", "true", "--paths", "x", "--mode", "local"], capture_output=True, text=True, cwd=t)
++        assert r.returncode == 0 and "emitted once" not in r.stdout, "the second caller leaves the existing reusable alone"
++
++
+ def test_triggers_merge_by_kind():
+     on = gen("--name", "x", "--run", "true", "--paths", "a", "--on", "push:main", "--on", "push:dev,main", "--on", "schedule:0 6 * * 1", "--on", "schedule:0 18 * * 5", "--on", "workflow_dispatch")["on"]
+     assert on["push"]["branches"] == ["main", "dev"] and [s["cron"] for s in on["schedule"]] == ["0 6 * * 1", "0 18 * * 5"] and "workflow_dispatch" in on
+@@ -161,7 +184,8 @@ def test_check_mode_exit_code_on_a_large_diff():
+ 
+ def test_readme_index_titles_hidden_dirs_and_line_endings():
+     with tempfile.TemporaryDirectory() as t:
+-        d = Path(t); docs = d / "docs"; docs.mkdir(); (docs / ".cache").mkdir()
++        d = Path(t); docs = d / "docs"; docs.mkdir(); (docs / ".cache").mkdir(); (docs / "aa").mkdir()
++        (docs / "aa" / "deep.md").write_text("# Deep\n"); (docs / "Zeta.md").write_text("# Zeta\n")
+         (docs / "fence.md").write_text("```bash\n# install deps first\n```\n\n# Real Heading\n")
+         (docs / "bom.md").write_bytes(b"\xef\xbb\xbf# BOM Title\n")
+         (docs / "setext.md").write_text("Setext Title\n============\n\ntext\n")
+@@ -172,6 +196,8 @@ def test_readme_index_titles_hidden_dirs_and_line_endings():
+         raw = readme.read_bytes(); text = raw.decode()
+         assert raw.count(b"\r\n") == raw.count(b"\n"), "CRLF README stays CRLF"
+         assert "[Real Heading](docs/fence.md)" in text and "[BOM Title](docs/bom.md)" in text and "[Setext Title](docs/setext.md)" in text and "Hidden" not in text
++        order = [l.split("](")[1].rstrip(")") for l in text.splitlines() if l.startswith("- [")]
++        assert order == ["docs/bom.md", "docs/fence.md", "docs/setext.md", "docs/Zeta.md", "docs/aa/deep.md"], order   # files first, case-insensitive, then sub-directories
+         assert run("--dir", str(docs), "--check").returncode == 0
+         fresh = d / "NEW.md"; assert subprocess.run([sys.executable, str(INDEX), "--readme", str(fresh), "--dir", str(docs)], capture_output=True).returncode == 0
+         assert fresh.read_text().startswith("## Documents\n"), repr(fresh.read_text()[:40])

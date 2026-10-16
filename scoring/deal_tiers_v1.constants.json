@@ -1,0 +1,61 @@
+{
+  "version": "v1",
+  "fitted": "2026-10-16",
+  "scale": "fraction 0-1: HubSpot stores hs_deal_stage_probability and icalps_oppocertainty as fractions; the operator's 50 % / 75 % / 90 % are 0.5 / 0.75 / 0.9",
+  "edges": [
+    0.5,
+    0.75,
+    0.9
+  ],
+  "labels": [
+    "Tier4_pipeline",
+    "Tier3_opportunity",
+    "Tier2_opportunity",
+    "Tier1_opportunity"
+  ],
+  "closed_labels": {
+    "won": "Closed_won",
+    "lost": "Closed_lost"
+  },
+  "binning": "bin_index = numpy.digitize(certainty, edges) = BigQuery RANGE_BUCKET(certainty, edges): 0 below the first edge, k when edges[k-1] <= certainty < edges[k], len(edges) at or above the last edge; NULL stays NULL",
+  "certainty_source": {
+    "766126206": "icalps_oppocertainty",
+    "default": "hs_deal_stage_probability"
+  },
+  "watch_properties": {
+    "766126206": [
+      "icalps_oppocertainty",
+      "dealstage"
+    ],
+    "default": [
+      "dealstage",
+      "hs_deal_stage_probability"
+    ]
+  },
+  "hubspot_property": {
+    "name": "deal_tier_v1",
+    "label": "Deal tier (L2, likelihood)",
+    "type": "enumeration",
+    "field_type": "select",
+    "group": "dealinformation",
+    "options": [
+      "Tier1_opportunity",
+      "Tier2_opportunity",
+      "Tier3_opportunity",
+      "Tier4_pipeline",
+      "Closed_won",
+      "Closed_lost"
+    ],
+    "description": "L2 likelihood tier from the deal's certainty (icalps_oppocertainty on Icalps, the stage probability elsewhere); edges 0.5 / 0.75 / 0.9; written daily from BigQuery deal_tiers through StackSync"
+  },
+  "unusable_properties": {
+    "icalps_dealcertainty": "string type, no values on 2026-10-16",
+    "hs_forecast_probability": "no values",
+    "win_probability": "mirror of hs_deal_stage_probability on SealSQ pipelines (manual edits aside)"
+  },
+  "webhook_events": [
+    "deal.creation",
+    "deal.propertyChange"
+  ],
+  "retirement": "a deal whose certainty is cleared, or that leaves the sync, keeps its gold row with tier NULL, previous_tier and retired_at; StackSync then clears deal_tier_v1"
+}

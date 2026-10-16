@@ -1,0 +1,1043 @@
+commit 3a5c1bc91b7906c059b77b3f966a28333e625edf
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 17:23:34 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 17:23:34 2026 +0000
+
+    tooling: port the pass-sequence skill from mir-load (generic SKILL.md, pattern, worked examples, evals)
+    
+    The six generic files (builder, dumper, run-sheet generator, surfaces spec, two templates) are byte-identical to Wkayaobama/mir-load; SKILL.md, references/pattern.md and references/worked-example.md are rewritten so the skill is project-agnostic: columns A/B/C may be execution surfaces (mr-load) or candidate scenarios (CloudBQ), the layer list is the project's fixed decomposition, and the 'parallel lane' is defined as the layers Parallel across all columns. Scripts proven in this sandbox on the real mr-load spec (--verify OK, --compare identical values).
+    
+    Recipe: discovery/pass_sequence_port.md
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .claude/skills/pass-sequence/SKILL.md              | 133 +++++++++++++
+ .../assets/EXECUTION_SURFACES.template.md          |  68 +++++++
+ .../pass-sequence/assets/PASS_SEQUENCE.template.md |  88 +++++++++
+ .claude/skills/pass-sequence/evals/evals.json      |  23 +++
+ .claude/skills/pass-sequence/references/pattern.md |  71 +++++++
+ .../pass-sequence/references/surfaces-spec.md      |  86 +++++++++
+ .../pass-sequence/references/worked-example.md     |  24 +++
+ .../pass-sequence/scripts/build_run_sheet.py       | 167 ++++++++++++++++
+ .../pass-sequence/scripts/build_surfaces_xlsx.py   | 212 +++++++++++++++++++++
+ .../pass-sequence/scripts/dump_surfaces_xlsx.py    |  81 ++++++++
+ 10 files changed, 953 insertions(+)
+
+diff --git a/.claude/skills/pass-sequence/SKILL.md b/.claude/skills/pass-sequence/SKILL.md
+new file mode 100644
+index 0000000..63c6e24
+--- /dev/null
++++ b/.claude/skills/pass-sequence/SKILL.md
+@@ -0,0 +1,133 @@
++---
++name: pass-sequence
++description: Produce the documentation set that keeps a gated pipeline at parity across its execution surfaces or candidate scenarios — the ordered sequence page, the surfaces record, and the Excel lane workbook (Layers · Pipeline steps · Remediation · Equality checks with live parity counts) built from a YAML spec. Use when adding a pass or a scenario, comparing lanes, asked "which lane is idempotent / parallel", or when a probe result must enter the record. Docs only; it never changes pipeline code.
++---
++
++# pass-sequence
++
++A deployment reaches parity across surfaces not because of the code but because of a method: one
++script (or one command sequence) is the execution surface, gates open inline after a dry run,
++checkpoints are read back from shared truth, the one local state is named, and a **documentation
++set is produced in a fixed order** every time a pass or a scenario is added. This skill produces
++that set. Read `references/pattern.md` once for the why; the rest of this file is the how.
++
++Four artefacts, always in this sequence, because each feeds the next:
++
++| # | Artefact | Role | Source of truth |
++|---|---|---|---|
++| 1 | `docs/PASS{N}_SEQUENCE.md` | the recipe: commands in order, look/edit at each stage, the branch point, evidence | the runner or deploy script + what the operator actually ran |
++| 2 | `docs/EXECUTION_SURFACES.md` | the record: motions, parity vocabulary, dated timeline divergence → observation → fix (commit), per-surface operations, probe, open items | git log + operator logs |
++| 3 | `docs/EXECUTION_SURFACES.xlsx` from `docs/execution_surfaces.yaml` | the audit: Layers, Pipeline steps, Remediation, Equality checks with live parity formulas | the YAML spec (edit it, rebuild) |
++| 4 | a run sheet (optional motion) | the sequential motion: one cell per step, LIVE cells behind a confirm switch | the same spec's steps |
++
++Docs only. A documentation pass never changes pipeline code to fit the documentation; the only
++non-markdown edit it may make is a usage comment (a script header). A missing fact (a step's
++output, an id, a count) is obtained by running the step or asking the operator — never composed.
++Evidence pasted into the record is verbatim operator output with its date and target system.
++
++## What "surfaces" means in a given project
++
++The columns A/B/C of every sheet are whatever the project must keep equivalent:
++
++- **execution surfaces** of one pipeline (mr-load: notebook / terminal / Cloud Shell), or
++- **candidate scenarios** for the same outcome (CloudBQ: Cloud Run function / n8n on Cloud Run /
++  BigQuery compute + remote JS). Then a *motion* is how a scenario acquires code, runs, and keeps
++  state, and the Overview's "Ubuntu" column reads as *runtime* — say so in the legend.
++
++The layer list is the project's fixed decomposition of the execution layer (mr-load: L0 acquire …
++L15 materialisation; CloudBQ: L0 deploy unit … L17 cost). Fix it before writing cells; every
++analyst and every sheet uses the same ids.
++
++## 0 · Collect the execution layer before writing anything
++
++- **Steps in order, with gates.** From the runner's `case` list, or the deploy script's numbered
++  blocks: name, gate, dry/live pair, what the step writes. A command not in the script does not go
++  in a sequence page.
++- **Surfaces / scenarios.** For each: how the code is acquired, what runtime executes it, what
++  drives a step, where state lives.
++- **Shared truth vs local state.** What every surface reads from the same place (warehouse tables,
++  the secret store, the portal of the token) versus what is per clone or per runtime.
++- **What happened.** `git log --oneline` since the previous pass; pasted logs and errors; probes
++  (`bq query`, a `status` output). Note the dates.
++- **Branch points.** Where an operator chooses between two legitimate routes (delivery via webhook
++  versus owned by the orchestrator; live versus dry) — documented, not replaced by a new tool.
++- **The checkpoint's view.** What the state machine or the watermark says about the order you are
++  about to document; say its limits in the docs instead of changing it.
++
++## 1 · The sequence page — `docs/PASS{N}_SEQUENCE.md`
++
++Start from `assets/PASS_SEQUENCE.template.md`. Keep its sections and order: preconditions; the
++sequence as one copy-pasteable `bash` block with `# ── look ──` / `# ── edit ──` inserts after every
++step that produces something the operator must read or change (a stage without a look command is
++the gap operators hit first); the branch point with both routes and their one prerequisite each;
++the produces/look table; evidence (verbatim, dated); pitfalls. Give each surface's verbs: for a
++cloud deploy, `gcloud run services describe`, `gcloud scheduler jobs run`, `gcloud logging read`,
++`bq query`, `curl … dry_run=1 | python3 -m json.tool`; for a terminal pass, `column -s, -t | less -S`,
++`nano`, the download/upload round trip.
++
++## 2 · The surfaces record — `docs/EXECUTION_SURFACES.md`
++
++Start from `assets/EXECUTION_SURFACES.template.md` if absent; otherwise append. The timeline is
++append-only: `When · Divergence · Observed how · Closed by` with the commit hash for every fix and
++"**not implemented, awaiting consent**" for proposals the operator has not approved. Keep the parity
++vocabulary exact: **Parallel** (same mechanism, same result), **Conditional** (same result under a
++stated condition), **Divergent** (different mechanism; remediation makes it equivalent).
++
++## 3 · The workbook — `docs/execution_surfaces.yaml` → `docs/EXECUTION_SURFACES.xlsx`
++
++The YAML is the source; the workbook is built from it. Format: `references/surfaces-spec.md`.
++
++```bash
++S=.claude/skills/pass-sequence/scripts
++# first time only, when a workbook exists but no spec
++python3 $S/dump_surfaces_xlsx.py --xlsx docs/EXECUTION_SURFACES.xlsx --out docs/execution_surfaces.yaml
++python3 $S/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/roundtrip.xlsx --compare docs/EXECUTION_SURFACES.xlsx
++# every pass: edit the YAML, rebuild, verify
++python3 $S/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
++```
++
++Add per pass: a **Layer** per new operator concern, **Pipeline steps** rows (`15b`, `15c` ids keep
++numbering stable), **Remediation** rows for every failure observed (symptom · layer · surfaces ·
++cause · fix · verified), **Equality checks** for what to compare after each new stage, and an
++Overview verdict sentence naming the pass and the commits. Parity is decided per row by the
++vocabulary; the producer refuses any other word. The **parallel lane** is the set of layers whose
++parity is Parallel across all columns: it is what holds whichever surface or scenario is chosen.
++
++Recalculation: formulas are whole-column `COUNTIF` / `SUM` / `COUNTA` saved with `fullCalcOnLoad`,
++so Excel and LibreOffice compute them on open. When LibreOffice recalculation is unavailable (it has
++timed out in sandboxes), rely on `--verify`, which prints the values the formulas will show, and say
++so in the hand-over.
++
++## 4 · The motion (optional)
++
++`scripts/build_run_sheet.py` generates a Polyglot `.dib` run sheet from the spec's steps for
++projects that drive steps from PowerShell helpers (`Invoke-Step`, `Get-PipelineState`, …). Offer it
++only when the runner has a `<step>` case list and gates; otherwise state that the motion is the
++sequence page's bash block itself.
++
++## 5 · Thread the pointers
++
++Reference documents keep their roles and point at the sequence page instead of repeating it: the
++README's "test before scheduling" paragraph, the runner's header comment, the index/structure page.
++
++## 6 · Verify, then hand over
++
++```bash
++bash -n <runner or deploy script>                      # header comment is the only script edit
++python3 -m py_compile <python entry points>
++python3 $S/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
++grep -rn "<old count>\|<old branch>" docs             # stale references
++```
++
++Commit the set on the working branch with a message that lists the artefacts and says
++"documentation only"; push. The hand-over states: what was produced, the one limitation if any
++(recalculation), what stays open awaiting consent. Never commit `.env`.
++
++## Worked examples and templates
++
++- `references/worked-example.md` — mr-load pass 2 (execution surfaces) and CloudBQ pass 1 (scenarios
++  as lanes): produced files, counts, probes, commits. Read to calibrate depth and tone.
++- `references/pattern.md` — the twenty ingredients, each with the failure it prevents, illustrated
++  from both projects.
++- `assets/PASS_SEQUENCE.template.md`, `assets/EXECUTION_SURFACES.template.md` — section skeletons.
++- `evals/evals.json` — prompts and expected outputs for the skill-creator's eval loop.
+diff --git a/.claude/skills/pass-sequence/assets/EXECUTION_SURFACES.template.md b/.claude/skills/pass-sequence/assets/EXECUTION_SURFACES.template.md
+new file mode 100644
+index 0000000..b0fd718
+--- /dev/null
++++ b/.claude/skills/pass-sequence/assets/EXECUTION_SURFACES.template.md
+@@ -0,0 +1,68 @@
++# Execution surfaces — how the {n} layers were reconciled (record)
++
++Companion to `docs/EXECUTION_SURFACES.xlsx` (Overview, Layers L0–L{k}, Pipeline steps, Remediation
++R01–R{m}, Equality checks). This page is the narrative: what diverged between the surfaces, how each
++divergence was observed, what closed it, and the probe that ended the reconciliation on {date}. The
++pass recipe itself is `docs/PASS{N}_SEQUENCE.md`; the step reference is `{runbook}`.
++
++## 1. The motions and the vocabulary
++
++| Motion | Acquire | Runtime | Driver | State lives in |
++|---|---|---|---|---|
++| **A** · {notebook motion} | | | | |
++| **B** · {terminal motion} | | | | |
++| **C** · {remote shell motion} | | | | |
++
++Parity of a layer or a step is one of three words. **Parallel**: same mechanism, same result on
++every surface. **Conditional**: same result when a stated condition holds (same commit, same
++identity, same clone for the ledger). **Divergent**: a different mechanism, with a remediation
++that makes it equivalent.
++
++## 2. The principle that made reconciliation possible
++
++{One script is the execution surface; gates inline; shared truth = …; local = …; every
++reconciliation either moved a read to shared truth or stated the condition for trusting a local
++artefact.}
++
++## 3. Timeline — divergence, observation, fix
++
++| When | Divergence | Observed how | Closed by |
++|---|---|---|---|
++| {date} | {what differed between surfaces} | {log line / count / symptom, and where it was seen} | {commit hash + one line; or "**not implemented, awaiting consent**"; or a rule and where it is written} |
++
++(Append-only. Never rewrite a past row; add a new one when the situation changes.)
++
++## 4. Pass {N} on each surface, after the reconciliation
++
++| Operation | A | B | C | Parity |
++|---|---|---|---|---|
++| View {the decision file} | | | | |
++| Edit it | | | | Conditional: per clone |
++| Bulk approve | | | | |
++| Run the steps | `Invoke-Step` | `{script} <step>` | same | Parallel / Conditional (ledger) |
++| Probe {shared truth} | | | | Parallel |
++| {Manual-route file} | | | | |
++
++{One sentence on what stayed local on purpose and what moved to shared truth.}
++
++## 5. The probe that closed the reconciliation ({date}, {portal}, {surface})
++
++```
++{command and output, verbatim}
++```
++
++What it proves, surface by surface: {bullets}.
++
++## 6. What stays open (none of it blocks pass {N})
++
++- {proposal} — **not implemented, awaiting consent**.
++- {data-quality flag} — action before production.
++- {prerequisite for a route}.
++- {structural improvement not built} — would remove {which Conditional}.
++- {external behaviour to verify once}.
++
++## 7. Keeping the parity
++
++After each stage compare the artefact the *Equality checks* sheet names: {list}. Two surfaces on
++the same commit, identity and ledger produce the same numbers; any difference points at one of the
++{k+1} layers.
+diff --git a/.claude/skills/pass-sequence/assets/PASS_SEQUENCE.template.md b/.claude/skills/pass-sequence/assets/PASS_SEQUENCE.template.md
+new file mode 100644
+index 0000000..8a8d08c
+--- /dev/null
++++ b/.claude/skills/pass-sequence/assets/PASS_SEQUENCE.template.md
+@@ -0,0 +1,88 @@
++# Pass {N} — the sequence, on any surface ({primary surface} shown)
++
++The ordered recipe from the working branch to {outcome of pass N}, with the place to *look* at every
++stage. {Runbook} §{section} explains each step; `docs/EXECUTION_SURFACES.md` records how the
++surfaces were brought to the same result. Notebook users run the same steps as
++`Invoke-Step '<step>'`; terminal users type the same commands. Nothing below is specific to
++{primary surface} except {the surface-specific verbs, e.g. the four `cloudshell` verbs}.
++
++## Preconditions on the clone you run from
++
++- Pass {N-1} is complete there: {steps} done, so `{state command}` shows {count} steps done.
++- `.env` points at the **sandbox** token and portal `{portal id}` ({env clinic command}).
++- {Ledger locality rule: the live steps of pass N-1 ran from this clone, or its ledger was copied here.}
++
++## The sequence
++
++```bash
++git fetch origin && git checkout {working branch} && git pull
++{script} {first step}          # {what it checks}
++{script} {step}                # {what it writes: files, tables}
++
++# ── look ──────────────────────────────────────────────────────────────────────────────────
++{aligned view command}          # {what it is good for / not good for}
++
++# ── edit (pick one) ───────────────────────────────────────────────────────────────────────
++{editor command per surface}
++{bulk edit one-liner}           # {exact column it touches; rows it skips}
++{download / upload round trip}
++
++{script} {next step}           # {what it persists even in dry mode; what it prints}
++
++# ── look ──────────────────────────────────────────────────────────────────────────────────
++{result file viewer}
++{status command}
++
++{script} {materialising step}  # THE MATERIALISATION: {what lands in shared truth}; prints {the console recipe}
++
++# ── look, from the terminal ──────────────────────────────────────────────────────────────
++{warehouse probe query}
++```
++
++{Facts that affect an edit: line endings, quoting, the column index a bulk edit relies on.}
++
++## The branch point after `{materialising step}`
++
++**{Route 1} — {the programmatic loader, one surface}.** {Which existing step does it; why it
++already covers the new rows.} {Its one prerequisite and how to obtain it — a read-only call.}
++
++```bash
++{route 1 commands}
++```
++
++**{Route 2} — {no API}.** {The console/wizard path: the query, Save results, the mapping, the
++order when a companion file has rows, and the bookkeeping afterwards (approve=N).}
++
++```sql
++{the export query}
++```
++
++**Why no {new tool}.** {Where the logic, idempotency and guard live; what a duplicate would fork,
++which secret it would need, which data flow it would invert. The one genuinely different option
++and what must be verified before relying on it.}
++
++## What each stage produces, and where to look
++
++| Stage | Produces | Look with |
++|---|---|---|
++| `{step}` | {files / tables / ledger rows} | {commands} |
++| any time | position in the sequence | `{state command}` |
++
++{What the state machine says about this order: what stays done, what its "next" hint knows.}
++
++## Evidence — the probe of {date} ({portal}, {surface})
++
++```
++{operator's command and output, verbatim}
++```
++
++Reading it: {row count and what one row is}; {the rows the new pass changed and how}; {what is
++deliberately still empty and why that is correct}; {how it ties to the rehearsal check}.
++
++## Pitfalls
++
++- **{Persisted state only.}** {Which dry outcomes do not appear; which view remains authoritative.}
++- **{Generated files are never edited.}** {Where edits go; what overwrites the generated files.}
++- **{Bookkeeping after the manual route.}**
++- **{Data-quality flag seen in the probe}** and the action before production.
++- **{External behaviour still to confirm once}** (e.g. a wizard's auto-match).
+diff --git a/.claude/skills/pass-sequence/evals/evals.json b/.claude/skills/pass-sequence/evals/evals.json
+new file mode 100644
+index 0000000..d5097a6
+--- /dev/null
++++ b/.claude/skills/pass-sequence/evals/evals.json
+@@ -0,0 +1,23 @@
++{
++  "skill_name": "pass-sequence",
++  "evals": [
++    {
++      "id": 1,
++      "prompt": "We deployed the Cloud Run function and ran ?entity=SEALSQ&dry_run=1 and ?entity=ICALPS&dry_run=1; here are both payloads (row_count 7 and 5, duplicate_suspects 1). Produce the pass-1 documentation set in order: docs/PASS1_SEQUENCE.md, the timeline in docs/EXECUTION_SURFACES.md, the workbook rows via docs/execution_surfaces.yaml, and say whether a run sheet applies. Docs only.",
++      "expected_output": "PASS1_SEQUENCE.md with preconditions, the ordered gcloud/bq block including look inserts and the dry-run curl, the delivery branch point, both payloads pasted as evidence with the date; EXECUTION_SURFACES.md timeline rows appended (not rewritten) citing commits; execution_surfaces.yaml gains equality checks for the dry-run counts with a parity word each; the workbook rebuilt with --verify; a statement that no run sheet applies while deploy.sh has no step case list; no pipeline code changed.",
++      "files": []
++    },
++    {
++      "id": 2,
++      "prompt": "There is a hand-made docs/EXECUTION_SURFACES.xlsx in this repo but no YAML source. Bootstrap the spec from it, prove the rebuild is identical, and add a Remediation row for the error we hit: PERMISSION_DENIED: Permission 'secretmanager.versions.access' denied for resource 'projects/…/secrets/hubspot-token/versions/latest'.",
++      "expected_output": "docs/execution_surfaces.yaml produced by dump_surfaces_xlsx.py (parity_meanings re-added by hand); build_surfaces_xlsx.py --compare reports identical values; a new R-row with symptom, layer L2, surfaces A, cause (service account lacks roles/secretmanager.secretAccessor on the secret), fix (gcloud secrets add-iam-policy-binding), verified; the workbook rebuilt with --verify and the recalculation limitation stated if LibreOffice is unavailable.",
++      "files": []
++    },
++    {
++      "id": 3,
++      "prompt": "Scenario B (n8n) now MERGEs into hubspot.new_deals too. After both lanes ran this Monday, which Equality checks apply and which layers can move from Conditional to Parallel? Update the spec and rebuild.",
++      "expected_output": "Equality checks for rows per entity, both watermarks, and one deal's hot score across Python and the n8n Code node named with their bq query; layers L7 (MERGE) and L8 (watermark) re-decided only if the probe shows identical results, otherwise left Conditional with the condition stated; Overview counts quoted from --verify; the probe pasted verbatim with date; no change to main.py or the n8n JSON.",
++      "files": []
++    }
++  ]
++}
+diff --git a/.claude/skills/pass-sequence/references/pattern.md b/.claude/skills/pass-sequence/references/pattern.md
+new file mode 100644
+index 0000000..c059116
+--- /dev/null
++++ b/.claude/skills/pass-sequence/references/pattern.md
+@@ -0,0 +1,71 @@
++# The pattern — ingredients of a deployment that reached parity across its surfaces
++
++Condensed from mr-load (Drive library → BigQuery/dbt → HubSpot, passes 1–2, 2026-09) and re-read
++for CloudBQ (HubSpot deals → BigQuery → weekly report, three candidate scenarios, 2026-10). Each
++ingredient is stated with the failure it prevents, because that is how to recognise when one is
++missing in a new project. The second illustration shows the same ingredient when the "surfaces"
++are scenarios rather than terminals.
++
++## Execution
++
++1. **One script is the execution surface.** mr-load: every cell and terminal line runs
++   `scripts/run_pass1.sh <step>`. CloudBQ: every scenario must call the same arithmetic — the
++   hot-score constants exist once per runtime and an equality check pins them to the same output for
++   one `deal_id`. Failure prevented: three procedures that drift apart.
++2. **Gates opened inline, per live step, after a dry run.** mr-load: `MRLOAD_APPROVE_X=1 runner …`,
++   never exported. CloudBQ: `?dry_run=1` on both entities before any scheduler is enabled; the live
++   write is the absence of that flag, and the Scheduler jobs are created last.
++3. **Live steps checkpoint their dry counterpart first.** The dry payload is the plan the operator
++   reads; the record keeps both.
++4. **Checkpoints read back from a state machine.** mr-load: `pipeline_state.sh` (done / stale /
++   failed / pending). CloudBQ: `hubspot.report_state.watermark` per entity, advanced only after a
++   successful MERGE; the window `[watermark − overlap, run_ts)` is the state.
++5. **A local ledger makes live steps idempotent — and is the one Conditional.** mr-load: SQLite on
++   the clone that ran the live steps. CloudBQ: there is no clone — the MERGE on `deal_id` plus the
++   `report_state` row *is* the ledger, and the Conditional becomes "same `report_state` row, same
++   identity, one instance at a time (`--max-instances 1 --concurrency 1`)".
++6. **Shared truth versus local state, decided per artefact.** Anything another surface must read
++   lives in the warehouse (`hubspot.new_deals`, `new_deals_last_7d`); an orchestrator's private
++   state (an n8n static variable, a JS runtime cache) is local by definition and must not hold
++   the watermark.
++7. **Strict pass boundaries.** A new scenario never rewrites what a running one wrote; it MERGEs
++   into the same table under the same key or it is not the same pipeline.
++8. **Enrich, never create, when reconciling with an external system.** The write-back lane PATCHes a
++   score onto deals that exist; it never creates deals, and it skips rows already holding the value.
++
++## Evidence
++
++9. **A rehearsal harness with numbered checks is the regression net.** mr-load: 48 → 50 checks.
++   CloudBQ: offline test vectors for `hot_score()` and for the window arithmetic, run before deploy.
++10. **The probe closes a reconciliation.** `bq query` from the least-equipped surface, pasted
++    verbatim with date and project; read column by column.
++11. **Equality checks after each stage.** Payload counts after dry run; rows per entity and both
++    watermarks after the first live run; identical counts after the second (idempotent) run; the
++    same score for one deal across Python, JS and SQL.
++
++## Operator experience
++
++12. **Look and edit affordances are part of the sequence.** After every step the command that shows
++    its result (`gcloud run services describe`, `gcloud logging read`, `bq query`, `python3 -m json.tool`).
++13. **Branch points are documented, not tooled away.** Delivery by the function's webhook POST
++    versus delivery owned by n8n; write-back by remote JS versus none. Both routes with one
++    prerequisite each; no second loader.
++14. **The sandbox is the only target until told otherwise.** Portal id pinned (`PORTAL_ID`),
++    private service (`--no-allow-unauthenticated`), scheduler identity scoped to the service.
++
++## Documentation
++
++15. **Distinct documents with distinct roles**: sequence page = recipe; README = reference;
++    surfaces record = history; workbook = audit; run sheet or bash block = motion. Pointers, no
++    duplicated procedure.
++16. **Docs-only changes touch no code.** Fixes the operator has described but not committed are
++    recorded as "not implemented, awaiting consent" until a commit hash can be cited.
++17. **Commits are cited.** Every "closed by" names a hash checkable with `git show`.
++18. **Side branch per feature, fast-forward when the operator says merge.**
++
++## Safety and consent
++
++19. **Secrets never reach git.** `.env` ignored, `.env.example` carries names only, Secret Manager
++    for runtime tokens.
++20. **Guardrails that could impede the operator are proposed, not implemented, until consent.**
++    "Not implemented, awaiting consent" is a first-class status in the record.
+diff --git a/.claude/skills/pass-sequence/references/surfaces-spec.md b/.claude/skills/pass-sequence/references/surfaces-spec.md
+new file mode 100644
+index 0000000..66b4d9d
+--- /dev/null
++++ b/.claude/skills/pass-sequence/references/surfaces-spec.md
+@@ -0,0 +1,86 @@
++# The surfaces spec (`docs/execution_surfaces.yaml`)
++
++One YAML file is the source of the workbook; `scripts/build_surfaces_xlsx.py` renders it, and
++`scripts/dump_surfaces_xlsx.py` recovers it from a workbook built by hand. Long strings are
++written as block scalars (`|`) so diffs stay readable.
++
++```yaml
++title: "<project> — three execution surfaces, one pipeline"        # Overview A1
++verdict: |                                                          # Overview A2 (merged, wrapped)
++  Verdict: … one paragraph; add a sentence per pass naming the commits and the probe.
++legend: |                                                           # Overview last row
++  Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers L0–L15 …
++  Remediation … (R01–R25) … Source: the repository on branch <branch> at <date> (<commit>), …
++surfaces:                                                           # column headers reused by every sheet
++  A: "A · Zip / clone → VS Code → Polyglot notebook (PowerShell cells)"
++  B: "B · WezTerm → Ubuntu terminal (WSL or Docker)"
++  C: "C · Cloud Shell terminal"
++motions:                                                            # Overview rows: one per motion
++  - motion: "A · Zip / clone → VS Code → Polyglot notebook"
++    acquire: …
++    ubuntu: …
++    driver: …
++    state: …
++    assessment: …
++layers:                                                             # sheet "Layers", L0…
++  - id: L14
++    layer: "Pass-2 decisions: view and edit review/deal_decisions.csv"
++    A: "VS Code on the clone (Rainbow CSV); Invoke-Ubuntu 'column -s, -t < …'"
++    B: "column -s, -t < … | less -S; nano"
++    C: "cloudshell edit …; nano; cloudshell download → edit → ⋮ Upload → mv …"
++    parity: Conditional                                             # Parallel | Conditional | Divergent — nothing else
++    diverges: "The file is per clone (L9): edit it where the pass runs …"
++    remediation: "None needed. Bulk approve: sed -i -E … (approve = 15th column)"
++    verified: "Cloud Shell run of 2026-09-30 …"
++steps:                                                              # sheet "Pipeline steps"
++  - n: 15                                                           # int for runner steps; "15b", "15c" for branch/probe rows
++    step: deals-dry                                                 # bare sub-command → the run-sheet generator makes a cell for it
++    gate: ""                                                        # "" or "LIVE <GATE_NAME>"
++    A: "Invoke-Step 'deals-dry'"
++    B: "scripts/run_pass1.sh deals-dry"
++    C: "scripts/run_pass1.sh deals-dry"
++    parity: Parallel
++    artefact: "would_create per approved anchor; …"                 # "identical artefact to compare" / run-sheet "what must be true afterwards"
++    notes: "Reads deal_decisions.csv of that clone …"
++remediation:                                                        # sheet "Remediation", R01…
++  - id: R21
++    symptom: "deals-dry / deals-live: failed ×N, error create_error"
++    layer: L8
++    surfaces: "A B C"
++    cause: "dealstage / pipeline value is not a STAGE / PIPELINE ID of the portal the token belongs to"
++    fix: "Read the ids once: … GET /crm/v3/pipelines/deals …"
++    verified: "sandbox pass 2 (6 failed rows)"
++equality_checks:                                                    # sheet "Equality checks"
++  - stage: after ledger-export
++    compare: the import tables (the wizard's input)
++    A: "Invoke-Ubuntu 'bq query …'"
++    BC: "bq query --use_legacy_sql=false '…'"
++    expected: "one row per inferred anchor; … identical from every surface"
++parity_meanings:                                                    # optional override of the Overview meaning column
++  Parallel: same mechanism, same result on every surface
++  Conditional: same result when the stated condition holds (same commit, same identity, same clone for the ledger)
++  Divergent: different mechanism; the remediation makes it equivalent
++```
++
++## How parity is decided, per row
++
++- **Parallel** when the command, the code path and the artefact are the same on every surface
++  and nothing local can change the outcome (`walk`, `dbt`, `review`, a `bq query`).
++- **Conditional** when the outcome is the same only under a condition the row states: same
++  commit (L1), same Google identity (L5), same clone for the ledger (L9, every live HubSpot step
++  and `ledger-export`), a file that lives on one clone (`deal_decisions.csv`).
++- **Divergent** when the mechanism differs (a ZIP has no git; the guard exists only where `.git`
++  exists) and the remediation column says how the surfaces are made equivalent.
++
++The Overview counts these words live (`COUNTIF` over the Parity columns) and checks that the
++counts add up to the row counts (`COUNTA`), so a typo in a parity cell shows as a mismatch.
++`build_surfaces_xlsx.py` refuses any word outside the three at build time.
++
++## Producer conventions (fixed, not in the spec)
++
++Arial 10 body, Arial 14 bold title, navy `1F3864` header rows with white bold text, thin grey
++borders, wrap + top alignment, parity fills `E2F0D9` / `FFF2CC` / `F8CBAD` with bold text, column
++widths per sheet, frozen header rows (Overview at row 5), verdict and legend merged across A:F with
++a height derived from their length, `fullCalcOnLoad` on. Ten formulas on the Overview; none
++elsewhere, so a LibreOffice recalculation is a nicety, not a requirement: `--verify` prints the
++values they will show.
+diff --git a/.claude/skills/pass-sequence/references/worked-example.md b/.claude/skills/pass-sequence/references/worked-example.md
+new file mode 100644
+index 0000000..91a7605
+--- /dev/null
++++ b/.claude/skills/pass-sequence/references/worked-example.md
+@@ -0,0 +1,24 @@
++# Worked examples
++
++## mr-load, pass 2 (execution surfaces: notebook / terminal / Cloud Shell), 2026-09
++
++Produced in order: `docs/PASS2_SEQUENCE.md` (preconditions, the bash block with look/edit inserts,
++the branch point API loader vs import wizard, the probe as evidence), `docs/EXECUTION_SURFACES.md`
++(timeline rows citing `6f38600`, `765cd01`, `6abaf18`), `docs/execution_surfaces.yaml` →
++`docs/EXECUTION_SURFACES.xlsx` (Layers 16 rows 8/4/4 Parallel/Conditional/Divergent; Pipeline steps
++21 rows 14/7/0; Remediation R01–R25; 13 equality checks), the run sheet `notebooks/mr-load-run.dib`.
++The probe that closed the reconciliation was a `bq query` over the materialised import tables from
++Cloud Shell, read column by column. Builder round trip on 2026-10-05 in a fresh sandbox:
++`--verify OK`, `--compare identical values`.
++
++## CloudBQ, pass 1 (scenarios as lanes: Cloud Run function / n8n on Cloud Run / BigQuery + remote JS), 2026-10
++
++The columns are candidate orchestrators for one outcome; the layers are the fixed list L0–L17.
++Pass 1 = the scenario-A deploy sequence (service account → grants → secret → tables → deploy →
++dry run on both entities → first live run → schedulers), recorded before any run with the operator's
++risk table as remediation seeds (R01 DCL quoting, R02 run.invoker, R03 watermark race, R04 `:latest`
++pin, R05 deploy syntax) and the per-layer lane cells from the discovery analysts. Parity words at
++this stage encode expectations; every row is re-decided after the first run on a second lane.
++Numbers worth pinning when the first run happens: rows per entity in `hubspot.new_deals`, the two
++watermarks, `duplicate_suspects`, the `day1_hot` list, and the hot score of one deal across runtimes.
++Obtain by running; never compose.
+diff --git a/.claude/skills/pass-sequence/scripts/build_run_sheet.py b/.claude/skills/pass-sequence/scripts/build_run_sheet.py
+new file mode 100755
+index 0000000..58a100c
+--- /dev/null
++++ b/.claude/skills/pass-sequence/scripts/build_run_sheet.py
+@@ -0,0 +1,167 @@
++#!/usr/bin/env python3
++"""Polyglot run-sheet generator: the sequential motion as a .dib notebook, from the surfaces spec.
++
++    python3 build_run_sheet.py --spec docs/execution_surfaces.yaml --out notebooks/<project>-run.dib \
++        --project mr-load --script scripts/run_pass1.sh --helpers notebooks/mr-load-helpers.ps1 \
++        [--branch-after deals-dry --branch-step ledger-export --branch-note "wizard route …" --probe "bq query …"]
++
++Emits the cell pattern that made the run sheet work: one steps table (# · step · gate · what must be true
++afterwards), a mermaid flow with LIVE markers, a Switches + helpers cell ($ConfirmLive gates the live cells),
++a where-am-I cell (Get-PipelineState), one `Invoke-Step '<step>'` cell per runnable step, optional branch cells
++after a step (the pass-N wizard route: a materialising step plus a probe), and the streamlined patterns
++(Invoke-NextStep, Invoke-Sequence -UntilLive / -Through). A runnable step is a spec row whose `step` label
++starts with a bare sub-command (^[a-z][a-z0-9-]*$ as its first token: "deals-dry", "ledger-export (again)",
++"status / where am I"); rollback rows and probe rows appear in the table only.
++
++The helpers file is project-specific (Invoke-Ubuntu, Invoke-Step, Get-PipelineState, Invoke-NextStep,
++Invoke-Sequence); this generator only assumes those five names. Review the output: it is a skeleton to keep,
++not a document to publish unread.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import re
++import sys
++from pathlib import Path
++
++import yaml
++
++RUNNABLE = re.compile(r"^[a-z][a-z0-9-]*$")
++META = {"kernelInfo": {"defaultKernelName": "pwsh", "items": [
++    {"aliases": [], "languageName": "PowerShell", "name": "pwsh"},
++    {"aliases": [], "languageName": "Mermaid", "name": "mermaid"}]}}
++
++
++def _cmd(label: str) -> str | None:
++    """First token of the step label when it is a runner sub-command; None for probe / rollback rows."""
++    tok = str(label).split()[0] if str(label).split() else ""
++    if not RUNNABLE.match(tok) or "rollback" in str(label).lower():
++        return None
++    return tok
++
++
++def cells(spec, a) -> list[str]:
++    steps = spec["steps"]
++    runnable = [dict(s, cmd=_cmd(s["step"])) for s in steps if _cmd(s["step"])]
++
++    def branch_here(i: int) -> bool:
++        """Branch cells go after runnable[i] unless the spec's next row already IS the branch step (no duplicate)."""
++        s = runnable[i]
++        if not (a.branch_after and a.branch_step and s["cmd"] == a.branch_after):
++            return False
++        nxt = runnable[i + 1]["cmd"] if i + 1 < len(runnable) else None
++        return nxt != a.branch_step
++    out = ["#!meta\n\n" + json.dumps(META)]
++    md = lambda t: out.append("#!markdown\n\n" + t.rstrip("\n"))
++    ps = lambda t: out.append("#!pwsh\n\n" + t.rstrip("\n"))
++
++    table = ["| # | step | gate | what must be true afterwards |", "|---|---|---|---|"]
++    for s in steps:
++        gate = f"LIVE `{s['gate'].replace('LIVE ', '')}`" if str(s.get("gate") or "").startswith("LIVE") else ""
++        table.append(f"| {s['n']} | `{s['step']}` | {gate} | {s.get('artefact', '')} |")
++    md(f"""# {a.project} run sheet — the sequence, nothing else
++
++Answers three questions every time you sit down: **where am I, what is next, run it.** One cell per step, in
++the only order that is valid. Every step is idempotent (`{a.script}`), records a checkpoint, and the state cell
++reads those checkpoints back.
++
++{chr(10).join(table)}
++
++**Rules the sequence enforces**
++- A step counts as done only if its last successful run is newer than every step before it. Re-running an
++  early step makes the later ones pending again. That is intended.
++- A LIVE step first re-runs its dry counterpart, then fires. A LIVE cell is refused until `$ConfirmLive = $true`;
++  with it set, `YES_ALL=1` answers the runner's prompts, so the flag is your confirmation.
++- Anything that stops the run is recorded as `failed` and stays the next step until it passes.""")
++
++    # mermaid
++    nodes, edges, prev = [], [], None
++    for i, s in enumerate(runnable):
++        nid = "s" + re.sub(r"[^a-z0-9]", "", str(s["n"]) + s["cmd"])
++        live = " ⟨LIVE⟩" if str(s.get("gate") or "").startswith("LIVE") else ""
++        nodes.append(f'{nid}["{s["n"]} {s["step"]}{live}"]')
++        if prev:
++            edges.append(f"    {prev} --> {nid}")
++        prev = nid
++        if branch_here(i):
++            edges.append(f'    {nid} --> {nid}b["{a.branch_step} ⟨LIVE⟩\\n{a.branch_note or "branch"}"]')
++    out.append("#!mermaid\n\nflowchart LR\n    " + "\n    ".join(nodes) + "\n" + "\n".join(edges))
++
++    md("## 0 · Switches + helpers — run first, every time\n\n`$ConfirmLive` stays `$false` until you decide to fire a LIVE step.")
++    ps(f"""# ── switches ────────────────────────────────────────────────────────────────
++$Route       = 'wsl'                                   # 'wsl' | 'devcontainer' | 'linux'
++$Distro      = 'Ubuntu-24.04'
++$RepoWsl     = '~/{a.project}'
++$RepoWin     = "$HOME\\{a.project}"
++$RepoLinux   = '/workspaces/{a.project}'
++$ConfirmLive = $false                                  # $true = LIVE steps fire, prompts answered
++
++# ── load {a.helpers} ──────────────────────────────────
++$helpersName = '{Path(a.helpers).name}'
++$candidates  = @((Join-Path $RepoWin (Join-Path '{Path(a.helpers).parent.as_posix()}' $helpersName)),
++                 (Join-Path $PWD $helpersName), (Join-Path $PWD (Join-Path '{Path(a.helpers).parent.as_posix()}' $helpersName)),
++                 (Join-Path $RepoLinux '{a.helpers}'))
++if ($Route -eq 'wsl' -and (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {{
++    $env:WSL_UTF8 = '1'
++    $linuxHome  = (wsl.exe -d $Distro -e bash -lc 'echo $HOME' | Select-Object -First 1).Trim()
++    $candidates += "\\\\wsl$\\$Distro" + ((($RepoWsl -replace '^~', $linuxHome) -replace '/', '\\')) + '\\{a.helpers.replace("/", chr(92))}'
++}}
++$helpers = $candidates | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -First 1
++if (-not $helpers) {{ throw "$helpersName not found. Looked in: $($candidates -join ' | ')." }}
++Invoke-Expression (Get-Content -Raw $helpers)
++"helpers: $helpers\"""")
++
++    md("## 1 · Where am I\n\nReads the checkpoints and names the next step.")
++    ps("Get-PipelineState")
++
++    md("## 2 · The steps, one cell each")
++    for i, s in enumerate(runnable):
++        gate = str(s.get("gate") or "")
++        title = f"### {s['n']} · {s['step']}" + (f" — LIVE `{gate.replace('LIVE ', '')}`" if gate.startswith("LIVE") else "")
++        md(f"{title}\n\n{s.get('artefact', '')}")
++        ps(f"Invoke-Step '{s['cmd']}'")
++        if branch_here(i):
++            note = (a.branch_note or "").strip()
++            note = note + ("" if not note or note.endswith((".", "!", "?")) else ".")
++            md(f"**Branch (optional).** {note} Skip these cells to continue with the next step.")
++            ps(f"Invoke-Step '{a.branch_step}'      # branch: LIVE gate, refused until $ConfirmLive")
++            if a.probe:
++                ps(f"Invoke-Ubuntu '{a.probe}'")
++
++    numbered = [s for s in runnable if isinstance(s["n"], int) and s["cmd"] != "status"]
++    last = (numbered or runnable)[-1]["cmd"] if runnable else ""
++    md("""## 3 · Streamlined patterns
++
++**Next only.** One cell, run it again and again: it looks up the next pending step and runs exactly that one.""")
++    ps("Invoke-NextStep")
++    md("**Everything dry, then decide.** Runs every pending step in order and stops in front of the first LIVE gate.")
++    ps("Invoke-Sequence -UntilLive")
++    md(f"**Through a step.** With `$ConfirmLive = $true`, runs every pending step up to and including the named one.")
++    ps(f"Invoke-Sequence -Through '{last}'")
++    return out
++
++
++def main(argv=None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--spec", required=True)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--project", required=True)
++    ap.add_argument("--script", default="scripts/run_pass1.sh")
++    ap.add_argument("--helpers", default="notebooks/helpers.ps1", help="repo-relative path of the PowerShell helpers")
++    ap.add_argument("--branch-after", help="step after which the optional branch cells are inserted")
++    ap.add_argument("--branch-step", help="the branch's runner step (e.g. ledger-export)")
++    ap.add_argument("--branch-note", help="one sentence shown above the branch cells")
++    ap.add_argument("--probe", help="a bash command run through Invoke-Ubuntu after the branch step")
++    a = ap.parse_args(argv)
++    spec = yaml.safe_load(Path(a.spec).read_text(encoding="utf-8"))
++    text = "\n\n".join(cells(spec, a)) + "\n"
++    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
++    Path(a.out).write_text(text, encoding="utf-8")
++    n = text.count("#!pwsh")
++    print(f"wrote {a.out}: {n} pwsh cells, {text.count('#!markdown')} markdown cells")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py b/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py
+new file mode 100755
+index 0000000..3314d95
+--- /dev/null
++++ b/.claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py
+@@ -0,0 +1,212 @@
++#!/usr/bin/env python3
++"""Execution-surfaces workbook producer: spec (YAML) → .xlsx, with the conventions of the mr-load workbook.
++
++    python3 build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out docs/EXECUTION_SURFACES.xlsx --verify
++    python3 build_surfaces_xlsx.py --spec … --out … --compare docs/EXECUTION_SURFACES.xlsx   # value diff vs an existing workbook
++
++Sheets: Overview (motions, live parity formulas, legend) · Layers · Pipeline steps · Remediation · Equality checks.
++Conventions: Arial 10, navy header row (white bold), wrapped/top-aligned body, thin borders, parity colours
++(green Parallel, yellow Conditional, orange Divergent), frozen header rows, fullCalcOnLoad so the COUNTIF /
++SUM / COUNTA cells compute when the file is opened in Excel or LibreOffice.
++
++--verify reloads the file and checks what LibreOffice would have shown: every parity value is one of the three
++words, the parity counts add up to the row counts the COUNTA formulas will return, fonts are Arial, formulas
++present. Use it whenever LibreOffice recalculation is unavailable (the workbook then recalculates on open).
++Exit code 1 on a failed verification or a non-empty comparison.
++"""
++from __future__ import annotations
++
++import argparse
++import math
++import sys
++from copy import copy
++from pathlib import Path
++
++import openpyxl
++import yaml
++from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
++from openpyxl.utils import get_column_letter
++
++HEADER_FILL = "001F3864"
++PARITY_FILL = {"Parallel": "00E2F0D9", "Conditional": "00FFF2CC", "Divergent": "00F8CBAD"}
++PARITY_MEANING = {
++    "Parallel": "same mechanism, same result on every surface",
++    "Conditional": "same result when the stated condition holds (same commit, same identity, same clone for the ledger)",
++    "Divergent": "different mechanism; the remediation makes it equivalent",
++}
++THIN = Side(style="thin", color="00BFBFBF")
++BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
++FONT = Font(name="Arial", size=10)
++FONT_B = Font(name="Arial", size=10, bold=True)
++FONT_H = Font(name="Arial", size=10, bold=True, color="00FFFFFF")
++WRAP = Alignment(wrap_text=True, vertical="top")
++
++WIDTHS = {
++    "Overview": [40, 40, 34, 44, 34, 48],
++    "Layers": [5, 24, 46, 40, 34, 12, 44, 52, 34],
++    "Pipeline steps": [5, 22, 20, 40, 40, 40, 12, 50, 50],
++    "Remediation": [6, 48, 8, 16, 46, 60, 24],
++    "Equality checks": [18, 26, 70, 60, 44],
++}
++
++
++def _row_height(text: str) -> int:
++    return 15 + 15 * max(1, math.ceil(len(text or "") / 150))
++
++
++def _widths(ws, widths):
++    for i, w in enumerate(widths, start=1):
++        ws.column_dimensions[get_column_letter(i)].width = w
++
++
++def _header(ws, row, values):
++    for i, v in enumerate(values, start=1):
++        c = ws.cell(row=row, column=i, value=v)
++        c.font = FONT_H; c.fill = PatternFill("solid", fgColor=HEADER_FILL); c.alignment = WRAP; c.border = BORDER
++
++
++def _body(ws, row, values, parity_col=None):
++    for i, v in enumerate(values, start=1):
++        c = ws.cell(row=row, column=i, value=v)
++        c.font = FONT; c.alignment = WRAP; c.border = BORDER
++        if parity_col and i == parity_col:
++            if v not in PARITY_FILL:
++                raise SystemExit(f"{ws.title} row {row}: parity must be one of {list(PARITY_FILL)}, got {v!r}")
++            c.font = FONT_B; c.fill = PatternFill("solid", fgColor=PARITY_FILL[v])
++
++
++def build(spec: dict) -> openpyxl.Workbook:
++    s = {k: v for k, v in spec.items()}
++    surf = s["surfaces"]
++    wb = openpyxl.Workbook()
++
++    # ---- Overview
++    ov = wb.active; ov.title = "Overview"; _widths(ov, WIDTHS["Overview"])
++    ov["A1"] = s["title"]; ov["A1"].font = Font(name="Arial", size=14, bold=True)
++    ov["A2"] = s["verdict"]; ov["A2"].font = FONT; ov["A2"].alignment = WRAP
++    ov.merge_cells("A2:F2"); ov.row_dimensions[2].height = _row_height(s["verdict"])
++    _header(ov, 4, ["Motion", "Acquire", "Ubuntu", "Driver", "State lives in", "DevOps assessment"])
++    r = 5
++    for m in s["motions"]:
++        _body(ov, r, [m["motion"], m["acquire"], m["ubuntu"], m["driver"], m["state"], m["assessment"]]); r += 1
++    r += 1
++    ov.cell(row=r, column=1, value="Parity summary (live formulas over the other sheets)").font = FONT_B; r += 1
++    _header(ov, r, ["Status", "Layers", "Pipeline steps", "Meaning"]); r += 1
++    first = r
++    for status in ("Parallel", "Conditional", "Divergent"):
++        _body(ov, r, [status, f'=COUNTIF(Layers!$F:$F,"{status}")', f"=COUNTIF('Pipeline steps'!$G:$G,\"{status}\")",
++                      s.get("parity_meanings", PARITY_MEANING)[status]], parity_col=1)
++        r += 1
++    _body(ov, r, ["Total", f"=SUM(B{first}:B{r-1})", f"=SUM(C{first}:C{r-1})", ""]); ov.cell(row=r, column=1).font = FONT_B; r += 1
++    _body(ov, r, ["Rows on the sheet (must equal Total)", "=COUNTA(Layers!$A:$A)-1", "=COUNTA('Pipeline steps'!$A:$A)-1", ""]); r += 2
++    ov.cell(row=r, column=1, value=s["legend"]).font = Font(name="Arial", size=9, color="00555555")
++    ov.cell(row=r, column=1).alignment = WRAP; ov.merge_cells(f"A{r}:F{r}"); ov.row_dimensions[r].height = _row_height(s["legend"])
++    ov.freeze_panes = "A5"
++
++    # ---- Layers
++    ly = wb.create_sheet("Layers"); _widths(ly, WIDTHS["Layers"])
++    _header(ly, 1, ["#", "Layer", surf["A"], surf["B"], surf["C"], "Parity", "Where it diverges", "Remediation", "Verified how"])
++    for i, L in enumerate(s["layers"], start=2):
++        _body(ly, i, [L["id"], L["layer"], L["A"], L["B"], L["C"], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
++    ly.freeze_panes = "A2"
++
++    # ---- Pipeline steps
++    ps = wb.create_sheet("Pipeline steps"); _widths(ps, WIDTHS["Pipeline steps"])
++    _header(ps, 1, ["#", "Step", "Gate", f"{surf['A']} — cell", f"{surf['B']} — command", f"{surf['C']} — command",
++                    "Parity", "Identical artefact to compare", "Notes"])
++    for i, st in enumerate(s["steps"], start=2):
++        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st["A"], st["B"], st["C"], st["parity"],
++                      st.get("artefact", ""), st.get("notes", "")], parity_col=7)
++    ps.freeze_panes = "A2"
++
++    # ---- Remediation
++    rm = wb.create_sheet("Remediation"); _widths(rm, WIDTHS["Remediation"])
++    _header(rm, 1, ["ID", "Symptom", "Layer", "Surface(s)", "Cause", "Fix", "Verified / source"])
++    for i, R in enumerate(s["remediation"], start=2):
++        _body(rm, i, [R["id"], R["symptom"], R["layer"], R["surfaces"], R["cause"], R["fix"], R["verified"]])
++    rm.freeze_panes = "A2"
++
++    # ---- Equality checks
++    eq = wb.create_sheet("Equality checks"); _widths(eq, WIDTHS["Equality checks"])
++    _header(eq, 1, ["Stage", "What to compare", f"{surf['A']} — cell", f"{surf['B']} / {surf['C']} — command", "Expected"])
++    for i, E in enumerate(s["equality_checks"], start=2):
++        _body(eq, i, [E["stage"], E["compare"], E["A"], E["BC"], E["expected"]])
++    eq.freeze_panes = "A2"
++
++    wb.calculation.fullCalcOnLoad = True
++    return wb
++
++
++def verify(path: Path) -> list[str]:
++    """What a recalculation would show, checked without LibreOffice. Returns problems (empty = OK)."""
++    wb = openpyxl.load_workbook(path)
++    problems: list[str] = []
++    for name, col in (("Layers", 6), ("Pipeline steps", 7)):
++        ws = wb[name]
++        counts = {k: 0 for k in PARITY_FILL}
++        for r in range(2, ws.max_row + 1):
++            v = ws.cell(r, col).value
++            if v not in counts:
++                problems.append(f"{name} row {r}: parity {v!r}")
++            else:
++                counts[v] += 1
++        if sum(counts.values()) != ws.max_row - 1:
++            problems.append(f"{name}: parity total {sum(counts.values())} != rows {ws.max_row - 1}")
++        print(f"{name}: {counts}  rows={ws.max_row - 1}  (what the Overview formulas will show)")
++    for ws in wb.worksheets:
++        fonts = {ws.cell(r, c).font.name for r in range(1, ws.max_row + 1) for c in range(1, ws.max_column + 1)
++                 if ws.cell(r, c).value is not None}
++        if fonts - {"Arial"}:
++            problems.append(f"{ws.title}: fonts {fonts}")
++    formulas = [c.value for row in wb["Overview"].iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith("=")]
++    if len(formulas) != 10:
++        problems.append(f"Overview: expected 10 formulas, found {len(formulas)}")
++    if not wb.calculation.fullCalcOnLoad:
++        problems.append("fullCalcOnLoad is off: formulas would show empty until a manual recalculation")
++    return problems
++
++
++def compare(a: Path, b: Path) -> list[str]:
++    """Cell-by-cell value differences between two workbooks (styles ignored)."""
++    wa, wb_ = openpyxl.load_workbook(a), openpyxl.load_workbook(b)
++    diffs: list[str] = []
++    if wa.sheetnames != wb_.sheetnames:
++        diffs.append(f"sheets {wa.sheetnames} != {wb_.sheetnames}")
++    for name in wa.sheetnames:
++        if name not in wb_.sheetnames:
++            continue
++        sa, sb = wa[name], wb_[name]
++        rows, cols = max(sa.max_row, sb.max_row), max(sa.max_column, sb.max_column)
++        for r in range(1, rows + 1):
++            for c in range(1, cols + 1):
++                va, vb = sa.cell(r, c).value, sb.cell(r, c).value
++                if (va or None) != (vb or None):
++                    diffs.append(f"{name}!{get_column_letter(c)}{r}: {str(va)[:60]!r} != {str(vb)[:60]!r}")
++    return diffs
++
++
++def main(argv=None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--spec", required=True, help="YAML spec (see references/surfaces-spec.md)")
++    ap.add_argument("--out", required=True, help="workbook to write")
++    ap.add_argument("--verify", action="store_true", help="reload and check parity counts / fonts / formulas")
++    ap.add_argument("--compare", help="existing workbook to diff values against after building")
++    a = ap.parse_args(argv)
++    spec = yaml.safe_load(Path(a.spec).read_text(encoding="utf-8"))
++    out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
++    build(spec).save(out)
++    print(f"wrote {out}")
++    rc = 0
++    if a.verify:
++        problems = verify(out)
++        print("verify:", "OK" if not problems else "\n  " + "\n  ".join(problems))
++        rc |= bool(problems)
++    if a.compare:
++        diffs = compare(out, Path(a.compare))
++        print(f"compare vs {a.compare}:", "identical values" if not diffs else f"{len(diffs)} differences\n  " + "\n  ".join(diffs[:40]))
++        rc |= bool(diffs)
++    return rc
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.claude/skills/pass-sequence/scripts/dump_surfaces_xlsx.py b/.claude/skills/pass-sequence/scripts/dump_surfaces_xlsx.py
+new file mode 100755
+index 0000000..4088b3a
+--- /dev/null
++++ b/.claude/skills/pass-sequence/scripts/dump_surfaces_xlsx.py
+@@ -0,0 +1,81 @@
++#!/usr/bin/env python3
++"""Bootstrap the spec from an existing execution-surfaces workbook: .xlsx → YAML.
++
++    python3 dump_surfaces_xlsx.py --xlsx docs/EXECUTION_SURFACES.xlsx --out docs/execution_surfaces.yaml
++
++Use it once, when a workbook was built by hand (or by an earlier session) and the YAML source does not exist
++yet. From then on edit the YAML and rebuild with build_surfaces_xlsx.py; the round trip is checked with
++`build_surfaces_xlsx.py --compare <original.xlsx>`. Expects the five sheets and column layouts the producer
++writes (Overview / Layers / Pipeline steps / Remediation / Equality checks).
++"""
++from __future__ import annotations
++
++import argparse
++import sys
++from pathlib import Path
++
++import openpyxl
++import yaml
++
++
++class _Str(str):
++    pass
++
++
++def _lit(dumper, data):  # long text as block scalars → readable diffs
++    style = "|" if ("\n" in data or len(data) > 80) else None
++    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
++
++
++yaml.add_representer(str, _lit)
++
++
++def _rows(ws, first_row: int, ncols: int, stop_at_blank=True):
++    out = []
++    for r in range(first_row, ws.max_row + 1):
++        vals = [ws.cell(r, c).value for c in range(1, ncols + 1)]
++        if stop_at_blank and vals[0] in (None, ""):
++            break
++        out.append(["" if v is None else v for v in vals])
++    return out
++
++
++def dump(path: Path) -> dict:
++    wb = openpyxl.load_workbook(path)
++    ov, ly, ps, rm, eq = (wb[n] for n in ("Overview", "Layers", "Pipeline steps", "Remediation", "Equality checks"))
++    motions = []
++    for r in range(5, ov.max_row + 1):
++        a = ov.cell(r, 1).value
++        if a in (None, "") or str(a).startswith("Parity summary"):
++            break
++        motions.append(dict(zip(("motion", "acquire", "ubuntu", "driver", "state", "assessment"),
++                                ("" if ov.cell(r, c).value is None else ov.cell(r, c).value for c in range(1, 7)))))
++    legend = next((ov.cell(r, 1).value for r in range(ov.max_row, 0, -1) if str(ov.cell(r, 1).value or "").startswith("Legend")), "")
++    spec = {
++        "title": ov["A1"].value or "",
++        "verdict": ov["A2"].value or "",
++        "legend": legend,
++        "surfaces": {"A": ly["C1"].value, "B": ly["D1"].value, "C": ly["E1"].value},
++        "motions": motions,
++        "layers": [dict(zip(("id", "layer", "A", "B", "C", "parity", "diverges", "remediation", "verified"), v)) for v in _rows(ly, 2, 9)],
++        "steps": [dict(zip(("n", "step", "gate", "A", "B", "C", "parity", "artefact", "notes"), v)) for v in _rows(ps, 2, 9)],
++        "remediation": [dict(zip(("id", "symptom", "layer", "surfaces", "cause", "fix", "verified"), v)) for v in _rows(rm, 2, 7)],
++        "equality_checks": [dict(zip(("stage", "compare", "A", "BC", "expected"), v)) for v in _rows(eq, 2, 5)],
++    }
++    return spec
++
++
++def main(argv=None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--xlsx", required=True)
++    ap.add_argument("--out", required=True, help="YAML spec to write")
++    a = ap.parse_args(argv)
++    spec = dump(Path(a.xlsx))
++    Path(a.out).write_text(yaml.dump(spec, sort_keys=False, allow_unicode=True, width=1000), encoding="utf-8")
++    print(f"wrote {a.out}: {len(spec['layers'])} layers, {len(spec['steps'])} steps, {len(spec['remediation'])} remediations, "
++          f"{len(spec['equality_checks'])} equality checks, {len(spec['motions'])} motions")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

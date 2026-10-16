@@ -1,0 +1,1212 @@
+commit 427410b26771ac14717930a40a1313433fd8b4f1
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 18:33:23 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 18:33:23 2026 +0000
+
+    fixes from the completeness critic: scheduled-script variable shadowing, dry-step stdin, history DDL, adapter view, n8n node semantics, grants, secret handling, tool corrections
+    
+    Critical: new_deals_weekly.sql compared columns to themselves (BigQuery lets columns shadow DECLAREd variables) and would have deleted the whole history table — variables renamed v_*; deploy.sh dry fed python two stdins and always failed — payload passed as argv; new_deals_history was created only by scenario C's SQL — moved into bigquery_schema.sql so deploy.sh tables creates every table main.py writes (new test); the adapter view named hot_score_v1/hot_flag_v1 columns that do not exist before the first write-back — removed, the write-back view compares to writeback_log only. High: n8n Read watermark / Recent names alwaysOutputData and executeOnce (first run, pages), Rows fed from Shape + score, replace() with a function so deal text containing $& cannot corrupt the MERGE; dataViewer on the sync dataset for the SQL and write-back SAs; cloudsql.sh never reads or echoes the password in dry mode and passes it via a 600 temp file; curl tokens moved to header files; placeholder refusal in every script; .env.example gains every B/C variable; errorWorkflow id resolved at import through a gitignored id map; run log written with a query INSERT (no streaming buffer vs C's DELETEs); INNER JOIN on stage labels so the write-back never PATCHes blind; MAX_ROWS guard. Tools: tree_f accepts layers: lists (lanes, filters, details), aider_scaffold parses /add and /read-only recipe lines, diff_ledger matches trailers case-insensitively and documents ledger-only commits, agent definitions name the real scripts. New: tests/test_hot_score_sql_duckdb.py (SQL UDF == Python, 15 vectors + 4,000 random deals, 0 mismatches). All offline checks green.
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md
+    
+    Recipe: .claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .claude/agents/discovery-agent.md                  |  4 +-
+ .claude/agents/implementation-agent.md             |  6 +-
+ .../assets/recipes/docs_pass1_set.md               | 12 +++
+ .../assets/recipes/tooling_reusable_skills.md      | 15 ++++
+ .../aider-scaffold/scripts/aider_scaffold.py       |  8 +-
+ .../skills/aider-scaffold/scripts/diff_ledger.py   |  4 +-
+ .../skills/tree-f-visualizer/assets/template.html  |  7 +-
+ .claude/skills/tree-f-visualizer/scripts/tree_f.py | 17 ++--
+ .env.example                                       | 20 +++++
+ .gitignore                                         |  1 +
+ cloud_function_new_deals/bigquery_schema.sql       | 11 +++
+ cloud_function_new_deals/deploy.sh                 | 19 ++---
+ cloud_function_new_deals/main.py                   |  8 +-
+ deploy/n8n/cloudsql.sh                             | 12 +--
+ deploy/n8n/deploy_n8n.sh                           |  2 +-
+ deploy/n8n/import_workflows.sh                     | 30 ++++---
+ deploy/n8n/scheduler.sh                            |  3 +-
+ deploy/n8n/secrets.sh                              |  2 +-
+ deploy/n8n/service.yaml                            |  2 +-
+ sql/audit_tables.sql                               | 14 +---
+ sql/deals_synced_v1.sql                            |  8 +-
+ sql/hot_deals_v1.sql                               | 18 ++--
+ sql/new_deals_weekly.sql                           | 44 +++++-----
+ sql/refresh_pipeline_labels.sh                     |  5 +-
+ sql/scheduled_query.sh                             |  4 +-
+ sql/sync_transfer.sh                               |  3 +
+ tests/test_hot_score_sql_duckdb.py                 | 97 ++++++++++++++++++++++
+ tests/test_main_offline.py                         | 17 +++-
+ workflows/NEW_DEALS_DELIVERY.json                  |  2 +-
+ workflows/NEW_DEALS_FULL.json                      | 56 +++++++++++--
+ workflows/src/build_workflow.py                    | 33 ++++----
+ workflows/src/node_code.template.js                |  4 +-
+ writeback/bootstrap_property.sh                    |  3 +-
+ writeback/deploy_job.sh                            |  5 +-
+ writeback/index.mjs                                |  2 +-
+ 35 files changed, 367 insertions(+), 131 deletions(-)
+
+diff --git a/.claude/agents/discovery-agent.md b/.claude/agents/discovery-agent.md
+index ac9071c..16373c9 100644
+--- a/.claude/agents/discovery-agent.md
++++ b/.claude/agents/discovery-agent.md
+@@ -20,8 +20,8 @@ structured summary.
+   (`env | grep -i key`, masked), which repos are on disk and on which branch.
+ 
+ ## 1 · One analyst per scenario, fixed layer list
+-Every scenario analyst fills the same layer list (L0 code acquisition … L17 cost) so the lanes
+-compare cell by cell. Each analyst returns: building blocks (path · kind · status · role ·
++Every scenario analyst fills the same layer list — the project's fixed decomposition of its execution
++layer (e.g. L0 code acquisition … Ln cost), agreed before the fan-out — so the lanes compare cell by cell. Each analyst returns: building blocks (path · kind · status · role ·
+ idempotency note · an aider recipe), gaps as testable claims with evidence, one lane cell per
+ layer, open questions with a default assumption.
+ 
+diff --git a/.claude/agents/implementation-agent.md b/.claude/agents/implementation-agent.md
+index ae0e084..85ab349 100644
+--- a/.claude/agents/implementation-agent.md
++++ b/.claude/agents/implementation-agent.md
+@@ -10,11 +10,11 @@ lists with aider recipes, `docs/execution_surfaces.yaml`, `docs/architecture.yam
+ 
+ ## Rules
+ - One building block = one commit. The commit message names the block and the recipe file.
+-  `scripts/diff_ledger.sh` turns every commit into `docs/diffs/NNNN-<sha>-<slug>.patch`; never
++  `.claude/skills/aider-scaffold/scripts/diff_ledger.py` turns every commit into `docs/diffs/NNNN-<sha>-<slug>.patch`; never
+   squash, so `git diff` per suggestion stays possible.
+-- Prefer `aider_scaffold.sh <recipe> [files]` when `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` is set;
++- Prefer `python3 .claude/skills/aider-scaffold/scripts/aider_scaffold.py <recipe> [files]` when `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` is set;
+   without a key, apply the block yourself exactly as the recipe describes and say so in the commit
+-  body (`scaffolded-by: hand (no LLM key)`).
++  body (`Scaffolded-by: hand (no LLM key)` and `Recipe: <recipe path>`).
+ - Docs follow the pass-sequence order: `PASS{N}_SEQUENCE.md` → `EXECUTION_SURFACES.md` →
+   `execution_surfaces.yaml` → `EXECUTION_SURFACES.xlsx --verify` → optional run sheet.
+ - After every block: `python3 .claude/skills/tree-f-visualizer/scripts/tree_f.py …` so the
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md b/.claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md
+new file mode 100644
+index 0000000..84645f7
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md
+@@ -0,0 +1,12 @@
++# Recipe — the pass-1 documentation set (pass-sequence order)
++
++/add docs/PASS1_SEQUENCE.md docs/EXECUTION_SURFACES.md docs/execution_surfaces.yaml docs/SCENARIOS.md docs/architecture.yaml README.md cloud_function_new_deals/README.md
++/read-only .claude/skills/pass-sequence/SKILL.md .claude/skills/pass-sequence/references/surfaces-spec.md
++
++Produce the four artefacts in the skill's order, documentation only: (1) PASS1_SEQUENCE.md from the template — preconditions, one bash
++block of `deploy.sh` steps with look inserts, the dry-run gate, the branch points (delivery via n8n / none; write-back only in C), the
++produces/look table, an empty Evidence section until the first run, pitfalls; (2) EXECUTION_SURFACES.md — motions, the parity vocabulary
++(outcome parity, stated), the principle, an append-only timeline citing commits, per-lane operations, what stays open; (3)
++execution_surfaces.yaml per surfaces-spec.md with the three scenarios as columns, L0–L17, the deploy steps, remediation from the verified
++gaps, equality checks, then `build_surfaces_xlsx.py --verify`; (4) SCENARIOS.md condensing the lanes and the recommendation; annotate every
++block in docs/architecture.yaml with the same parity words as the layer rows and regenerate the tree. Never compose evidence.
+diff --git a/.claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md b/.claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md
+new file mode 100644
+index 0000000..16d4008
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md
+@@ -0,0 +1,15 @@
++# Recipe — the reusable tooling (aider-scaffold, tree-f-visualizer, pass-sequence, agents)
++
++/add .claude/skills/aider-scaffold/SKILL.md .claude/skills/aider-scaffold/scripts/aider_scaffold.py .claude/skills/aider-scaffold/scripts/diff_ledger.py .claude/skills/tree-f-visualizer/SKILL.md .claude/skills/tree-f-visualizer/scripts/tree_f.py .claude/skills/tree-f-visualizer/assets/template.html .claude/skills/pass-sequence/SKILL.md .claude/agents/discovery-agent.md .claude/agents/implementation-agent.md
++
++Three project-agnostic skills plus two agent definitions, installable into any repo by copying `.claude/`:
++- aider-scaffold: `aider_scaffold.py <recipe> [files]` reads leading `/add` and `/read-only` lines of the recipe, refuses a dirty tree,
++  runs aider with auto-commits and a `Recipe:` trailer (or prints the recipe and exits 2 without an LLM key); `diff_ledger.py` writes one
++  `.patch` per commit + `INDEX.md`, idempotent, `--check` for pre-push, `--aider-only` filter using aider 0.86's commit marks.
++- tree-f-visualizer: `tree_f.py` walks the repo, grafts proposed nodes from an annotations file (scenarios, layer(s), status, parity,
++  recipe), renders Windows `tree /f` text (tree.com serial format, NTFS sort order), a JSON manifest with a layers × lanes cross-tab, and a
++  single-file HTML page (filters, lane view, copy as tree /f, light/dark); `--check` gate; `--artifact` fragment form.
++- pass-sequence: the documentation method (sequence page → record → YAML → workbook with live parity counts) made generic: columns may be
++  execution surfaces or candidate scenarios; the parallel lane = layers Parallel across all columns.
++No project names inside scripts or templates; labels come from the annotations/spec files. Tests: screenshots at 1280/400 px both themes,
++`node --check`, round trip of the real mr-load workbook, ledger behaviour in a throwaway repo.
+diff --git a/.claude/skills/aider-scaffold/scripts/aider_scaffold.py b/.claude/skills/aider-scaffold/scripts/aider_scaffold.py
+index a828fcd..7092ada 100644
+--- a/.claude/skills/aider-scaffold/scripts/aider_scaffold.py
++++ b/.claude/skills/aider-scaffold/scripts/aider_scaffold.py
+@@ -53,10 +53,16 @@ def main(argv=None) -> int:
+     recipe = Path(a.recipe)
+     if not recipe.exists():
+         sys.exit(f"aider_scaffold: recipe not found: {recipe}")
++    # a recipe may start with aider-style "/add path…" and "/read-only path…" lines: they become the file lists (so the recipe stands alone)
++    files, reads = list(a.files), list(a.read)
++    for line in recipe.read_text(encoding="utf-8").splitlines():
++        if line.startswith("/add "): files += [f for f in line[5:].split() if f not in files]
++        elif line.startswith("/read-only "): reads += [f for f in line[11:].split() if f not in reads]
++    a.files = files
++    if not reads and (root / "CONVENTIONS.md").exists(): reads = [str(root / "CONVENTIONS.md")]
+     for f in a.files:
+         if not Path(f).exists():
+             Path(f).parent.mkdir(parents=True, exist_ok=True)  # aider creates new files when they are named; keep parents ready
+-    reads = a.read or ([str(root / "CONVENTIONS.md")] if (root / "CONVENTIONS.md").exists() else [])
+     before = git("rev-parse", "HEAD", cwd=root).strip()
+ 
+     dirty = git("status", "--porcelain", "--untracked-files=no", cwd=root).strip()
+diff --git a/.claude/skills/aider-scaffold/scripts/diff_ledger.py b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+index 93fc8f6..caa5558 100644
+--- a/.claude/skills/aider-scaffold/scripts/diff_ledger.py
++++ b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+@@ -28,7 +28,7 @@ from pathlib import Path
+ SEP = "\x1f"
+ AIDER_NAME = re.compile(r"\(aider\)\s*$")
+ AIDER_TRAILER = re.compile(r"^Co-authored-by: aider \(", re.M)
+-RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by|Scaffolded-By):\s*(.+)$", re.M)
++RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by):\s*(.+)$", re.M | re.I)
+ 
+ 
+ def git(*args: str, cwd: Path | None = None) -> str:
+@@ -91,7 +91,7 @@ def existing(index: Path) -> set[str]:
+     return set(re.findall(r"\b([0-9a-f]{40})\b", index.read_text(encoding="utf-8")))
+ 
+ 
+-HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
++HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand. Commits that touch only this ledger directory are not listed (otherwise `--check` could never pass). The `recipe` column shows the commit's `Recipe:` or `Scaffolded-by:` trailer.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
+ 
+ 
+ def main(argv=None) -> int:
+diff --git a/.claude/skills/tree-f-visualizer/assets/template.html b/.claude/skills/tree-f-visualizer/assets/template.html
+index 3228985..df8c793 100644
+--- a/.claude/skills/tree-f-visualizer/assets/template.html
++++ b/.claude/skills/tree-f-visualizer/assets/template.html
+@@ -141,12 +141,13 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line);
+     history.replaceState(null, '', h.toString() ? '#' + h.toString() : location.pathname + location.search); } catch (e) {} };
+ 
+   // ---- filtering ------------------------------------------------------------------------------------------------
+-  const hay = (n) => { const a = n.ann || {}; return [n.path, a.role, a.notes, a.layer, a.recipe].filter(Boolean).join(' ').toLowerCase(); };
++  const hay = (n) => { const a = n.ann || {}; return [n.path, a.role, a.notes, a.layer, ...(a.layers_list || []), a.recipe].filter(Boolean).join(' ').toLowerCase(); };
+   const matches = (n) => {
+     const a = n.ann || {};
+     const stOk = state.statuses.has(a.status || 'existing');
+     const scOk = state.scenario === 'all' || (a.scenarios || []).includes(state.scenario);
+-    const lyOk = !a.layer || state.layers.has(a.layer) || state.layers.size === layerIds.length;
++    const nodeLayers = a.layers_list || (a.layer ? [a.layer] : []);
++    const lyOk = !nodeLayers.length || nodeLayers.some((l) => state.layers.has(l)) || state.layers.size === layerIds.length;
+     const anOk = state.unann || !!n.ann;
+     const qOk = !state.q || hay(n).includes(state.q);
+     return stOk && scOk && lyOk && anOk && qOk;
+@@ -228,7 +229,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line);
+     if (!n) { box.innerHTML = '<div class="empty">Select a file or folder to see its role, layer, status and parity. <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> fold, <kbd>Enter</kbd> toggle.</div>'; return; }
+     const a = n.ann || {}; const st = a.status || (n.exists === false ? 'proposed' : 'existing');
+     const scen = (a.scenarios || []).map(s => `<span class="pill">${esc(s)}</span> ${esc(M.scenarios[s] || '')}`).join('<br>');
+-    const layer = a.layer ? `<code>${esc(a.layer)}</code> ${esc((M.layers || {})[a.layer] || '')}` : '';
++    const layer = (a.layers_list || (a.layer ? [a.layer] : [])).map((l) => `<code>${esc(l)}</code> ${esc((M.layers || {})[l] || '')}`).join('<br>');
+     box.innerHTML = `<h2>${esc(n.path || M.root_label)}</h2>
+       <div><span class="pill ${st}">${st}</span> <span class="pill">${n.kind}</span> ${a.parity ? `<span class="pill ${a.parity}">${a.parity}</span>` : ''}${n.exists === false ? ' <span class="pill proposed">not on disk</span>' : ''}</div>
+       <dl>
+diff --git a/.claude/skills/tree-f-visualizer/scripts/tree_f.py b/.claude/skills/tree-f-visualizer/scripts/tree_f.py
+index db2a63a..0f4c514 100644
+--- a/.claude/skills/tree-f-visualizer/scripts/tree_f.py
++++ b/.claude/skills/tree-f-visualizer/scripts/tree_f.py
+@@ -42,7 +42,7 @@ GLYPHS = {
+     "unicode": {"branch": "├───", "last": "└───", "vert": "│   ", "blank": "    ", "bar": "│"},
+     "ascii": {"branch": "+---", "last": "\\---", "vert": "|   ", "blank": "    ", "bar": "|"},
+ }
+-ANN_KEYS = ("scenarios", "layer", "role", "status", "parity", "notes", "recipe", "kind")
++ANN_KEYS = ("scenarios", "layer", "role", "status", "parity", "notes", "recipe", "kind", "layers")
+ 
+ 
+ # ----------------------------------------------------------------------------- annotations
+@@ -78,6 +78,9 @@ def load_annotations(path: str | None) -> dict:
+         is_dir = str(raw_path).endswith("/")
+         key = str(PurePosixPath(str(raw_path).strip("/")))
+         ann.setdefault("kind", "dir" if is_dir else "file")
++        if "layers" in ann:                                   # several layers: keep the list, the first one is the primary `layer`
++            ls = ann.pop("layers"); ls = ls if isinstance(ls, list) else [ls]
++            ann["layers_list"] = [str(x) for x in ls]; ann.setdefault("layer", ann["layers_list"][0])
+         ann.setdefault("status", "existing")
+         if ann["status"] not in STATUSES:
+             errors.append(f"{raw_path}: status must be one of {STATUSES}, got {ann['status']!r}")
+@@ -92,6 +95,8 @@ def load_annotations(path: str | None) -> dict:
+             ann["layer"] = str(ann["layer"])
+             if data["layers"] and ann["layer"] not in data["layers"]:
+                 errors.append(f"{raw_path}: layer {ann['layer']!r} is not declared under `layers`")
++            for L in ann.get("layers_list", []):
++                if L not in (data.get("layers") or {}): errors.append(f"{raw_path}: layer {L!r} is not declared under `layers`")
+         nodes[key] = ann
+     if errors:
+         sys.exit("annotations invalid:\n  " + "\n  ".join(errors))
+@@ -209,10 +214,12 @@ def build_lanes(tree: dict, layers: dict, scenarios: dict) -> dict:
+     lanes = {L: {s: [] for s in scenarios} for L in layers}
+     def visit(n: dict) -> None:
+         a = n.get("ann")
+-        if a and a.get("layer") in lanes:
+-            for s in a.get("scenarios", []):
+-                if s in lanes[a["layer"]]:
+-                    lanes[a["layer"]][s].append(n["path"])
++        if a:
++            for L in (a.get("layers_list") or [a.get("layer")]):      # a block may sit on several layers
++                if L in lanes:
++                    for s in a.get("scenarios", []):
++                        if s in lanes[L]:
++                            lanes[L][s].append(n["path"])
+         for c in n.get("children", []):
+             visit(c)
+     visit(tree)
+diff --git a/.env.example b/.env.example
+index cda0c5a..36169f3 100644
+--- a/.env.example
++++ b/.env.example
+@@ -12,3 +12,23 @@ SECRET_VERSION=                        # hubspot-token version to pin (empty →
+ # HUBSPOT_TOKEN=                       # only needed once, to create/rotate the Secret Manager secret; never commit a value
+ SCHEDULE_SEALSQ="0 7 * * 1"            # Europe/Zurich; ICALPS is offset so the two jobs never share a minute
+ SCHEDULE_ICALPS="20 7 * * 1"
++
++# ── scenario C (sql/, writeback/) ──────────────────────────────────────────────────────────────────────────────
++SYNC_DATASET=hubspot_sync              # dataset the HubSpot → BigQuery transfer writes to (sql/sync_transfer.sh creates it)
++SYNC_DEALS_TABLE=                      # table name of the synced Deals asset — known after the first transfer run (bq ls)
++SYNC_OWNERS_TABLE=                     # table name of the synced Owners asset
++SQL_SA_NAME=new-deals-sql              # service account that runs the scheduled queries
++SCHEDULE_UTC="every monday 04:00"      # scheduled queries run on UTC only; keep it before the write-back and A's 07:00 Zurich
++SYNC_SCHEDULE="every day 02:00"        # DTS transfer (UTC)
++HUBSPOT_WRITE_TOKEN_VERSION=           # pinned Secret Manager version of hubspot-token-write (a second private app with crm.objects.deals.write)
++WRITEBACK_SCHEDULE="30 5 * * 1"        # Europe/Zurich; after the 04:00 UTC query, before A's report
++WRITEBACK_APPROVE=0                    # 0 = the job logs DRY rows; 1 = it PATCHes HubSpot (set after a dry execution looked right)
++# ── scenario B (deploy/n8n/, workflows/) ───────────────────────────────────────────────────────────────────────
++N8N_IMAGE=docker.io/n8nio/n8n:2.41.7   # pinned tag or digest; never :latest
++MIN_SCALE=0                            # 0 with Cloud Scheduler → webhook; 1 only for the in-app Schedule Trigger variant
++SQL_TIER=db-f1-micro                   # Cloud SQL tier for n8n's Postgres (cost floor, no SLA)
++SQL_INSTANCE=n8n-db
++MAIL_FROM=n8n@example.com              # Email Send node sender ($env.MAIL_FROM)
++MAIL_TO=sales-ops@example.com          # recipients ($env.MAIL_TO)
++# N8N_URL=                             # printed by deploy_n8n.sh; needed by import_workflows.sh and scheduler.sh
++# N8N_API_KEY=                         # created once in n8n → Settings → n8n API; keep it out of .env in shared machines
+diff --git a/.gitignore b/.gitignore
+index eb50582..01c7412 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -14,3 +14,4 @@ __pycache__/
+ !.env.example
+ deploy/n8n/.secrets/
+ workflows/credentials.map.json
++workflows/workflow_ids.map.json
+diff --git a/cloud_function_new_deals/bigquery_schema.sql b/cloud_function_new_deals/bigquery_schema.sql
+index 5f81693..7627915 100644
+--- a/cloud_function_new_deals/bigquery_schema.sql
++++ b/cloud_function_new_deals/bigquery_schema.sql
+@@ -25,6 +25,17 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_runs` (
+   status STRING, error STRING, duration_ms INT64)
+ PARTITION BY DATE(run_ts) CLUSTER BY entity;
+ 
++-- Per-deal history: how every deal scored on each run (every lane writes it; a replayed run_ts replaces its slice) — layer L13.
++CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_history` (
++  run_ts TIMESTAMP NOT NULL, entity STRING, orchestrator STRING, deal_id STRING NOT NULL, dealname STRING, final_customer STRING,
++  name_key STRING, createdate TIMESTAMP, created_by_user_id STRING, source STRING, owner STRING, sales_region STRING,
++  pipeline STRING, pipeline_id STRING, stage STRING, probability_pct FLOAT64, amount FLOAT64, currency STRING, amount_kusd FLOAT64,
++  closedate DATE, arr_ky FLOAT64, product_family STRING, product STRING, application STRING, icalps_dealtype STRING, icalps_stage STRING,
++  day1_hot_score FLOAT64, day1_hot_flag BOOL, duplicate_suspect BOOL, duplicate_of STRING, deal_url STRING,
++  first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
++PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id
++OPTIONS (partition_expiration_days = 730);
++
+ -- Per-run staging tables are created by the function as `${DATASET}.new_deals_staging_<entity>_<run_ts>` and dropped after the MERGE;
+ -- the service account needs bigquery.dataEditor on the dataset (deploy.sh grants it).
+ 
+diff --git a/cloud_function_new_deals/deploy.sh b/cloud_function_new_deals/deploy.sh
+index 1c56ec6..471f6a9 100755
+--- a/cloud_function_new_deals/deploy.sh
++++ b/cloud_function_new_deals/deploy.sh
+@@ -83,12 +83,12 @@ secret() {
+     fi
+   fi
+   run gcloud secrets add-iam-policy-binding hubspot-token --project "$PROJECT" --member "serviceAccount:$(sa)" --role roles/secretmanager.secretAccessor
+-  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --format 'value(name)' --limit 1)"
++  echo "  pin this version in .env SECRET_VERSION: $(cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1)"
+ }
+ 
+ secret_version() {
+   if [[ -n "$SECRET_VERSION" ]]; then echo "$SECRET_VERSION"; return; fi
+-  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --format 'value(name)' --limit 1
++  cap gcloud secrets versions list hubspot-token --project "$PROJECT" --filter 'state=enabled' --sort-by '~createTime' --format 'value(name)' --limit 1
+ }
+ 
+ deploy() {
+@@ -96,7 +96,7 @@ deploy() {
+   local ver; ver=$(secret_version)
+   local env="^|^BQ_PROJECT=${PROJECT}|BQ_DATASET=${DATASET}|OVERLAP_MINUTES=5|FIRST_RUN_DAYS=7|PORTAL_ID=${PORTAL_ID}|DELIVERY_WEBHOOK_URL=${DELIVERY_WEBHOOK_URL}|ORCHESTRATOR=cloud-run-function"
+   local secrets="HUBSPOT_TOKEN=hubspot-token:${ver}"
+-  [[ -n "${DELIVERY_WEBHOOK_TOKEN_SECRET:-}" ]] && secrets+=",DELIVERY_WEBHOOK_TOKEN=${DELIVERY_WEBHOOK_TOKEN_SECRET}:latest"
++  [[ -n "${DELIVERY_WEBHOOK_TOKEN_SECRET:-}" ]] && secrets+=",DELIVERY_WEBHOOK_TOKEN=${DELIVERY_WEBHOOK_TOKEN_SECRET}:${DELIVERY_WEBHOOK_TOKEN_VERSION:-latest}"
+   run gcloud run deploy "$FN" --project "$PROJECT" --region "$REGION" --source "$HERE" \
+     --function new_deals_report --base-image python312 \
+     --no-allow-unauthenticated --service-account "$(sa)" \
+@@ -127,7 +127,7 @@ invoker() {
+ invoke() {  # invoke ENTITY [extra query]
+   local u; u=$(url)
+   local tok; tok=$(cap gcloud auth print-identity-token)
+-  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sS -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'"; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "window": {"mode": "dry"}}'
++  if [[ "$DRYRUN" == 1 ]]; then echo "  $ curl -sS -H 'Authorization: Bearer <id-token>' '${u}?entity=$1${2:-}'" >&2; echo '{"rows_written": 0, "row_count": 0, "duplicate_suspects": 0, "day1_hot": [], "dry_run": true, "window": {"mode": "window", "watermark_in": "<wm>", "query_end": "<run_ts>"}}'
+   else curl -sS -H "Authorization: Bearer $tok" "${u}?entity=$1${2:-}"; fi
+ }
+ 
+@@ -136,14 +136,13 @@ dry() {
+   local ok=1
+   for e in SEALSQ ICALPS; do
+     local out; out=$(invoke "$e" "&dry_run=1")
+-    python3 - "$e" <<<"$out" <<'PY' || ok=0
++    python3 -c '
+ import json, sys
+-e = sys.argv[1]; p = json.loads(sys.stdin.read())
+-w = p.get("window", {})
+-print(f"  {e}: rows={p.get('row_count')} written={p.get('rows_written')} dup={p.get('duplicate_suspects')} hot={len(p.get('day1_hot', []))} window={w.get('watermark_in', '?')} → {w.get('query_end', '?')}")
++e = sys.argv[1]; p = json.loads(sys.argv[2]); w = p.get("window", {})
++print("  %s: rows=%s written=%s dup=%s hot=%s window=%s -> %s" % (e, p.get("row_count"), p.get("rows_written"), p.get("duplicate_suspects"), len(p.get("day1_hot", [])), w.get("watermark_in", "?"), w.get("query_end", "?")))
+ assert p.get("rows_written") == 0, "dry run wrote rows"
+-assert p.get("dry_run", True) is True, "payload not marked dry_run"
+-PY
++assert p.get("dry_run") is True, "payload not marked dry_run"
++' "$e" "$out" || ok=0
+   done
+   [[ $ok == 1 ]] || die "dry run failed — do not enable the schedulers"
+   echo "  dry run passed for both entities. Next: deploy.sh run SEALSQ (first live run), deploy.sh probe, deploy.sh enable"
+diff --git a/cloud_function_new_deals/main.py b/cloud_function_new_deals/main.py
+index 533678a..c4f1bc1 100644
+--- a/cloud_function_new_deals/main.py
++++ b/cloud_function_new_deals/main.py
+@@ -189,7 +189,13 @@ def write_run(client, entity, run_ts, window, rows, written, dry, status, error,
+            "row_count": len(rows), "rows_written": written, "duplicate_suspects": sum(1 for r in rows if r.get("duplicate_suspect")),
+            "day1_hot": sum(1 for r in rows if r.get("day1_hot_flag")), "status": status, "error": (error or None) and str(error)[:1000],
+            "duration_ms": int((time.monotonic() - started) * 1000)}
+-    try: client.insert_rows_json(table("new_deals_runs"), [rec])
++    try:   # a query INSERT, not a streaming insert: C's scheduled script DELETEs its own rows in this table and a streaming buffer would block it
++        cols = list(rec); from google.cloud import bigquery
++        types = {"run_ts": "TIMESTAMP", "watermark_in": "TIMESTAMP", "query_start": "TIMESTAMP", "query_end": "TIMESTAMP", "dry_run": "BOOL",
++                 "row_count": "INT64", "rows_written": "INT64", "duplicate_suspects": "INT64", "day1_hot": "INT64", "duration_ms": "INT64"}
++        params = [bigquery.ScalarQueryParameter(c, types.get(c, "STRING"), rec[c]) for c in cols]
++        client.query(f"INSERT INTO `{table('new_deals_runs')}` ({', '.join(cols)}) VALUES ({', '.join('@' + c for c in cols)})",
++                     job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+     except Exception as e: jlog(logging.WARNING, "run log insert failed", error=str(e))
+ 
+ def recent_names(client, days=90):
+diff --git a/deploy/n8n/cloudsql.sh b/deploy/n8n/cloudsql.sh
+index e6e1335..1fc62b0 100755
+--- a/deploy/n8n/cloudsql.sh
++++ b/deploy/n8n/cloudsql.sh
+@@ -5,7 +5,7 @@ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${REGION:=europe-west6}" "${SQL_TIER:=db-f1-micro}" "${SQL_INSTANCE:=n8n-db}"
+-DRYRUN="${DRYRUN:-0}"; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
++DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+ run gcloud services enable sqladmin.googleapis.com --project "$PROJECT"
+ if [[ "$DRYRUN" == 1 ]] || ! gcloud sql instances describe "$SQL_INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
+   run gcloud sql instances create "$SQL_INSTANCE" --project "$PROJECT" --region "$REGION" --database-version POSTGRES_17 \
+@@ -14,9 +14,11 @@ fi
+ if [[ "$DRYRUN" == 1 ]] || ! gcloud sql databases describe n8n --instance "$SQL_INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
+   run gcloud sql databases create n8n --instance "$SQL_INSTANCE" --project "$PROJECT"
+ fi
+-PW=$(gcloud secrets versions access latest --secret n8n-db-password --project "$PROJECT" 2>/dev/null || true)
+-[[ -n "$PW" || "$DRYRUN" == 1 ]] || { echo "run deploy/n8n/secrets.sh first (creates n8n-db-password)"; exit 2; }
+-if [[ "$DRYRUN" == 1 ]] || ! gcloud sql users list --instance "$SQL_INSTANCE" --project "$PROJECT" --format 'value(name)' | grep -qx n8n-user; then
+-  run gcloud sql users create n8n-user --instance "$SQL_INSTANCE" --project "$PROJECT" --password "${PW:-<n8n-db-password>}"
++if [[ "$DRYRUN" == 1 ]]; then echo "  (would create user n8n-user with the password from Secret Manager n8n-db-password — not read in dry mode)"
++elif ! gcloud sql users list --instance "$SQL_INSTANCE" --project "$PROJECT" --format 'value(name)' | grep -qx n8n-user; then
++  gcloud secrets versions access latest --secret n8n-db-password --project "$PROJECT" >/dev/null 2>&1 || { echo "run deploy/n8n/secrets.sh first (creates n8n-db-password)"; exit 2; }
++  PWFILE=$(mktemp); chmod 600 "$PWFILE"; trap 'rm -f "$PWFILE"' EXIT
++  gcloud secrets versions access latest --secret n8n-db-password --project "$PROJECT" > "$PWFILE"
++  gcloud sql users create n8n-user --instance "$SQL_INSTANCE" --project "$PROJECT" --password "$(cat "$PWFILE")"   # value never echoed
+ fi
+ echo "connection name: ${PROJECT}:${REGION}:${SQL_INSTANCE}"
+diff --git a/deploy/n8n/deploy_n8n.sh b/deploy/n8n/deploy_n8n.sh
+index 32acd6e..dc7877f 100755
+--- a/deploy/n8n/deploy_n8n.sh
++++ b/deploy/n8n/deploy_n8n.sh
+@@ -7,7 +7,7 @@ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${REGION:=europe-west6}" "${DATASET:=hubspot}" "${PORTAL_ID:=9201667}" "${N8N_IMAGE:=docker.io/n8nio/n8n:2.41.7}" "${MIN_SCALE:=0}" "${MAIL_FROM:=n8n@example.com}" "${MAIL_TO:=sales-ops@example.com}"
+-DRYRUN="${DRYRUN:-0}"
++DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
+ [[ "$N8N_IMAGE" != *:latest ]] || { echo "pin N8N_IMAGE to a tag or digest, not :latest (env-var names and node versions drift)"; exit 2; }
+ PN=$([[ "$DRYRUN" == 1 ]] && echo 000000000000 || gcloud projects describe "$PROJECT" --format 'value(projectNumber)')
+ sed -e "s#\${PROJECT_NUMBER}#$PN#g" -e "s#\${PROJECT}#$PROJECT#g" -e "s#\${REGION}#$REGION#g" -e "s#\${N8N_IMAGE}#$N8N_IMAGE#g" -e "s#\${MIN_SCALE}#$MIN_SCALE#g" \
+diff --git a/deploy/n8n/import_workflows.sh b/deploy/n8n/import_workflows.sh
+index 92a9d88..93a8cdc 100755
+--- a/deploy/n8n/import_workflows.sh
++++ b/deploy/n8n/import_workflows.sh
+@@ -11,25 +11,33 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." &
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ DRY=0; [[ "${1:-}" == "--dry-run" ]] && { DRY=1; shift; }
+ : "${N8N_URL:?}" ; [[ "$DRY" == 1 ]] || : "${N8N_API_KEY:?create one in n8n → Settings → n8n API}"
+-FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT"/workflows/NEW_DEALS_*.json)
+-MAP="$ROOT/workflows/credentials.map.json"
++FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT/workflows/NEW_DEALS_ERRORS.json" "$ROOT/workflows/NEW_DEALS_DELIVERY.json" "$ROOT/workflows/NEW_DEALS_FULL.json")   # errors first: the others reference its id
++MAP="$ROOT/workflows/credentials.map.json"; IDMAP="$ROOT/workflows/workflow_ids.map.json"; [[ -f "$IDMAP" ]] || echo '{}' > "$IDMAP"
++HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$HDR"' EXIT; [[ "$DRY" == 1 ]] || printf 'X-N8N-API-KEY: %s\n' "$N8N_API_KEY" > "$HDR"   # the key never appears on argv
+ for f in "${FILES[@]}"; do
+-  BODY=$(python3 - "$f" "$MAP" <<'PY'
+-import json, sys
+-wf = json.load(open(sys.argv[1])); cmap = json.load(open(sys.argv[2])) if __import__("os").path.exists(sys.argv[2]) else {}
++  BODY=$(python3 - "$f" "$MAP" "$IDMAP" <<'PY'
++import json, os, sys
++wf = json.load(open(sys.argv[1])); cmap = json.load(open(sys.argv[2])) if os.path.exists(sys.argv[2]) else {}; idmap = json.load(open(sys.argv[3]))
+ for n in wf.get("nodes", []):                           # remap credential placeholders → real ids
+     for ctype, cred in (n.get("credentials") or {}).items():
+         if cred.get("id", "").startswith("REPLACE_WITH_") and ctype in cmap: cred.update(cmap[ctype])
++st = wf.get("settings", {})
++if st.get("errorWorkflow") == "REPLACE_WITH_ERRORS_ID":
++    if "NEW_DEALS_ERRORS" in idmap: st["errorWorkflow"] = idmap["NEW_DEALS_ERRORS"]
++    else: st.pop("errorWorkflow", None)                 # imported before the error workflow: re-run the import once it exists
+ print(json.dumps({k: wf[k] for k in ("name", "nodes", "connections", "settings", "staticData") if k in wf}))
+ PY
+ )
+-  ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$f")
++  KEY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$f")
++  ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$IDMAP" "$KEY")
+   if [[ "$DRY" == 1 ]]; then echo "would PUT/POST $(basename "$f") (id=${ID:-new}) → $N8N_URL/api/v1/workflows"; continue; fi
+-  if [[ -n "$ID" ]] && curl -sS -o /dev/null -w '%{http_code}' -H "X-N8N-API-KEY: $N8N_API_KEY" "$N8N_URL/api/v1/workflows/$ID" | grep -q '^200$'; then
+-    curl -sS -f -X PUT -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows/$ID" -d "$BODY" >/dev/null && echo "updated $ID"
++  if [[ -n "$ID" ]] && curl -sS -o /dev/null -w '%{http_code}' -H @"$HDR" "$N8N_URL/api/v1/workflows/$ID" | grep -q '^200$'; then
++    curl -sS -f -X PUT -H @"$HDR" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows/$ID" -d "$BODY" >/dev/null && echo "updated $KEY ($ID)"
+   else
+-    NEW=$(curl -sS -f -X POST -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows" -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+-    echo "created $(basename "$f") as $NEW — set \"id\": \"$NEW\" in the file so the next import updates in place"
++    NEW=$(curl -sS -f -X POST -H @"$HDR" -H "Content-Type: application/json" "$N8N_URL/api/v1/workflows" -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
++    python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m[sys.argv[2]]=sys.argv[3]; json.dump(m, open(sys.argv[1],"w"), indent=1)' "$IDMAP" "$KEY" "$NEW"
++    echo "created $KEY as $NEW (recorded in workflows/workflow_ids.map.json — gitignored; the next import updates in place)"
+   fi
+ done
+-echo "activate in the UI after a manual test execution (the n8n-native dry run), or: curl -X POST \$N8N_URL/api/v1/workflows/<id>/activate"
++echo "activate in the UI after a manual test execution (the n8n-native dry run), or: curl -X POST -H @<headerfile> \$N8N_URL/api/v1/workflows/<id>/activate"
++echo "(if NEW_DEALS_ERRORS was created in this run, run the import once more so the other workflows point at its id)"
+diff --git a/deploy/n8n/scheduler.sh b/deploy/n8n/scheduler.sh
+index 98145e1..d6abdb9 100755
+--- a/deploy/n8n/scheduler.sh
++++ b/deploy/n8n/scheduler.sh
+@@ -1,11 +1,12 @@
+ #!/usr/bin/env bash
+ # scheduler.sh — scenario B2 trigger: Cloud Scheduler → n8n webhook (keeps n8n at minScale 0; same clock as scenario A).
+ # Jobs are created PAUSED; resume after the dry run (?dry_run=1) passed: deploy/n8n/scheduler.sh enable
++# note: gcloud takes the webhook token in --headers on the command line (visible in `ps` for the call's duration) — run from a trusted shell.
+ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${REGION:=europe-west6}" "${SCHEDULE_SEALSQ:=0 7 * * 1}" "${SCHEDULE_ICALPS:=20 7 * * 1}"
+-DRYRUN="${DRYRUN:-0}"; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
++DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+ case "${1:-create}" in
+   enable) for e in SEALSQ ICALPS; do run gcloud scheduler jobs resume "n8n-new-deals-$e" --project "$PROJECT" --location "$REGION"; done ;;
+   pause)  for e in SEALSQ ICALPS; do run gcloud scheduler jobs pause  "n8n-new-deals-$e" --project "$PROJECT" --location "$REGION"; done ;;
+diff --git a/deploy/n8n/secrets.sh b/deploy/n8n/secrets.sh
+index c72872b..d77b968 100755
+--- a/deploy/n8n/secrets.sh
++++ b/deploy/n8n/secrets.sh
+@@ -9,7 +9,7 @@ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}"
+-DRYRUN="${DRYRUN:-0}"; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
++DRYRUN="${DRYRUN:-0}"; [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }; run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+ ensure_secret() {  # name generator-command
+   if [[ "$DRYRUN" == 1 ]]; then echo "  (secret $1: create if missing with: $2)"; return; fi
+   if ! gcloud secrets describe "$1" --project "$PROJECT" >/dev/null 2>&1; then
+diff --git a/deploy/n8n/service.yaml b/deploy/n8n/service.yaml
+index 10b1027..f30d8d7 100644
+--- a/deploy/n8n/service.yaml
++++ b/deploy/n8n/service.yaml
+@@ -20,7 +20,7 @@ spec:
+         run.googleapis.com/startup-cpu-boost: "true"
+     spec:
+       serviceAccountName: n8n-run@${PROJECT}.iam.gserviceaccount.com
+-      containerConcurrency: 80
++      containerConcurrency: 80          # HTTP requests (editor + webhooks); executions are limited separately by N8N_CONCURRENCY_PRODUCTION_LIMIT=1
+       timeoutSeconds: 900
+       containers:
+         - image: ${N8N_IMAGE}
+diff --git a/sql/audit_tables.sql b/sql/audit_tables.sql
+index 855e122..9850188 100644
+--- a/sql/audit_tables.sql
++++ b/sql/audit_tables.sql
+@@ -1,15 +1,5 @@
+--- Audit tables shared by every scenario (layer L13). new_deals_runs (one summary row per run) lives in
+--- cloud_function_new_deals/bigquery_schema.sql; these two add the per-deal history and the write-back log.
+-CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_history` (
+-  run_ts TIMESTAMP NOT NULL, entity STRING, orchestrator STRING, deal_id STRING NOT NULL, dealname STRING, final_customer STRING,
+-  name_key STRING, createdate TIMESTAMP, created_by_user_id STRING, source STRING, owner STRING, sales_region STRING,
+-  pipeline STRING, pipeline_id STRING, stage STRING, probability_pct FLOAT64, amount FLOAT64, currency STRING, amount_kusd FLOAT64,
+-  closedate DATE, arr_ky FLOAT64, product_family STRING, product STRING, application STRING, icalps_dealtype STRING, icalps_stage STRING,
+-  day1_hot_score FLOAT64, day1_hot_flag BOOL, duplicate_suspect BOOL, duplicate_of STRING, deal_url STRING,
+-  first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
+-PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id
+-OPTIONS (partition_expiration_days = 730, description = "one slice per run: how a deal scored on each run; a replay of a run_ts replaces its slice");
+-
++-- Scenario C's own audit table (layer L13). new_deals_runs and new_deals_history live in cloud_function_new_deals/bigquery_schema.sql
++-- (deploy.sh tables / sql/apply.sh create them for every lane); writeback_log belongs to the write-back job only.
+ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.writeback_log` (
+   run_ts TIMESTAMP NOT NULL, deal_id STRING NOT NULL, hot_score_v1 FLOAT64, hot_flag_v1 BOOL,
+   previous_score FLOAT64, previous_flag BOOL, status STRING, http_status INT64, error STRING, dry_run BOOL)
+diff --git a/sql/deals_synced_v1.sql b/sql/deals_synced_v1.sql
+index 621983f..27ada3a 100644
+--- a/sql/deals_synced_v1.sql
++++ b/sql/deals_synced_v1.sql
+@@ -33,10 +33,10 @@ SELECT
+   SAFE_CAST(tpm__k_y AS FLOAT64)                                 AS tpm__k_y,
+   SAFE_CAST(services_value_2026 AS FLOAT64)                      AS services_value_2026,
+   SAFE_CAST(calculation___pipeline_2026__k__ AS FLOAT64)         AS calculation___pipeline_2026__k__,
+-  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes,
+-  -- the written-back properties, once they exist in HubSpot and in the sync (NULL before the first write-back)
+-  SAFE_CAST(hot_score_v1 AS FLOAT64)                             AS hot_score_v1_synced,
+-  SAFE_CAST(hot_flag_v1 AS BOOL)                                 AS hot_flag_v1_synced
++  SAFE_CAST(num_contacted_notes AS FLOAT64)                      AS num_contacted_notes
++  -- the written-back properties (hot_score_v1 / hot_flag_v1) are NOT selected here: they exist in the synced table only after
++  -- bootstrap_property.sh and a later sync, and a view that names a missing column fails to create. The write-back compares
++  -- against writeback_log instead (sql/hot_deals_v1.sql).
+ FROM `${PROJECT}.${SYNC_DATASET}.${SYNC_DEALS_TABLE}`
+ WHERE hs_object_id IS NOT NULL;
+ 
+diff --git a/sql/hot_deals_v1.sql b/sql/hot_deals_v1.sql
+index 1f21241..1b3e69e 100644
+--- a/sql/hot_deals_v1.sql
++++ b/sql/hot_deals_v1.sql
+@@ -7,30 +7,26 @@ WITH scored AS (
+             d.services_value_2026, d.asp_in_usd_q2_2022_calculation, d.tpm__k_y, d.product_hierarchy, d.num_contacted_notes,
+             d.notes_last_updated, d.revenue_state, CURRENT_TIMESTAMP()) AS hs
+   FROM `${PROJECT}.${DATASET}.deals_synced_v1` d
+-  LEFT JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` st ON st.stage_id = d.dealstage_id
++  JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` st ON st.stage_id = d.dealstage_id   -- INNER: no labels loaded → no rows (never PATCH blind)
+   WHERE d.pipeline_id IN ('12096408', '13772279')                                   -- scored pipelines only (main.py CR)
+-    AND NOT REGEXP_CONTAINS(LOWER(IFNULL(st.label, '')), r'closed')                -- open deals only; label from pipeline_labels
++    AND NOT REGEXP_CONTAINS(LOWER(st.label), r'closed')                             -- open deals only; run sql/refresh_pipeline_labels.sh first
+ )
+ SELECT deal_id, dealname, final_customer, sales_region, pipeline_id, amount_kusd, closedate,
+        hs.score AS hot_score_v1, hs.hot AS hot_flag_v1,
+        ROW_NUMBER() OVER (PARTITION BY sales_region ORDER BY hs.score DESC, amount_kusd DESC, deal_id) AS region_rank,
+-       RANK()       OVER (ORDER BY hs.score DESC, amount_kusd DESC)                                       AS global_rank,
+-       hot_score_v1_synced, hot_flag_v1_synced
++       RANK()       OVER (ORDER BY hs.score DESC, amount_kusd DESC)                                       AS global_rank
+ FROM scored;
+ 
+ -- per-region top-5: the arithmetic HubSQL cannot do (window functions)
+ CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_top5_by_region` AS
+ SELECT * FROM `${PROJECT}.${DATASET}.hot_deals_v1` QUALIFY region_rank <= 5;
+ 
+--- rows the write-back must PATCH: the computed value differs from what HubSpot holds (last successful write-back, else the synced property).
+--- Never a NULL score: sending "" would clear the property on unscored pipelines.
++-- rows the write-back must PATCH: the computed value differs from the last value this job wrote successfully (writeback_log).
++-- Never a NULL score: sending "" would clear the property on unscored pipelines. A same-value PATCH is a no-op anyway.
+ CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.hot_deals_v1_writeback` AS
+-SELECT h.deal_id, h.hot_score_v1, h.hot_flag_v1,
+-       COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced) AS previous_score,
+-       COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced)  AS previous_flag
++SELECT h.deal_id, h.hot_score_v1, h.hot_flag_v1, w.last.hot_score_v1 AS previous_score, w.last.hot_flag_v1 AS previous_flag
+ FROM `${PROJECT}.${DATASET}.hot_deals_v1` h
+ LEFT JOIN (SELECT deal_id, ARRAY_AGG(STRUCT(hot_score_v1, hot_flag_v1) ORDER BY run_ts DESC LIMIT 1)[OFFSET(0)] AS last
+            FROM `${PROJECT}.${DATASET}.writeback_log` WHERE status = 'OK' AND NOT dry_run GROUP BY deal_id) w USING (deal_id)
+ WHERE h.hot_score_v1 IS NOT NULL
+-  AND (h.hot_score_v1 IS DISTINCT FROM COALESCE(w.last.hot_score_v1, h.hot_score_v1_synced)
+-    OR h.hot_flag_v1  IS DISTINCT FROM COALESCE(w.last.hot_flag_v1,  h.hot_flag_v1_synced));
++  AND (w.last IS NULL OR h.hot_score_v1 IS DISTINCT FROM w.last.hot_score_v1 OR h.hot_flag_v1 IS DISTINCT FROM w.last.hot_flag_v1);
+diff --git a/sql/new_deals_weekly.sql b/sql/new_deals_weekly.sql
+index b66b92e..5db407b 100644
+--- a/sql/new_deals_weekly.sql
++++ b/sql/new_deals_weekly.sql
+@@ -1,18 +1,18 @@
+ -- Scenario C scheduled script: window → shape → duplicates → MERGE → history → run log → state, in ONE transaction.
+ -- Registered per entity by sql/scheduled_query.sh (${ENTITY}, ${PIPELINES} substituted); @run_time is BigQuery's parameter.
+ -- Idempotent: the batch is a pure function of (synced state, @run_time); replaying a run_time rewrites the same slices.
+-DECLARE entity STRING DEFAULT '${ENTITY}';
+-DECLARE pipelines ARRAY<STRING> DEFAULT ${PIPELINES};
+-DECLARE lookback_days INT64 DEFAULT 14;                        -- replaces the watermark search; MERGE absorbs the overlap
+-DECLARE run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(@run_time, SECOND);
+-DECLARE freshest TIMESTAMP;
+-DECLARE t0 TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
++DECLARE v_entity STRING DEFAULT '${ENTITY}';          -- v_ prefix: a column with the same name would shadow the variable
++DECLARE v_pipelines ARRAY<STRING> DEFAULT ${PIPELINES};
++DECLARE v_lookback_days INT64 DEFAULT 14;                        -- replaces the watermark search; MERGE absorbs the overlap
++DECLARE v_run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(@run_time, SECOND);
++DECLARE v_freshest TIMESTAMP;
++DECLARE v_t0 TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+ 
+ -- freshness guard: never MERGE a stale sync (the sync is scheduled, never real-time)
+-SET freshest = (SELECT MAX(lastmodified) FROM `${PROJECT}.${DATASET}.deals_synced_v1`);
+-IF freshest IS NULL OR freshest < TIMESTAMP_SUB(run_ts, INTERVAL 36 HOUR) THEN
++SET v_freshest = (SELECT MAX(lastmodified) FROM `${PROJECT}.${DATASET}.deals_synced_v1`);
++IF v_freshest IS NULL OR v_freshest < TIMESTAMP_SUB(v_run_ts, INTERVAL 36 HOUR) THEN
+   INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, status, error, duration_ms)
+-  VALUES (run_ts, entity, 'window', FALSE, 'bigquery-scheduled-query', 'ABORTED', 'deals sync older than 36h', 0);
++  VALUES (v_run_ts, v_entity, 'window', FALSE, 'bigquery-scheduled-query', 'ABORTED', 'deals sync older than 36h', 0);
+   RAISE USING MESSAGE = 'deals sync is older than 36h; aborting run';
+ END IF;
+ 
+@@ -22,15 +22,15 @@ CREATE TEMP TABLE batch AS
+ WITH recent AS (
+   SELECT *, SUBSTR(REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(final_customer), ''), REGEXP_EXTRACT(dealname, r'^[^-/|(]*'))), r'[^a-z0-9]', ''), 1, 40) AS name_key
+   FROM `${PROJECT}.${DATASET}.deals_synced_v1`
+-  WHERE createdate >= TIMESTAMP_SUB(run_ts, INTERVAL 90 DAY) AND createdate < run_ts     -- duplicate horizon = main.py recent_names(days=90)
++  WHERE createdate >= TIMESTAMP_SUB(v_run_ts, INTERVAL 90 DAY) AND createdate < v_run_ts     -- duplicate horizon = main.py recent_names(days=90)
+ ), win AS (
+-  SELECT * FROM recent WHERE createdate >= TIMESTAMP_SUB(run_ts, INTERVAL lookback_days DAY) AND pipeline_id IN UNNEST(pipelines)
++  SELECT * FROM recent WHERE createdate >= TIMESTAMP_SUB(v_run_ts, INTERVAL v_lookback_days DAY) AND pipeline_id IN UNNEST(v_pipelines)
+ ), dups AS (
+   SELECT w.deal_id, STRING_AGG(r.deal_id, ', ' ORDER BY r.createdate) AS duplicate_of
+   FROM win w JOIN recent r ON r.name_key = w.name_key AND r.deal_id <> w.deal_id AND w.name_key <> ''
+   GROUP BY w.deal_id
+ )
+-SELECT entity, w.deal_id, w.dealname, w.final_customer, w.name_key,
++SELECT v_entity AS entity, w.deal_id, w.dealname, w.final_customer, w.name_key,
+        w.createdate, w.created_by_user_id, w.source,
+        COALESCE(o.owner_name, w.owner_id) AS owner, w.sales_region,
+        COALESCE(p.label, w.pipeline_id) AS pipeline, w.pipeline_id, COALESCE(s.label, w.dealstage_id) AS stage,
+@@ -41,7 +41,7 @@ SELECT entity, w.deal_id, w.dealname, w.final_customer, w.name_key,
+        hs.score AS day1_hot_score, hs.hot AS day1_hot_flag,
+        d.duplicate_of IS NOT NULL AS duplicate_suspect, d.duplicate_of,
+        CONCAT('https://app.hubspot.com/go-to/${PORTAL_ID}/0-3/', w.deal_id) AS deal_url,
+-       run_ts AS first_seen_run, run_ts AS last_seen_run
++       v_run_ts AS first_seen_run, v_run_ts AS last_seen_run
+ FROM win w
+ LEFT JOIN dups d USING (deal_id)
+ LEFT JOIN `${PROJECT}.${DATASET}.owners_synced_v1` o ON o.owner_id = w.owner_id
+@@ -49,7 +49,7 @@ LEFT JOIN `${PROJECT}.${DATASET}.pipelines_synced_v1` p ON p.pipeline_id = w.pip
+ LEFT JOIN `${PROJECT}.${DATASET}.pipeline_stages_synced_v1` s ON s.stage_id = w.dealstage_id,
+ UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(w.pipeline_id, w.stage_probability, w.closedate, w.calculation___pipeline_2026__k__,
+         w.services_value_2026, w.asp_in_usd_q2_2022_calculation, w.tpm__k_y, w.product_hierarchy, w.num_contacted_notes,
+-        w.notes_last_updated, w.revenue_state, run_ts)]) AS hs;
++        w.notes_last_updated, w.revenue_state, v_run_ts)]) AS hs;
+ 
+ -- L7: MERGE on deal_id; deal_id, first_seen_run and the day-1 score are never overwritten (same frozen set as main.py after G06)
+ MERGE `${PROJECT}.${DATASET}.new_deals` t USING batch s ON t.deal_id = s.deal_id
+@@ -63,23 +63,23 @@ WHEN MATCHED THEN UPDATE SET
+ WHEN NOT MATCHED THEN INSERT ROW;
+ 
+ -- L13: per-deal history slice (replay of the same run_ts replaces it) and one summary row
+-DELETE FROM `${PROJECT}.${DATASET}.new_deals_history` WHERE run_ts = run_ts AND entity = entity;
++DELETE FROM `${PROJECT}.${DATASET}.new_deals_history` WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = 'bigquery-scheduled-query';
+ INSERT INTO `${PROJECT}.${DATASET}.new_deals_history`
+-SELECT run_ts, entity, 'bigquery-scheduled-query', * EXCEPT(entity) FROM batch;
++SELECT v_run_ts, entity, 'bigquery-scheduled-query', * EXCEPT(entity) FROM batch;
+ 
+-DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs` WHERE run_ts = run_ts AND entity = entity AND orchestrator = 'bigquery-scheduled-query';
++DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs` WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = 'bigquery-scheduled-query';
+ INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
+   (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms)
+-SELECT run_ts, entity, 'window', FALSE, 'bigquery-scheduled-query',
+-       (SELECT watermark FROM `${PROJECT}.${DATASET}.report_state` WHERE report_id = CONCAT('NEW_DEALS_', entity, '_C')),
+-       TIMESTAMP_SUB(run_ts, INTERVAL lookback_days DAY), run_ts,
++SELECT v_run_ts, v_entity, 'window', FALSE, 'bigquery-scheduled-query',
++       (SELECT watermark FROM `${PROJECT}.${DATASET}.report_state` WHERE report_id = CONCAT('NEW_DEALS_', v_entity, '_C')),
++       TIMESTAMP_SUB(v_run_ts, INTERVAL v_lookback_days DAY), v_run_ts,
+        COUNT(*), COUNT(*), COUNTIF(duplicate_suspect), COUNTIF(day1_hot_flag), 'OK', NULL,
+-       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), t0, MILLISECOND)
++       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), v_t0, MILLISECOND)
+ FROM batch;
+ 
+ -- L8: state advances inside the same transaction as the MERGE (engine-enforced "only after"); C keeps its own report_id
+ MERGE `${PROJECT}.${DATASET}.report_state` t
+-USING (SELECT CONCAT('NEW_DEALS_', entity, '_C') AS report_id, run_ts AS watermark) s ON t.report_id = s.report_id
++USING (SELECT CONCAT('NEW_DEALS_', v_entity, '_C') AS report_id, v_run_ts AS watermark) s ON t.report_id = s.report_id
+ WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP()
+ WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP());
+ 
+diff --git a/sql/refresh_pipeline_labels.sh b/sql/refresh_pipeline_labels.sh
+index 125a177..a4c78bf 100755
+--- a/sql/refresh_pipeline_labels.sh
++++ b/sql/refresh_pipeline_labels.sh
+@@ -5,8 +5,9 @@ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${HUBSPOT_TOKEN:?HUBSPOT_TOKEN (read) must be in the environment}"
+-TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
+-curl -sS -f -H "Authorization: Bearer $HUBSPOT_TOKEN" https://api.hubapi.com/crm/v3/pipelines/deals \
++TMP=$(mktemp); HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$TMP" "$HDR"' EXIT; printf 'Authorization: Bearer %s\n' "$HUBSPOT_TOKEN" > "$HDR"
++[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
++curl -sS -f -H @"$HDR" https://api.hubapi.com/crm/v3/pipelines/deals \
+  | python3 -c '
+ import json, sys, datetime
+ now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+diff --git a/sql/scheduled_query.sh b/sql/scheduled_query.sh
+index 0abf23f..64c91dc 100755
+--- a/sql/scheduled_query.sh
++++ b/sql/scheduled_query.sh
+@@ -8,7 +8,8 @@
+ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+-: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}"
++: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}" "${SYNC_DATASET:?}"
++[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
+ DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
+ declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
+ 
+@@ -18,6 +19,7 @@ if [[ "$DRYRUN" != 1 ]]; then
+   gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1 || gcloud iam service-accounts create "$SQL_SA_NAME" --project "$PROJECT" --display-name "new deals scheduled queries"
+   gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None >/dev/null
+   bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
++  bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`${PROJECT}.${SYNC_DATASET}\` TO \"serviceAccount:${SA}\""   # the script reads the synced tables
+ fi
+ for E in SEALSQ ICALPS; do
+   Q=$(render "$E"); NAME="new-deals-$E-C"
+diff --git a/sql/sync_transfer.sh b/sql/sync_transfer.sh
+index 688a2cb..d70c71f 100755
+--- a/sql/sync_transfer.sh
++++ b/sql/sync_transfer.sh
+@@ -9,6 +9,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && p
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+ : "${PROJECT:?}" "${BQ_LOCATION:=EU}" "${SYNC_DATASET:?}" "${HUBSPOT_TOKEN:?}" "${SYNC_SCHEDULE:=every day 02:00}"
+ NAME="hubspot-sync-deals-owners"
++[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
++# note: bq mk --transfer_config takes the token inside --params on the command line (visible in `ps` for the call's duration);
++# run it from Cloud Shell or a trusted shell, and rotate the token afterwards if that is a concern.
+ bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "CREATE SCHEMA IF NOT EXISTS \`${PROJECT}.${SYNC_DATASET}\` OPTIONS (location = '${BQ_LOCATION}')"
+ EXISTING=$(bq ls --transfer_config --transfer_location="$BQ_LOCATION" --project_id="$PROJECT" --format=json 2>/dev/null \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin) or []; print(next((c["name"] for c in d if c.get("displayName")==sys.argv[1]),""))' "$NAME")
+diff --git a/tests/test_hot_score_sql_duckdb.py b/tests/test_hot_score_sql_duckdb.py
+new file mode 100644
+index 0000000..89b3526
+--- /dev/null
++++ b/tests/test_hot_score_sql_duckdb.py
+@@ -0,0 +1,97 @@
++#!/usr/bin/env python3
++"""Offline parity of the BigQuery SQL UDF (scoring/hot_score_v1.sql) with main.hot_score(), executed in DuckDB.
++
++    python3 tests/test_hot_score_sql_duckdb.py        or        python3 -m pytest tests -q   (skips when duckdb is not installed)
++
++The UDF is authored in GoogleSQL; a small dialect map (test only) renders its body as a DuckDB macro. Checked on the 15 golden
++vectors and on 4,000 random HubSpot-shaped deals (same generator as discovery/scenario_C): raw score within 1e-6, flag equal,
++NULL for unscored pipelines. The authoritative check on BigQuery itself is tests/hot_score_vectors.sql.
++"""
++from __future__ import annotations
++
++import json
++import random
++import re
++import sys
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "cloud_function_new_deals"))
++import main  # noqa: E402
++
++try:
++    import duckdb
++except ImportError:  # pragma: no cover
++    duckdb = None
++
++ARGS = "pipeline, hs_deal_stage_probability, closedate, calculation___pipeline_2026__k__, services_value_2026, asp_in_usd_q2_2022_calculation, tpm__k_y, product_hierarchy, num_contacted_notes, notes_last_updated, revenue_state, run_ts"
++
++
++def to_duckdb(sql: str) -> str:
++    body = sql[sql.index("AS ((") + 5: sql.rindex("));")]
++    body = re.sub(r"TIMESTAMP_DIFF\(([^,]+),\s*([^,]+),\s*DAY\)", r"TRUNC((epoch(\1) - epoch(\2)) / 86400)", body)
++    body = body.replace("TIMESTAMP '2026-12-31 00:00:00+00'", "TIMESTAMP '2026-12-31 00:00:00'")
++    body = re.sub(r"STRUCT\((.+?) AS score, (.+?) AS hot, (.+?) AS raw\)", r"{'score': \1, 'hot': \2, 'raw': \3}", body)
++    return f"CREATE OR REPLACE MACRO hot_score_v1({ARGS}) AS ({body.strip()})"
++
++
++def _deals(n=4000, seed=20261005):
++    random.seed(seed)
++    now = datetime(2026, 10, 6, 5, 0, tzinfo=timezone.utc)
++    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
++    maybe = lambda v, p=0.2: random.choice([None, ""]) if random.random() < p else v
++    num = lambda lo, hi, zp=0.25: "0" if random.random() < zp else str(round(random.uniform(lo, hi), random.choice([0, 1, 2])))
++    out = []
++    for _ in range(n):
++        out.append({"pipeline": random.choice(["12096408", "13772279", "705868909", "934982230", "766126206", None]),
++                    "asp_in_usd_q2_2022_calculation": maybe(num(0, 2000)), "tpm__k_y": maybe(num(0, 1200)), "services_value_2026": maybe(num(0, 800)),
++                    "product_hierarchy": random.choice(["PKI", "Secure Elements", "Services", None]),
++                    "closedate": maybe(iso(datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=random.randint(0, 2400), hours=random.choice([0, 0, 0, 13])))),
++                    "calculation___pipeline_2026__k__": maybe(num(0, 900)), "notes_last_updated": maybe(iso(now - timedelta(days=random.uniform(-3, 400)))),
++                    "hs_deal_stage_probability": random.choice(["0.1", "0.2", "0.5", "1.0", "0.0", "0.4", None]),
++                    "num_contacted_notes": maybe(str(random.randint(0, 300))), "revenue_state": random.choice(["Forecast", "BIBA", "Upside", "Pipeline", None])})
++    return out, now
++
++
++def _run(deals, now):
++    con = duckdb.connect()
++    con.execute(to_duckdb((ROOT / "scoring" / "hot_score_v1.sql").read_text()))
++    con.execute("CREATE TABLE raw(i INTEGER, pipeline VARCHAR, prob VARCHAR, closedate VARCHAR, calc VARCHAR, services VARCHAR, asp VARCHAR, tpm VARCHAR, ph VARCHAR, notes VARCHAR, nlu VARCHAR, rs VARCHAR)")
++    con.executemany("INSERT INTO raw VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
++                    [(i, p.get("pipeline"), p.get("hs_deal_stage_probability"), p.get("closedate"), p.get("calculation___pipeline_2026__k__"), p.get("services_value_2026"),
++                      p.get("asp_in_usd_q2_2022_calculation"), p.get("tpm__k_y"), p.get("product_hierarchy"), p.get("num_contacted_notes"), p.get("notes_last_updated"), p.get("revenue_state")) for i, p in enumerate(deals)])
++    return con.execute(f"""
++      WITH typed AS (SELECT i, pipeline, TRY_CAST(prob AS DOUBLE) prob, TRY_CAST(replace(closedate,'Z','') AS TIMESTAMP) closedate, TRY_CAST(calc AS DOUBLE) calc,
++                            TRY_CAST(services AS DOUBLE) services, TRY_CAST(asp AS DOUBLE) asp, TRY_CAST(tpm AS DOUBLE) tpm, ph, TRY_CAST(notes AS DOUBLE) notes,
++                            TRY_CAST(replace(nlu,'Z','') AS TIMESTAMP) nlu, rs FROM raw)
++      SELECT i, hot_score_v1(pipeline, prob, closedate, calc, services, asp, tpm, ph, notes, nlu, rs, TIMESTAMP '{now.strftime('%Y-%m-%d %H:%M:%S')}') AS r FROM typed ORDER BY i""").fetchall()
++
++
++def _compare(deals, now, rows):
++    bad = []
++    for (i, r), p in zip(rows, deals):
++        ps, ph = main.hot_score(p, now)
++        if ps is None:
++            if r is not None and r.get("raw") is not None: bad.append((i, "expected NULL", r))
++            continue
++        # unrounded reference, same arithmetic as main.hot_score
++        if r is None or r.get("raw") is None: bad.append((i, "SQL NULL", (ps, ph))); continue
++        if r["hot"] != ph or abs(r["score"] - ps) > 0.1 + 1e-9: bad.append((i, (ps, ph), (r["score"], r["hot"]), p))
++    return bad
++
++
++def test_sql_udf_matches_python_on_vectors_and_random_deals():
++    if duckdb is None:
++        import pytest; pytest.skip("duckdb not installed")
++    vectors = json.loads((ROOT / "tests" / "hot_score_vectors.json").read_text())
++    vnow = datetime.fromisoformat(vectors["now"].replace("Z", "+00:00"))
++    vdeals = [c["props"] for c in vectors["cases"]]
++    bad = _compare(vdeals, vnow, _run(vdeals, vnow)); assert not bad, bad[:3]
++    deals, now = _deals(); bad = _compare(deals, now, _run(deals, now)); assert not bad, bad[:3]
++    scored = sum(1 for p in deals if main.hot_score(p, now)[0] is not None)
++    print(f"sql udf == python on {len(vdeals)} vectors and {len(deals)} random deals ({scored} scored), 0 mismatches")
++
++
++if __name__ == "__main__":
++    test_sql_udf_matches_python_on_vectors_and_random_deals()
+diff --git a/tests/test_main_offline.py b/tests/test_main_offline.py
+index 7f5a302..9cda2b8 100644
+--- a/tests/test_main_offline.py
++++ b/tests/test_main_offline.py
+@@ -93,7 +93,7 @@ def test_dry_reads_but_writes_nothing():
+     payload, code = _invoke(bqc, "entity=SEALSQ&dry_run=1")
+     assert code == 200 and payload["dry_run"] is True and payload["rows_written"] == 0
+     assert any("SELECT watermark" in q for q in bqc.sql) and any("name_key" in q for q in bqc.sql), "dry run must read like a live run"
+-    assert not bqc.loads and not bqc.inserted and not any(q.lstrip().startswith(("MERGE", "UPDATE")) for q in bqc.sql), bqc.sql
++    assert not bqc.loads and not any(q.lstrip().startswith(("MERGE", "UPDATE", "INSERT")) for q in bqc.sql), bqc.sql
+     assert payload["window"]["watermark_in"].startswith("2026-09-28"), payload["window"]
+     r1 = next(r for r in payload["rows"] if r["deal_id"] == "1")
+     assert r1["duplicate_suspect"] and "2" in r1["duplicate_of"] and "999" in r1["duplicate_of"], r1  # twin in batch (other pipeline) + twin in warehouse
+@@ -112,12 +112,13 @@ def test_live_uses_per_run_staging_and_frozen_update_list():
+     assert len(order) == 2 and order[0] < order[1], "watermark must advance after the MERGE"
+     assert bqc.locked is False and bqc.watermark is not None
+     hist = [d for d, _, _ in bqc.loads if d.endswith("new_deals_history")]; assert hist, "history slice written"
+-    assert bqc.inserted and bqc.inserted[0][1][0]["status"] == "OK" and bqc.inserted[0][1][0]["orchestrator"] == "cloud-run-function"
++    runlog = [q for q in bqc.sql if q.lstrip().startswith("INSERT INTO `p.hubspot.new_deals_runs`")]
++    assert len(runlog) == 1 and "@status" in runlog[0] and "@orchestrator" in runlog[0], "one run-log row via a query INSERT (not a streaming insert)"
+ 
+ 
+ def test_overlapping_run_gets_409_and_writes_nothing():
+     bqc = FakeBQ(watermark=NOW - timedelta(days=7), locked=True); payload, code = _invoke(bqc, "entity=ICALPS")
+-    assert code == 409 and not bqc.loads and not bqc.inserted
++    assert code == 409 and not bqc.loads and not any(q.lstrip().startswith(("INSERT", "MERGE `p.hubspot.new_deals`")) for q in bqc.sql)
+ 
+ 
+ def test_event_mode_never_touches_watermark():
+@@ -131,6 +132,16 @@ def test_first_run_without_watermark_uses_first_run_days():
+     assert code == 200 and payload["window"]["watermark_in"] is not None
+ 
+ 
++def test_every_table_main_writes_is_in_the_schema_ddl():
++    import re as _re
++    ddl = (ROOT / "cloud_function_new_deals/bigquery_schema.sql").read_text()
++    created = set(_re.findall(r"CREATE TABLE IF NOT EXISTS `\$\{PROJECT\}\.\$\{DATASET\}\.([a-z_]+)`", ddl))
++    src = (ROOT / "cloud_function_new_deals/main.py").read_text()
++    named = set(_re.findall(r"table\(\"([a-z_]+)\"\)", src)) - {"new_deals_staging"}
++    named = {n for n in named if not n.startswith("new_deals_staging")}
++    assert named <= created, f"main.py writes {named - created} but deploy.sh tables does not create them"
++
++
+ if __name__ == "__main__":
+     for name, fn in list(globals().items()):
+         if name.startswith("test_") and callable(fn): fn(); print("ok ", name)
+diff --git a/workflows/NEW_DEALS_DELIVERY.json b/workflows/NEW_DEALS_DELIVERY.json
+index c0f031a..7abad76 100644
+--- a/workflows/NEW_DEALS_DELIVERY.json
++++ b/workflows/NEW_DEALS_DELIVERY.json
+@@ -223,7 +223,7 @@
+  "settings": {
+   "executionOrder": "v1",
+   "timezone": "Europe/Zurich",
+-  "errorWorkflow": "NEW_DEALS_ERRORS"
++  "errorWorkflow": "REPLACE_WITH_ERRORS_ID"
+  },
+  "id": "NEW_DEALS_DELIVERY",
+  "meta": {
+diff --git a/workflows/NEW_DEALS_FULL.json b/workflows/NEW_DEALS_FULL.json
+index 9b33f55..64ff38b 100644
+--- a/workflows/NEW_DEALS_FULL.json
++++ b/workflows/NEW_DEALS_FULL.json
+@@ -116,7 +116,8 @@
+      "id": "REPLACE_WITH_GOOGLE_SA",
+      "name": "n8n-bq service account"
+     }
+-   }
++   },
++   "alwaysOutputData": true
+   },
+   {
+    "parameters": {
+@@ -194,7 +195,8 @@
+      "id": "REPLACE_WITH_HUBSPOT",
+      "name": "HubSpot private app (read)"
+     }
+-   }
++   },
++   "executeOnce": true
+   },
+   {
+    "parameters": {
+@@ -234,7 +236,8 @@
+      "id": "REPLACE_WITH_HUBSPOT",
+      "name": "HubSpot private app (read)"
+     }
+-   }
++   },
++   "executeOnce": true
+   },
+   {
+    "parameters": {
+@@ -264,12 +267,14 @@
+      "name": "n8n-bq service account"
+     }
+    },
+-   "onError": "continueRegularOutput"
++   "onError": "continueRegularOutput",
++   "alwaysOutputData": true,
++   "executeOnce": true
+   },
+   {
+    "parameters": {
+     "mode": "runOnceForAllItems",
+-    "jsCode": "// NEW_DEALS_FULL · Code node \"Shape + score\" (runOnceForAllItems). GENERATED by workflows/src/build_workflow.py — do not edit here.\nconst C = {\"version\": \"v1\", \"fitted\": \"2026-10-01\", \"weights\": {\"stage_prob\": 2.0712, \"proximity_2026\": 1.2399, \"missing_2026_field\": -0.4136, \"pipeline_conversion\": 1.0918, \"arr_points\": 4.9843, \"engagement\": 1.3018, \"recency\": 0.0, \"not_in_forecast\": 1.562}, \"bias\": -6.4788, \"threshold\": 45.0, \"conversion\": {\"12096408\": {\"won\": 84, \"total\": 730}, \"13772279\": {\"won\": 51, \"total\": 303}}, \"hardware_pipeline\": \"12096408\", \"max_contacted_notes\": 223, \"horizon_date\": \"2026-12-31\", \"horizon_decay_days\": 730, \"arr_tiers\": {\"PKI\": [[20, 0.5], [50, 1], [null, 2]], \"default\": [[100, 0.5], [500, 1], [1000, 2], [null, 3]]}, \"arr_tier_divisor\": 3, \"recency_days\": [[90, 1.0], [180, 0.5]], \"forecast_states\": [\"Forecast\", \"BIBA\"]};\n// shape_score.js — pure functions injected into the n8n Code node by build_workflow.py (no imports; `C` = constants object).\n// Port of hot_score(), name_key() and shape() from cloud_function_new_deals/main.py. Verified by tests/test_n8n_code.py\n// against the Python implementation on identical inputs.\nconst num = (v) => { if (v === null || v === undefined || v === '') return 0; const f = Number(v); return Number.isFinite(f) ? f : 0; };\nconst daysBetween = (later, earlier) => Math.trunc((later - earlier) / 86400000);\nconst CRMAX = Math.max(...Object.values(C.conversion).map((c) => c.won / c.total));\n\nfunction hotScore(p, now) {\n  const cr = C.conversion[p.pipeline];\n  if (!cr) return [null, null];\n  const arr = num(p.asp_in_usd_q2_2022_calculation) || num(p.tpm__k_y) || num(p.services_value_2026);\n  const tiers = p.product_hierarchy === 'PKI' ? C.arr_tiers.PKI : C.arr_tiers.default;\n  let pts = tiers[tiers.length - 1][1];\n  for (const [limit, value] of tiers) {\n    if (limit === null) { pts = value; break; }\n    if (limit === tiers[0][0] ? arr < limit : arr <= limit) { pts = value; break; }\n  }\n  let prox = 0;\n  if (p.closedate) { const d = new Date(p.closedate); prox = d.getUTCFullYear() <= 2026 ? 1 : Math.max(0, 1 - daysBetween(d, new Date(C.horizon_date + 'T00:00:00Z')) / C.horizon_decay_days); }\n  const hw = p.pipeline === C.hardware_pipeline;\n  const missing = (hw ? !num(p.calculation___pipeline_2026__k__) : !num(p.services_value_2026)) ? 1 : 0;\n  let rec = 0;\n  if (p.notes_last_updated) { const dd = daysBetween(now, new Date(p.notes_last_updated)); rec = dd <= C.recency_days[0][0] ? C.recency_days[0][1] : (dd <= C.recency_days[1][0] ? C.recency_days[1][1] : 0); }\n  const f = { stage_prob: num(p.hs_deal_stage_probability), proximity_2026: prox, missing_2026_field: missing, pipeline_conversion: (cr.won / cr.total) / CRMAX,\n    arr_points: pts / C.arr_tier_divisor, engagement: Math.log1p(num(p.num_contacted_notes)) / Math.log1p(C.max_contacted_notes), recency: rec,\n    not_in_forecast: C.forecast_states.includes(p.revenue_state) ? 0 : 1 };\n  const z = Object.keys(C.weights).reduce((a, k) => a + C.weights[k] * f[k], 0) + C.bias;\n  const s = 100 / (1 + Math.exp(-z));\n  return [Math.round(s * 10) / 10, s >= C.threshold];\n}\n\nfunction nameKey(p) {\n  const base = (p.final_customer || '').trim() || (p.dealname || '').split(/[-/|(]/)[0];\n  return base.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);\n}\n\nfunction shapeRows(deals, others, entity, pl, st, owners, runTs, known, portal) {\n  const batchKeys = {};\n  for (const d of [...deals, ...others]) { const k = nameKey(d.properties || {}); (batchKeys[k] ??= []).push(String(d.id)); }\n  const iso = runTs.toISOString().replace('.000Z', '+00:00');\n  return deals.map((d) => {\n    const p = d.properties || {}; const did = String(d.id); const k = nameKey(p);\n    const dupBatch = (batchKeys[k] || []).filter((x) => x !== did);\n    const dupKnown = (known[k] || []).filter((x) => x !== did && !dupBatch.includes(x));\n    const [score, hot] = hotScore(p, runTs);\n    const ownerId = p.hubspot_owner_id === undefined || p.hubspot_owner_id === null ? null : String(p.hubspot_owner_id);\n    return { entity, deal_id: did, dealname: p.dealname ?? null, final_customer: p.final_customer ?? null, name_key: k,\n      createdate: p.createdate ?? null, created_by_user_id: p.hs_created_by_user_id ?? null, source: p.hs_object_source_label ?? null,\n      owner: ownerId === null ? null : (owners[ownerId] ?? ownerId), sales_region: p.sales_region ?? null,\n      pipeline: pl[p.pipeline] ?? p.pipeline ?? null, pipeline_id: p.pipeline ?? null, stage: st[p.dealstage] ?? p.dealstage ?? null,\n      probability_pct: Math.round(num(p.hs_deal_stage_probability) * 1000) / 10, amount: num(p.amount), currency: p.deal_currency_code ?? null,\n      amount_kusd: num(p.amount_in_home_currency), closedate: (p.closedate || '').slice(0, 10) || null,\n      arr_ky: num(p.asp_in_usd_q2_2022_calculation), product_family: p.product_hierarchy ?? null, product: p.prod___product_name_new_ ?? null,\n      application: p.application ?? null, icalps_dealtype: p.icalps_dealtype ?? null, icalps_stage: p.icalps_stage ?? null,\n      day1_hot_score: score, day1_hot_flag: hot,\n      duplicate_suspect: dupBatch.length > 0 || dupKnown.length > 0, duplicate_of: [...dupBatch, ...dupKnown].join(', ') || null,\n      deal_url: `https://app.hubspot.com/go-to/${portal}/0-3/${did}`, first_seen_run: iso, last_seen_run: iso };\n  });\n}\nconst MERGE_SQL = \"MERGE __FQ__.new_deals` t USING (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r) s ON t.deal_id = s.deal_id WHEN MATCHED THEN UPDATE SET entity = s.entity, dealname = s.dealname, final_customer = s.final_customer, name_key = s.name_key, createdate = s.createdate, created_by_user_id = s.created_by_user_id, source = s.source, owner = s.owner, sales_region = s.sales_region, pipeline = s.pipeline, pipeline_id = s.pipeline_id, stage = s.stage, probability_pct = s.probability_pct, amount = s.amount, currency = s.currency, amount_kusd = s.amount_kusd, closedate = s.closedate, arr_ky = s.arr_ky, product_family = s.product_family, product = s.product, application = s.application, icalps_dealtype = s.icalps_dealtype, icalps_stage = s.icalps_stage, duplicate_suspect = s.duplicate_suspect, duplicate_of = s.duplicate_of, deal_url = s.deal_url, last_seen_run = s.last_seen_run WHEN NOT MATCHED THEN INSERT (entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) VALUES (s.entity, s.deal_id, s.dealname, s.final_customer, s.name_key, s.createdate, s.created_by_user_id, s.source, s.owner, s.sales_region, s.pipeline, s.pipeline_id, s.stage, s.probability_pct, s.amount, s.currency, s.amount_kusd, s.closedate, s.arr_ky, s.product_family, s.product, s.application, s.icalps_dealtype, s.icalps_stage, s.day1_hot_score, s.day1_hot_flag, s.duplicate_suspect, s.duplicate_of, s.deal_url, s.first_seen_run, s.last_seen_run)\";\nconst HISTORY_SQL = \"DELETE FROM __FQ__.new_deals_history` WHERE run_ts = TIMESTAMP '__RUN_TS__' AND entity = '__ENTITY__' AND orchestrator = 'n8n'; INSERT INTO __FQ__.new_deals_history` (run_ts, orchestrator, entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) SELECT TIMESTAMP '__RUN_TS__', 'n8n', entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run FROM (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r)\";\nconst WATERMARK_SQL = \"MERGE __FQ__.report_state` t USING (SELECT '__RID__' AS report_id, TIMESTAMP '__TS__' AS watermark) s ON t.report_id = s.report_id WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP(), lock_until = NULL WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP())\";\nconst RUNLOG_SQL = \"INSERT INTO __FQ__.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status) VALUES (TIMESTAMP '__RUN_TS__', '__ENTITY__', 'window', __DRY__, 'n8n', TIMESTAMP '__WM__', TIMESTAMP '__QS__', TIMESTAMP '__QE__', __N__, IF(__DRY__, 0, __N__), __DUP__, __HOT__, 'OK')\";\nconst ENTITIES = { SEALSQ: { pipelines: ['12096408', '13772279', '705868909', '934982230'], currency: 'USD (home)' }, ICALPS: { pipelines: ['766126206'], currency: 'EUR (stored)' } };\nconst P = $('Params').first().json;\nconst W = $('Window').first().json;\nconst runTs = new Date(P.run_ts);\nconst found = $('HubSpot search').all().flatMap((i) => i.json.results || []);\nconst pipelinesResp = $('Pipelines').first().json.results || [];\nconst pl = Object.fromEntries(pipelinesResp.map((p) => [p.id, p.label]));\nconst st = Object.fromEntries(pipelinesResp.flatMap((p) => (p.stages || []).map((s) => [s.id, s.label])));\nconst owners = Object.fromEntries($('Owners').all().flatMap((i) => i.json.results || []).map((o) => [String(o.id), `${o.firstName || ''} ${o.lastName || ''}`.trim() || o.email || '']));\nconst known = {};\nfor (const i of $('Recent names').all()) { const r = i.json || {}; if (r.name_key && r.deal_id) (known[r.name_key] ??= []).push(String(r.deal_id)); }\nconst scope = ENTITIES[P.entity].pipelines;\nconst deals = found.filter((d) => scope.includes((d.properties || {}).pipeline));\nconst ids = new Set(deals.map((d) => String(d.id)));\nconst others = found.filter((d) => !ids.has(String(d.id)));\nconst rows = shapeRows(deals, others, P.entity, pl, st, owners, runTs, known, P.portal_id);\nrows.sort((a, b) => ((b.amount_kusd || 0) - (a.amount_kusd || 0)) || (a.deal_id < b.deal_id ? -1 : a.deal_id > b.deal_id ? 1 : 0));\nconst sqlStr = (s) => \"'''\" + String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, \"\\\\'\") + \"'''\";\nconst rowsLiteral = sqlStr(JSON.stringify(rows));\nconst fq = `\\`${P.bq_project}.${P.bq_dataset}`;\nconst payload = { report_id: `NEW_DEALS_${P.entity}`, run_timestamp: P.run_ts, orchestrator: 'n8n', dry_run: P.dry_run === true,\n  window: { mode: 'window', watermark_in: W.watermark_in, query_start: W.query_start, query_end: W.query_end },\n  row_count: rows.length, rows_written: 0, duplicate_suspects: rows.filter((r) => r.duplicate_suspect).length,\n  day1_hot: rows.filter((r) => r.day1_hot_flag).map((r) => r.deal_id), currency_note: ENTITIES[P.entity].currency, rows };\nconst merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral) : 'SELECT 1';\nconst history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';\nconst watermark_sql = WATERMARK_SQL.replaceAll('__FQ__', fq).replaceAll('__RID__', `NEW_DEALS_${P.entity}`).replaceAll('__TS__', P.run_ts);\nconst runlog_sql = RUNLOG_SQL.replaceAll('__FQ__', fq).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity).replaceAll('__DRY__', String(P.dry_run === true))\n  .replaceAll('__WM__', W.watermark_in).replaceAll('__QS__', W.query_start).replaceAll('__QE__', W.query_end)\n  .replaceAll('__N__', String(rows.length)).replaceAll('__DUP__', String(payload.duplicate_suspects)).replaceAll('__HOT__', String(payload.day1_hot.length));\nreturn [{ json: { ...payload, merge_sql, history_sql, watermark_sql, runlog_sql } }];\n"
++    "jsCode": "// NEW_DEALS_FULL · Code node \"Shape + score\" (runOnceForAllItems). GENERATED by workflows/src/build_workflow.py — do not edit here.\nconst C = {\"version\": \"v1\", \"fitted\": \"2026-10-01\", \"weights\": {\"stage_prob\": 2.0712, \"proximity_2026\": 1.2399, \"missing_2026_field\": -0.4136, \"pipeline_conversion\": 1.0918, \"arr_points\": 4.9843, \"engagement\": 1.3018, \"recency\": 0.0, \"not_in_forecast\": 1.562}, \"bias\": -6.4788, \"threshold\": 45.0, \"conversion\": {\"12096408\": {\"won\": 84, \"total\": 730}, \"13772279\": {\"won\": 51, \"total\": 303}}, \"hardware_pipeline\": \"12096408\", \"max_contacted_notes\": 223, \"horizon_date\": \"2026-12-31\", \"horizon_decay_days\": 730, \"arr_tiers\": {\"PKI\": [[20, 0.5], [50, 1], [null, 2]], \"default\": [[100, 0.5], [500, 1], [1000, 2], [null, 3]]}, \"arr_tier_divisor\": 3, \"recency_days\": [[90, 1.0], [180, 0.5]], \"forecast_states\": [\"Forecast\", \"BIBA\"]};\n// shape_score.js — pure functions injected into the n8n Code node by build_workflow.py (no imports; `C` = constants object).\n// Port of hot_score(), name_key() and shape() from cloud_function_new_deals/main.py. Verified by tests/test_n8n_code.py\n// against the Python implementation on identical inputs.\nconst num = (v) => { if (v === null || v === undefined || v === '') return 0; const f = Number(v); return Number.isFinite(f) ? f : 0; };\nconst daysBetween = (later, earlier) => Math.trunc((later - earlier) / 86400000);\nconst CRMAX = Math.max(...Object.values(C.conversion).map((c) => c.won / c.total));\n\nfunction hotScore(p, now) {\n  const cr = C.conversion[p.pipeline];\n  if (!cr) return [null, null];\n  const arr = num(p.asp_in_usd_q2_2022_calculation) || num(p.tpm__k_y) || num(p.services_value_2026);\n  const tiers = p.product_hierarchy === 'PKI' ? C.arr_tiers.PKI : C.arr_tiers.default;\n  let pts = tiers[tiers.length - 1][1];\n  for (const [limit, value] of tiers) {\n    if (limit === null) { pts = value; break; }\n    if (limit === tiers[0][0] ? arr < limit : arr <= limit) { pts = value; break; }\n  }\n  let prox = 0;\n  if (p.closedate) { const d = new Date(p.closedate); prox = d.getUTCFullYear() <= 2026 ? 1 : Math.max(0, 1 - daysBetween(d, new Date(C.horizon_date + 'T00:00:00Z')) / C.horizon_decay_days); }\n  const hw = p.pipeline === C.hardware_pipeline;\n  const missing = (hw ? !num(p.calculation___pipeline_2026__k__) : !num(p.services_value_2026)) ? 1 : 0;\n  let rec = 0;\n  if (p.notes_last_updated) { const dd = daysBetween(now, new Date(p.notes_last_updated)); rec = dd <= C.recency_days[0][0] ? C.recency_days[0][1] : (dd <= C.recency_days[1][0] ? C.recency_days[1][1] : 0); }\n  const f = { stage_prob: num(p.hs_deal_stage_probability), proximity_2026: prox, missing_2026_field: missing, pipeline_conversion: (cr.won / cr.total) / CRMAX,\n    arr_points: pts / C.arr_tier_divisor, engagement: Math.log1p(num(p.num_contacted_notes)) / Math.log1p(C.max_contacted_notes), recency: rec,\n    not_in_forecast: C.forecast_states.includes(p.revenue_state) ? 0 : 1 };\n  const z = Object.keys(C.weights).reduce((a, k) => a + C.weights[k] * f[k], 0) + C.bias;\n  const s = 100 / (1 + Math.exp(-z));\n  return [Math.round(s * 10) / 10, s >= C.threshold];\n}\n\nfunction nameKey(p) {\n  const base = (p.final_customer || '').trim() || (p.dealname || '').split(/[-/|(]/)[0];\n  return base.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);\n}\n\nfunction shapeRows(deals, others, entity, pl, st, owners, runTs, known, portal) {\n  const batchKeys = {};\n  for (const d of [...deals, ...others]) { const k = nameKey(d.properties || {}); (batchKeys[k] ??= []).push(String(d.id)); }\n  const iso = runTs.toISOString().replace('.000Z', '+00:00');\n  return deals.map((d) => {\n    const p = d.properties || {}; const did = String(d.id); const k = nameKey(p);\n    const dupBatch = (batchKeys[k] || []).filter((x) => x !== did);\n    const dupKnown = (known[k] || []).filter((x) => x !== did && !dupBatch.includes(x));\n    const [score, hot] = hotScore(p, runTs);\n    const ownerId = p.hubspot_owner_id === undefined || p.hubspot_owner_id === null ? null : String(p.hubspot_owner_id);\n    return { entity, deal_id: did, dealname: p.dealname ?? null, final_customer: p.final_customer ?? null, name_key: k,\n      createdate: p.createdate ?? null, created_by_user_id: p.hs_created_by_user_id ?? null, source: p.hs_object_source_label ?? null,\n      owner: ownerId === null ? null : (owners[ownerId] ?? ownerId), sales_region: p.sales_region ?? null,\n      pipeline: pl[p.pipeline] ?? p.pipeline ?? null, pipeline_id: p.pipeline ?? null, stage: st[p.dealstage] ?? p.dealstage ?? null,\n      probability_pct: Math.round(num(p.hs_deal_stage_probability) * 1000) / 10, amount: num(p.amount), currency: p.deal_currency_code ?? null,\n      amount_kusd: num(p.amount_in_home_currency), closedate: (p.closedate || '').slice(0, 10) || null,\n      arr_ky: num(p.asp_in_usd_q2_2022_calculation), product_family: p.product_hierarchy ?? null, product: p.prod___product_name_new_ ?? null,\n      application: p.application ?? null, icalps_dealtype: p.icalps_dealtype ?? null, icalps_stage: p.icalps_stage ?? null,\n      day1_hot_score: score, day1_hot_flag: hot,\n      duplicate_suspect: dupBatch.length > 0 || dupKnown.length > 0, duplicate_of: [...dupBatch, ...dupKnown].join(', ') || null,\n      deal_url: `https://app.hubspot.com/go-to/${portal}/0-3/${did}`, first_seen_run: iso, last_seen_run: iso };\n  });\n}\nconst MERGE_SQL = \"MERGE __FQ__.new_deals` t USING (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r) s ON t.deal_id = s.deal_id WHEN MATCHED THEN UPDATE SET entity = s.entity, dealname = s.dealname, final_customer = s.final_customer, name_key = s.name_key, createdate = s.createdate, created_by_user_id = s.created_by_user_id, source = s.source, owner = s.owner, sales_region = s.sales_region, pipeline = s.pipeline, pipeline_id = s.pipeline_id, stage = s.stage, probability_pct = s.probability_pct, amount = s.amount, currency = s.currency, amount_kusd = s.amount_kusd, closedate = s.closedate, arr_ky = s.arr_ky, product_family = s.product_family, product = s.product, application = s.application, icalps_dealtype = s.icalps_dealtype, icalps_stage = s.icalps_stage, duplicate_suspect = s.duplicate_suspect, duplicate_of = s.duplicate_of, deal_url = s.deal_url, last_seen_run = s.last_seen_run WHEN NOT MATCHED THEN INSERT (entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) VALUES (s.entity, s.deal_id, s.dealname, s.final_customer, s.name_key, s.createdate, s.created_by_user_id, s.source, s.owner, s.sales_region, s.pipeline, s.pipeline_id, s.stage, s.probability_pct, s.amount, s.currency, s.amount_kusd, s.closedate, s.arr_ky, s.product_family, s.product, s.application, s.icalps_dealtype, s.icalps_stage, s.day1_hot_score, s.day1_hot_flag, s.duplicate_suspect, s.duplicate_of, s.deal_url, s.first_seen_run, s.last_seen_run)\";\nconst HISTORY_SQL = \"DELETE FROM __FQ__.new_deals_history` WHERE run_ts = TIMESTAMP '__RUN_TS__' AND entity = '__ENTITY__' AND orchestrator = 'n8n'; INSERT INTO __FQ__.new_deals_history` (run_ts, orchestrator, entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) SELECT TIMESTAMP '__RUN_TS__', 'n8n', entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run FROM (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r)\";\nconst WATERMARK_SQL = \"MERGE __FQ__.report_state` t USING (SELECT '__RID__' AS report_id, TIMESTAMP '__TS__' AS watermark) s ON t.report_id = s.report_id WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP(), lock_until = NULL WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP())\";\nconst RUNLOG_SQL = \"INSERT INTO __FQ__.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status) VALUES (TIMESTAMP '__RUN_TS__', '__ENTITY__', 'window', __DRY__, 'n8n', TIMESTAMP '__WM__', TIMESTAMP '__QS__', TIMESTAMP '__QE__', __N__, IF(__DRY__, 0, __N__), __DUP__, __HOT__, 'OK')\";\nconst ENTITIES = { SEALSQ: { pipelines: ['12096408', '13772279', '705868909', '934982230'], currency: 'USD (home)' }, ICALPS: { pipelines: ['766126206'], currency: 'EUR (stored)' } };\nconst P = $('Params').first().json;\nconst W = $('Window').first().json;\nconst runTs = new Date(P.run_ts);\nconst found = $('HubSpot search').all().flatMap((i) => i.json.results || []);\nconst pipelinesResp = $('Pipelines').first().json.results || [];\nconst pl = Object.fromEntries(pipelinesResp.map((p) => [p.id, p.label]));\nconst st = Object.fromEntries(pipelinesResp.flatMap((p) => (p.stages || []).map((s) => [s.id, s.label])));\nconst owners = Object.fromEntries($('Owners').all().flatMap((i) => i.json.results || []).map((o) => [String(o.id), `${o.firstName || ''} ${o.lastName || ''}`.trim() || o.email || '']));\nconst known = {};\nfor (const i of $('Recent names').all()) { const r = i.json || {}; if (r.name_key && r.deal_id) (known[r.name_key] ??= []).push(String(r.deal_id)); }\nconst scope = ENTITIES[P.entity].pipelines;\nconst deals = found.filter((d) => scope.includes((d.properties || {}).pipeline));\nconst ids = new Set(deals.map((d) => String(d.id)));\nconst others = found.filter((d) => !ids.has(String(d.id)));\nconst rows = shapeRows(deals, others, P.entity, pl, st, owners, runTs, known, P.portal_id);\nrows.sort((a, b) => ((b.amount_kusd || 0) - (a.amount_kusd || 0)) || (a.deal_id < b.deal_id ? -1 : a.deal_id > b.deal_id ? 1 : 0));\nconst sqlStr = (s) => \"'''\" + String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, \"\\\\'\") + \"'''\";\nconst rowsLiteral = sqlStr(JSON.stringify(rows));\nconst fq = `\\`${P.bq_project}.${P.bq_dataset}`;\nconst payload = { report_id: `NEW_DEALS_${P.entity}`, run_timestamp: P.run_ts, orchestrator: 'n8n', dry_run: P.dry_run === true,\n  window: { mode: 'window', watermark_in: W.watermark_in, query_start: W.query_start, query_end: W.query_end },\n  row_count: rows.length, rows_written: 0, duplicate_suspects: rows.filter((r) => r.duplicate_suspect).length,\n  day1_hot: rows.filter((r) => r.day1_hot_flag).map((r) => r.deal_id), currency_note: ENTITIES[P.entity].currency, rows };\nconst merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral) : 'SELECT 1';   // function form: deal text may contain $& $$\nconst history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';\nconst watermark_sql = WATERMARK_SQL.replaceAll('__FQ__', fq).replaceAll('__RID__', `NEW_DEALS_${P.entity}`).replaceAll('__TS__', P.run_ts);\nconst runlog_sql = RUNLOG_SQL.replaceAll('__FQ__', fq).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity).replaceAll('__DRY__', String(P.dry_run === true))\n  .replaceAll('__WM__', W.watermark_in).replaceAll('__QS__', W.query_start).replaceAll('__QE__', W.query_end)\n  .replaceAll('__N__', String(rows.length)).replaceAll('__DUP__', String(payload.duplicate_suspects)).replaceAll('__HOT__', String(payload.day1_hot.length));\nreturn [{ json: { ...payload, merge_sql, history_sql, watermark_sql, runlog_sql } }];\n"
+    },
+    "name": "Shape + score",
+    "type": "n8n-nodes-base.code",
+@@ -428,6 +433,28 @@
+     }
+    }
+   },
++  {
++   "parameters": {
++    "assignments": {
++     "assignments": [
++      {
++       "id": "r1",
++       "name": "rows",
++       "type": "array",
++       "value": "={{ $('Shape + score').first().json.rows }}"
++      }
++     ]
++    },
++    "options": {}
++   },
++   "name": "Rows source",
++   "type": "n8n-nodes-base.set",
++   "typeVersion": 3.4,
++   "position": [
++    3080,
++    420
++   ]
++  },
+   {
+    "parameters": {
+     "fieldToSplitOut": "rows",
+@@ -438,7 +465,7 @@
+    "type": "n8n-nodes-base.splitOut",
+    "typeVersion": 1,
+    "position": [
+-    3080,
++    3300,
+     420
+    ]
+   },
+@@ -456,7 +483,7 @@
+    "type": "n8n-nodes-base.convertToFile",
+    "typeVersion": 1.1,
+    "position": [
+-    3300,
++    3520,
+     420
+    ]
+   },
+@@ -475,7 +502,7 @@
+    "type": "n8n-nodes-base.emailSend",
+    "typeVersion": 2.1,
+    "position": [
+-    3520,
++    3740,
+     420
+    ],
+    "credentials": {
+@@ -652,6 +679,17 @@
+    ]
+   },
+   "Run log": {
++   "main": [
++    [
++     {
++      "node": "Rows source",
++      "type": "main",
++      "index": 0
++     }
++    ]
++   ]
++  },
++  "Rows source": {
+    "main": [
+     [
+      {
+@@ -700,7 +738,7 @@
+  "settings": {
+   "executionOrder": "v1",
+   "timezone": "Europe/Zurich",
+-  "errorWorkflow": "NEW_DEALS_ERRORS",
++  "errorWorkflow": "REPLACE_WITH_ERRORS_ID",
+   "saveManualExecutions": true
+  },
+  "meta": {
+diff --git a/workflows/src/build_workflow.py b/workflows/src/build_workflow.py
+index 79722f5..1119b45 100644
+--- a/workflows/src/build_workflow.py
++++ b/workflows/src/build_workflow.py
+@@ -72,21 +72,25 @@ def node(name, type_, params, pos, creds=None, **extra):
+     n.update(extra); return n
+ 
+ 
+-def bq(name, sql_expr, pos, on_error=None):
++def bq(name, sql_expr, pos, on_error=None, always_output=False, once=False):
+     p = {"resource": "database", "operation": "executeQuery", "projectId": {"__rl": True, "mode": "id", "value": "={{ $env.BQ_PROJECT }}"},
+          "sqlQuery": sql_expr, "options": {"location": "={{ $env.BQ_LOCATION || 'EU' }}", "useLegacySql": False}}
+-    extra = {"onError": "continueRegularOutput"} if on_error else {}
++    extra = {}
++    if on_error: extra["onError"] = "continueRegularOutput"
++    if always_output: extra["alwaysOutputData"] = True      # an empty result (first run) must not stop the workflow
++    if once: extra["executeOnce"] = True                   # run once, not once per incoming item (search pages)
+     return node(name, "n8n-nodes-base.googleBigQuery", p, pos, CRED["bq"], **extra)
+ 
+ 
+-def hs_request(name, method, url, pos, body=None, paginate_in=None):
++def hs_request(name, method, url, pos, body=None, paginate_in=None, once=False):
+     p = {"method": method, "url": url, "authentication": "predefinedCredentialType", "nodeCredentialType": "hubspotAppToken", "options": {}}
++    extra = {"executeOnce": True} if once else {}
+     if body: p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+     if paginate_in:
+         p["options"]["pagination"] = {"pagination": {"paginationMode": "updateAParameterInEachRequest", "paginationCompleteWhen": "other",
+                                                       "completeExpression": "={{ !$response.body.paging }}", "limitPagesFetched": False,
+                                                       "parameters": {"parameters": [{"type": paginate_in, "name": "after", "value": "={{ $response.body.paging.next.after }}"}]}}}
+-    return node(name, "n8n-nodes-base.httpRequest", p, pos, CRED["hubspot"])
++    return node(name, "n8n-nodes-base.httpRequest", p, pos, CRED["hubspot"], **extra)
+ 
+ 
+ def chain(*names):
+@@ -109,7 +113,7 @@ def build_full() -> dict:
+             {"id": "a6", "name": "portal_id", "type": "string", "value": "={{ $env.PORTAL_ID || '9201667' }}"},
+             {"id": "a7", "name": "bq_project", "type": "string", "value": "={{ $env.BQ_PROJECT }}"}, {"id": "a8", "name": "bq_dataset", "type": "string", "value": "={{ $env.BQ_DATASET || 'hubspot' }}"}]},
+             "options": {}}, (220, 300)),
+-        bq("Read watermark", "=SELECT FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', watermark) AS watermark FROM `{{ $json.bq_project }}.{{ $json.bq_dataset }}.report_state` WHERE report_id = 'NEW_DEALS_{{ $json.entity }}'", (440, 300)),
++        bq("Read watermark", "=SELECT FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', watermark) AS watermark FROM `{{ $json.bq_project }}.{{ $json.bq_dataset }}.report_state` WHERE report_id = 'NEW_DEALS_{{ $json.entity }}'", (440, 300), always_output=True),
+         node("Window", "n8n-nodes-base.code", {"mode": "runOnceForAllItems", "jsCode":
+              "// half-open window [watermark − overlap, run_ts); computed ONCE — every later node references this item, never $now again\n"
+              "const P = $('Params').first().json; const wm = $input.first().json.watermark;\n"
+@@ -120,9 +124,9 @@ def build_full() -> dict:
+         hs_request("HubSpot search", "POST", "https://api.hubapi.com/crm/v3/objects/deals/search", (880, 300),
+                    body="={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'createdate', operator: 'GTE', value: $json.hs_start }, { propertyName: 'createdate', operator: 'LT', value: $json.hs_end }] }], properties: " + props + ", sorts: [{ propertyName: 'createdate', direction: 'ASCENDING' }], limit: 200 }) }}",
+                    paginate_in="body"),
+-        hs_request("Pipelines", "GET", "https://api.hubapi.com/crm/v3/pipelines/deals", (1100, 300)),
+-        hs_request("Owners", "GET", "https://api.hubapi.com/crm/v3/owners?limit=100", (1320, 300), paginate_in="qs"),
+-        bq("Recent names", "=SELECT deal_id, name_key FROM `{{ $('Params').first().json.bq_project }}.{{ $('Params').first().json.bq_dataset }}.new_deals` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) AND name_key != ''", (1540, 300), on_error=True),
++        hs_request("Pipelines", "GET", "https://api.hubapi.com/crm/v3/pipelines/deals", (1100, 300), once=True),
++        hs_request("Owners", "GET", "https://api.hubapi.com/crm/v3/owners?limit=100", (1320, 300), paginate_in="qs", once=True),
++        bq("Recent names", "=SELECT deal_id, name_key FROM `{{ $('Params').first().json.bq_project }}.{{ $('Params').first().json.bq_dataset }}.new_deals` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) AND name_key != ''", (1540, 300), on_error=True, always_output=True, once=True),
+         node("Shape + score", "n8n-nodes-base.code", {"mode": "runOnceForAllItems", "jsCode": code_js()}, (1760, 300)),
+         node("Dry run?", "n8n-nodes-base.if", {"conditions": {"options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 2},
+              "conditions": [{"id": "c1", "leftValue": "={{ $('Params').first().json.dry_run }}", "rightValue": True, "operator": {"type": "boolean", "operation": "true", "singleValue": True}}], "combinator": "and"}, "options": {}}, (1980, 300)),
+@@ -130,19 +134,20 @@ def build_full() -> dict:
+         bq("History slice", "={{ $('Shape + score').first().json.history_sql }}", (2420, 420)),
+         bq("Advance watermark", "={{ $('Shape + score').first().json.watermark_sql }}", (2640, 420)),
+         bq("Run log", "={{ $('Shape + score').first().json.runlog_sql }}", (2860, 420)),
+-        node("Rows", "n8n-nodes-base.splitOut", {"fieldToSplitOut": "rows", "include": "noOtherFields", "options": {}}, (3080, 420)),
+-        node("XLSX", "n8n-nodes-base.convertToFile", {"operation": "xlsx", "binaryPropertyName": "NEW", "options": {"fileName": "={{ $('Shape + score').first().json.report_id }}_{{ $('Shape + score').first().json.run_timestamp.slice(0,10) }}.xlsx", "headerRow": True, "sheetName": "New deals"}}, (3300, 420)),
++        node("Rows source", "n8n-nodes-base.set", {"assignments": {"assignments": [{"id": "r1", "name": "rows", "type": "array", "value": "={{ $('Shape + score').first().json.rows }}"}]}, "options": {}}, (3080, 420)),
++        node("Rows", "n8n-nodes-base.splitOut", {"fieldToSplitOut": "rows", "include": "noOtherFields", "options": {}}, (3300, 420)),
++        node("XLSX", "n8n-nodes-base.convertToFile", {"operation": "xlsx", "binaryPropertyName": "NEW", "options": {"fileName": "={{ $('Shape + score').first().json.report_id }}_{{ $('Shape + score').first().json.run_timestamp.slice(0,10) }}.xlsx", "headerRow": True, "sheetName": "New deals"}}, (3520, 420)),
+         node("Email", "n8n-nodes-base.emailSend", {"fromEmail": "={{ $env.MAIL_FROM }}", "toEmail": "={{ $env.MAIL_TO }}",
+              "subject": "={{ $('Shape + score').first().json.report_id }} — {{ $('Shape + score').first().json.row_count }} new deal(s), {{ $('Shape + score').first().json.duplicate_suspects }} duplicate suspect(s)",
+              "emailFormat": "text", "text": "={{ (() => { const b = $('Shape + score').first().json; return `${b.report_id} · run ${b.run_timestamp} (n8n)\\nwindow: ${JSON.stringify(b.window)}\\nrows: ${b.row_count} · duplicate suspects: ${b.duplicate_suspects} · day-1 hot: ${b.day1_hot.join(', ') || 'none'}\\namounts: ${b.currency_note}\\n\\n` + b.rows.map(r => `${r.duplicate_suspect ? '[DUP] ' : ''}${r.day1_hot_flag ? '[HOT] ' : ''}${r.dealname} — ${r.final_customer || '-'} — ${r.pipeline} / ${r.stage} ${r.probability_pct}% — ${r.amount_kusd} — created ${(r.createdate||'').slice(0,10)} — ${r.owner}\\n${r.deal_url}`).join('\\n\\n'); })() }}",
+-             "options": {"attachments": "NEW"}}, (3520, 420), CRED["smtp"]),
++             "options": {"attachments": "NEW"}}, (3740, 420), CRED["smtp"]),
+         node("Respond", "n8n-nodes-base.respondToWebhook", {"respondWith": "json", "responseBody": "={{ JSON.stringify((({ rows, merge_sql, history_sql, watermark_sql, runlog_sql, ...rest }) => rest)($('Shape + score').first().json)) }}", "options": {}}, (3740, 300)),
+     ]
+     conn = chain("Webhook: new-deals-run", "Params", "Read watermark", "Window", "HubSpot search", "Pipelines", "Owners", "Recent names", "Shape + score", "Dry run?")
+     conn["Dry run?"] = {"main": [[{"node": "Respond", "type": "main", "index": 0}], [{"node": "MERGE new_deals", "type": "main", "index": 0}]]}   # true → respond only; false → write
+-    conn.update(chain("MERGE new_deals", "History slice", "Advance watermark", "Run log", "Rows", "XLSX", "Email", "Respond"))
++    conn.update(chain("MERGE new_deals", "History slice", "Advance watermark", "Run log", "Rows source", "Rows", "XLSX", "Email", "Respond"))
+     return {"id": "NEW_DEALS_FULL", "name": "NEW_DEALS_FULL", "nodes": nodes, "connections": conn, "active": False,
+-            "settings": {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "NEW_DEALS_ERRORS", "saveManualExecutions": True},
++            "settings": {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "REPLACE_WITH_ERRORS_ID", "saveManualExecutions": True},
+             "meta": {"generated_by": "workflows/src/build_workflow.py", "scenario": "B2", "note": "Cloud Scheduler → webhook (Header Auth); ?dry_run=1 computes and responds without writing; writes happen in order MERGE → history → watermark → run log → delivery."}}
+ 
+ 
+@@ -163,7 +168,7 @@ def build_delivery() -> dict:
+     wf["connections"] = {"Webhook: new-deals": {"main": [[{"node": "Any rows?", "type": "main", "index": 0}]]},
+                          "Any rows?": {"main": [[{"node": "Rows", "type": "main", "index": 0}], [{"node": "Email (no rows)", "type": "main", "index": 0}]]},
+                          **chain("Rows", "Shape columns", "XLSX", "Email")}
+-    wf["settings"] = {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "NEW_DEALS_ERRORS"}
++    wf["settings"] = {"executionOrder": "v1", "timezone": "Europe/Zurich", "errorWorkflow": "REPLACE_WITH_ERRORS_ID"}   # patched at import from workflows/workflow_ids.map.json
+     wf["meta"] = {"generated_by": "workflows/src/build_workflow.py", "scenario": "B1", "source": "cloud_function_new_deals/n8n_NewDeals_Delivery.json",
+                   "hardening": ["Header Auth on the webhook (X-Delivery-Token)", "zero-row branch sends a text-only email", "recipients from MAIL_FROM/MAIL_TO env", "responds when the last node finishes"]}
+     return wf
+diff --git a/workflows/src/node_code.template.js b/workflows/src/node_code.template.js
+index 8e1ba1c..3d22d22 100644
+--- a/workflows/src/node_code.template.js
++++ b/workflows/src/node_code.template.js
+@@ -26,8 +26,8 @@ const payload = { report_id: `NEW_DEALS_${P.entity}`, run_timestamp: P.run_ts, o
+   window: { mode: 'window', watermark_in: W.watermark_in, query_start: W.query_start, query_end: W.query_end },
+   row_count: rows.length, rows_written: 0, duplicate_suspects: rows.filter((r) => r.duplicate_suspect).length,
+   day1_hot: rows.filter((r) => r.day1_hot_flag).map((r) => r.deal_id), currency_note: ENTITIES[P.entity].currency, rows };
+-const merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral) : 'SELECT 1';
+-const history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';
++const merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral) : 'SELECT 1';   // function form: deal text may contain $& $$
++const history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';
+ const watermark_sql = WATERMARK_SQL.replaceAll('__FQ__', fq).replaceAll('__RID__', `NEW_DEALS_${P.entity}`).replaceAll('__TS__', P.run_ts);
+ const runlog_sql = RUNLOG_SQL.replaceAll('__FQ__', fq).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity).replaceAll('__DRY__', String(P.dry_run === true))
+   .replaceAll('__WM__', W.watermark_in).replaceAll('__QS__', W.query_start).replaceAll('__QE__', W.query_end)
+diff --git a/writeback/bootstrap_property.sh b/writeback/bootstrap_property.sh
+index 595029a..99cf807 100755
+--- a/writeback/bootstrap_property.sh
++++ b/writeback/bootstrap_property.sh
+@@ -3,7 +3,8 @@
+ # Needs a token with crm.schemas.deals.write in HUBSPOT_SCHEMA_TOKEN (use it once; it is not stored anywhere).
+ set -euo pipefail
+ : "${HUBSPOT_SCHEMA_TOKEN:?a token with crm.schemas.deals.write, used once}"
+-H=(-H "Authorization: Bearer $HUBSPOT_SCHEMA_TOKEN" -H "Content-Type: application/json")
++HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$HDR"' EXIT; printf 'Authorization: Bearer %s\n' "$HUBSPOT_SCHEMA_TOKEN" > "$HDR"   # token never on argv
++H=(-H @"$HDR" -H "Content-Type: application/json")
+ ensure() {  # name label type fieldType description
+   if curl -sS -o /dev/null -w '%{http_code}' "${H[@]}" "https://api.hubapi.com/crm/v3/properties/deals/$1" | grep -q '^200$'; then echo "exists: $1"; return; fi
+   curl -sS -f "${H[@]}" -X POST https://api.hubapi.com/crm/v3/properties/deals \
+diff --git a/writeback/deploy_job.sh b/writeback/deploy_job.sh
+index 290fd6f..c8ef326 100755
+--- a/writeback/deploy_job.sh
++++ b/writeback/deploy_job.sh
+@@ -8,7 +8,9 @@
+ set -euo pipefail
+ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+ [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+-: "${PROJECT:?}" "${REGION:=europe-west6}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${JOB:=new-deals-writeback}" "${WRITEBACK_SCHEDULE:=30 5 * * 1}"
++: "${PROJECT:?}" "${REGION:=europe-west6}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${JOB:=new-deals-writeback}" "${WRITEBACK_SCHEDULE:=30 5 * * 1}" "${SYNC_DATASET:?}"
++[[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
++# note: a redeploy resets WRITEBACK_APPROVE to the .env value (default 0 = dry); set WRITEBACK_APPROVE=1 in .env once the job is live
+ DRYRUN="${DRYRUN:-0}"
+ SA="new-deals-writeback@${PROJECT}.iam.gserviceaccount.com"; SCHED_SA="new-deals-scheduler@${PROJECT}.iam.gserviceaccount.com"
+ run() { if [[ "$DRYRUN" == 1 ]]; then printf '  $'; printf ' %q' "$@"; echo; else "$@"; fi; }
+@@ -20,6 +22,7 @@ case "${1:-deploy}" in
+     ensure_sa new-deals-writeback "new deals write-back job"; ensure_sa new-deals-scheduler "scheduler invoker for jobs.run"
+     run gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None
+     run bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
++    run bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`${PROJECT}.${SYNC_DATASET}\` TO \"serviceAccount:${SA}\""
+     run gcloud secrets add-iam-policy-binding hubspot-token-write --project "$PROJECT" --member "serviceAccount:$SA" --role roles/secretmanager.secretAccessor
+     run gcloud run jobs deploy "$JOB" --project "$PROJECT" --region "$REGION" --source "$HERE" --service-account "$SA" \
+       --tasks 1 --max-retries 2 --task-timeout 900s \
+diff --git a/writeback/index.mjs b/writeback/index.mjs
+index 4177c90..f926b31 100644
+--- a/writeback/index.mjs
++++ b/writeback/index.mjs
+@@ -15,7 +15,7 @@ const T = (n) => `\`${BQ_PROJECT}.${BQ_DATASET}.${n}\``;
+ const log = (o) => console.log(JSON.stringify({ severity: 'INFO', run_ts: RUN_TS.toISOString(), ...o }));
+ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+ 
+-const [rows] = await bq.query({ query: `SELECT deal_id, hot_score_v1, hot_flag_v1, previous_score, previous_flag FROM ${T('hot_deals_v1_writeback')} ORDER BY deal_id${MAX_ROWS ? ` LIMIT ${Number(MAX_ROWS)}` : ''}` });
++const [rows] = await bq.query({ query: `SELECT deal_id, hot_score_v1, hot_flag_v1, previous_score, previous_flag FROM ${T('hot_deals_v1_writeback')} ORDER BY deal_id${Number.isInteger(Number(MAX_ROWS)) && Number(MAX_ROWS) > 0 ? ` LIMIT ${Number(MAX_ROWS)}` : ''}` });
+ log({ message: 'candidates', candidates: rows.length, dry_run: DRY });
+ 
+ // POST /crm/v3/objects/deals/batch/update — ≤ 100 inputs; 200 = all written, 207 = partial (errors[] names the ids that failed).

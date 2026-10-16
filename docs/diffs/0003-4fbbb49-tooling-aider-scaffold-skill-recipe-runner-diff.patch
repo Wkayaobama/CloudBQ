@@ -1,0 +1,493 @@
+commit 4fbbb49c9ac54472eea930e069a2dd63271533a0
+Author:     Claude <noreply@anthropic.com>
+AuthorDate: Mon Oct 5 17:18:20 2026 +0000
+Commit:     Claude <noreply@anthropic.com>
+CommitDate: Mon Oct 5 17:18:20 2026 +0000
+
+    tooling: aider-scaffold skill (recipe runner + diff ledger) and aider config
+    
+    aider_scaffold.py runs one recipe through aider as auto-committed steps (or prints the recipe and exits 2 without an LLM key); diff_ledger.py writes one .patch per commit to docs/diffs plus INDEX.md, idempotent, with aider detection verified against aider 0.86.2 repo.py (author suffix, Co-authored-by trailer, aider: prefix). Tested in a throwaway repo: first run, idempotent re-run, --check, --aider-only, no-key fallback.
+    
+    Scaffolded-by: hand (no LLM key)
+    
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+    
+    Claude-Session: https://claude.ai/code/session_01QedX4KjNg2eSfF8fZ1UQ6b
+---
+ .aider.conf.yml                                    |  17 +++
+ .aiderignore                                       |  14 +++
+ .claude/skills/aider-scaffold/SKILL.md             |  52 ++++++++
+ .../aider-scaffold/assets/CONVENTIONS.template.md  |  14 +++
+ .../skills/aider-scaffold/assets/aider.conf.yml    |  17 +++
+ .claude/skills/aider-scaffold/assets/aiderignore   |  14 +++
+ .../references/aider-0.86-commit-signature.md      |  12 ++
+ .../aider-scaffold/scripts/aider_scaffold.py       |  98 +++++++++++++++
+ .../skills/aider-scaffold/scripts/diff_ledger.py   | 138 +++++++++++++++++++++
+ .gitignore                                         |   4 +
+ CONVENTIONS.md                                     |  16 +++
+ 11 files changed, 396 insertions(+)
+
+diff --git a/.aider.conf.yml b/.aider.conf.yml
+new file mode 100644
+index 0000000..a17e7c3
+--- /dev/null
++++ b/.aider.conf.yml
+@@ -0,0 +1,17 @@
++# aider configuration shared by this project family (copy to the repo root as .aider.conf.yml)
++# Every AI edit is its own commit, marked as aider's, so the diff ledger can turn it into a patch.
++auto-commits: true
++dirty-commits: false          # never fold the operator's uncommitted edits into a suggestion
++attribute-author: true        # author "Name (aider)" on aider commits
++attribute-committer: true
++attribute-co-authored-by: true  # trailer: Co-authored-by: aider (<model>) <aider@aider.chat>
++show-diffs: true
++git-commit-verify: true
++yes-always: false             # the wrapper passes --yes-always for scripted runs; interactive sessions still confirm
++read:
++  - CONVENTIONS.md
++input-history-file: .aider/input.history
++chat-history-file: .aider/chat.history.md
++llm-history-file: .aider/llm.history
++check-update: false
++analytics: false
+diff --git a/.aiderignore b/.aiderignore
+new file mode 100644
+index 0000000..06c8a91
+--- /dev/null
++++ b/.aiderignore
+@@ -0,0 +1,14 @@
++# files aider must never add to the chat (secrets, state, generated bulk)
++.env
++.env.*
++!.env.example
++*.pem
++*.key
++credentials.json
++.aider/
++docs/diffs/
++*.xlsx
++*.manifest.json
++__pycache__/
++node_modules/
++.venv/
+diff --git a/.claude/skills/aider-scaffold/SKILL.md b/.claude/skills/aider-scaffold/SKILL.md
+new file mode 100644
+index 0000000..15916b7
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/SKILL.md
+@@ -0,0 +1,52 @@
++---
++name: aider-scaffold
++description: Scaffold building blocks with aider as reviewable, auto-committed steps and keep a diff ledger so every AI suggestion can be read with `git diff`. Use when the user wants aider as the scaffolder, wants "git diff for every change the assistant suggests", or needs a per-commit patch trail for review. Project-agnostic (repo root discovered with git); works without an LLM key in a degraded, documented mode.
++---
++
++# aider-scaffold
++
++Two scripts and a convention. The suggestion is the commit; the ledger is the review surface.
++
++```bash
++S=.claude/skills/aider-scaffold/scripts
++python3 $S/aider_scaffold.py assets/recipes/<block>.md path/to/file [more files] [--dry-run]
++python3 $S/diff_ledger.py                     # docs/diffs/NNNN-<sha>-<slug>.patch + INDEX.md, idempotent
++python3 $S/diff_ledger.py --aider-only        # only aider's commits
++python3 $S/diff_ledger.py --check             # exit 1 if commits are missing from the ledger (pre-push)
++```
++
++## How a suggestion becomes a diff
++
++1. `aider_scaffold.py` refuses a dirty tree (so a commit holds one suggestion), then runs
++   `aider --yes-always --no-stream --message-file <recipe> [--read CONVENTIONS.md] <files>` with the
++   repo's `.aider.conf.yml` (auto-commits on, attribution on, show-diffs on) and a `--commit-prompt`
++   that adds the trailer `Recipe: <recipe path>`.
++2. aider commits each edit itself. In 0.86.x the author and committer names end in ` (aider)`;
++   `--attribute-co-authored-by` adds `Co-authored-by: aider (<model>) <aider@aider.chat>`;
++   `--attribute-commit-message-author` prefixes the subject with `aider: `. The ledger recognises all three.
++3. `diff_ledger.py` writes one `.patch` per new commit (full `git show --format=fuller --patch --stat`)
++   and appends a row to `docs/diffs/INDEX.md` (n · sha · date · author · aider? · recipe · files · +/−).
++   Re-running adds only commits whose sha is not yet in the index. `git diff <sha>~1 <sha>` and the patch
++   file show the same thing; the patch survives rebases and squashes.
++
++## Without an LLM key
++
++The wrapper detects the absence of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
++`OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` (or `--model`), prints the recipe, the files and the exact
++command, and exits 2. Apply the recipe by hand and commit with the trailers
++`Recipe: <recipe>` and `Scaffolded-by: hand (no LLM key)`; the ledger row then says `recipe: hand (no LLM key)`.
++Nothing else changes, so the review trail is identical whichever path produced the commit.
++
++## Recipes
++
++A recipe is a markdown file aider receives as its message: the block's purpose, the files to create or
++change, the contract (inputs, outputs, idempotency rule, gate), and what *not* to do. One recipe per
++building block; the architecture annotations (`docs/architecture.yaml`) point at it. Keep recipes
++self-contained — aider sees only the recipe, the added files and `CONVENTIONS.md`.
++
++## Install into a repo
++
++Copy this directory to `.claude/skills/aider-scaffold/`, copy `assets/aider.conf.yml` to the repo root
++as `.aider.conf.yml`, `assets/aiderignore` as `.aiderignore`, and write a `CONVENTIONS.md` (start from
++`assets/CONVENTIONS.template.md`). Add `.aider*` history files to `.gitignore` (the ignore file does).
++`references/aider-0.86-commit-signature.md` records how the detection rules were verified.
+diff --git a/.claude/skills/aider-scaffold/assets/CONVENTIONS.template.md b/.claude/skills/aider-scaffold/assets/CONVENTIONS.template.md
+new file mode 100644
+index 0000000..9030880
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/CONVENTIONS.template.md
+@@ -0,0 +1,14 @@
++# Conventions for scaffolded code (read by aider on every run)
++
++- **Idempotent by construction.** Every pipeline step may be re-run with the same inputs and must produce
++  the same state: loads MERGE on a natural key, watermarks advance only after the write succeeds,
++  write-backs PATCH values and skip rows already equal.
++- **Gate before live.** A dry-run mode (`dry_run=1`, `--dry-run`, an unset `*_APPROVE_*` variable) computes
++  everything and writes nothing; the live mode is opened by one explicit flag.
++- **Shared truth in the warehouse, local state in the clone.** Anything two surfaces must agree on lives in
++  BigQuery (or the system of record), never in a local file.
++- **No secrets in git.** Tokens come from Secret Manager or `.env` (gitignored); scripts read `.env.example`
++  for the variable names and fail loudly when one is missing or still a placeholder.
++- **One block, one commit.** Do not refactor neighbouring code in a scaffold step; name the recipe in the
++  commit trailer `Recipe: <path>`.
++- **Small, typed, logged.** Prefer standard libraries; log one structured line per step with counts.
+diff --git a/.claude/skills/aider-scaffold/assets/aider.conf.yml b/.claude/skills/aider-scaffold/assets/aider.conf.yml
+new file mode 100644
+index 0000000..a17e7c3
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/aider.conf.yml
+@@ -0,0 +1,17 @@
++# aider configuration shared by this project family (copy to the repo root as .aider.conf.yml)
++# Every AI edit is its own commit, marked as aider's, so the diff ledger can turn it into a patch.
++auto-commits: true
++dirty-commits: false          # never fold the operator's uncommitted edits into a suggestion
++attribute-author: true        # author "Name (aider)" on aider commits
++attribute-committer: true
++attribute-co-authored-by: true  # trailer: Co-authored-by: aider (<model>) <aider@aider.chat>
++show-diffs: true
++git-commit-verify: true
++yes-always: false             # the wrapper passes --yes-always for scripted runs; interactive sessions still confirm
++read:
++  - CONVENTIONS.md
++input-history-file: .aider/input.history
++chat-history-file: .aider/chat.history.md
++llm-history-file: .aider/llm.history
++check-update: false
++analytics: false
+diff --git a/.claude/skills/aider-scaffold/assets/aiderignore b/.claude/skills/aider-scaffold/assets/aiderignore
+new file mode 100644
+index 0000000..06c8a91
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/assets/aiderignore
+@@ -0,0 +1,14 @@
++# files aider must never add to the chat (secrets, state, generated bulk)
++.env
++.env.*
++!.env.example
++*.pem
++*.key
++credentials.json
++.aider/
++docs/diffs/
++*.xlsx
++*.manifest.json
++__pycache__/
++node_modules/
++.venv/
+diff --git a/.claude/skills/aider-scaffold/references/aider-0.86-commit-signature.md b/.claude/skills/aider-scaffold/references/aider-0.86-commit-signature.md
+new file mode 100644
+index 0000000..d2353b4
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/references/aider-0.86-commit-signature.md
+@@ -0,0 +1,12 @@
++# How aider 0.86.x marks its commits (verified in `aider/repo.py` of the installed package)
++
++| Option (default) | Effect on the commit |
++|---|---|
++| `--attribute-author` (on) | author name becomes `<git user.name> (aider)` for AI edits |
++| `--attribute-committer` (on) | committer name becomes `<git user.name> (aider)` |
++| `--attribute-co-authored-by` (off) | trailer `Co-authored-by: aider (<model>) <aider@aider.chat>`; when on and author not explicit, the author name is left unsuffixed |
++| `--attribute-commit-message-author` / `-committer` (off) | subject prefixed with `aider: ` |
++
++`scripts/diff_ledger.py` marks a commit as aider's when any of: author or committer name ends with `(aider)`,
++the body contains a line starting `Co-authored-by: aider (`, or the subject starts with `aider: `.
++Checked against repo.py lines 165–273 (docstring and `commit()`), aider 0.86.2, 2026-10-05.
+diff --git a/.claude/skills/aider-scaffold/scripts/aider_scaffold.py b/.claude/skills/aider-scaffold/scripts/aider_scaffold.py
+new file mode 100644
+index 0000000..a828fcd
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/scripts/aider_scaffold.py
+@@ -0,0 +1,98 @@
++#!/usr/bin/env python3
++"""aider_scaffold — run one scaffold recipe through aider as a reviewable, auto-committed step, then update the diff ledger.
++
++    python3 aider_scaffold.py <recipe.md> [file ...] [--read FILE ...] [--model MODEL] [--dry-run] [--no-ledger]
++
++What it does
++  1. Finds the repo root (git rev-parse) and refuses to run on a dirty tree unless --allow-dirty (aider's own dirty
++     commit would mix your edits with the suggestion and break "one commit per suggestion").
++  2. Builds the aider command from the repo's .aider.conf.yml (auto-commits, attribution, show-diffs) and the recipe:
++       aider --yes-always --no-stream --message-file <recipe> [--read CONVENTIONS.md] <files…>
++     and runs it in the foreground. Every edit aider makes lands as its own commit, author "<you> (aider)", with a
++     "Recipe: <recipe path>" trailer added by --commit-prompt so the ledger can name the recipe.
++  3. Runs diff_ledger.py so docs/diffs/ gains one .patch per new commit — `git diff HEAD~1` or the patch file shows
++     exactly what the assistant proposed.
++
++Without an LLM key (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY, or
++--model with its own key) aider cannot answer; this wrapper then prints the recipe, the files it would add and the exact
++command, and exits 2. Apply the recipe by hand, commit with the trailer `Scaffolded-by: hand (no LLM key)` and
++`Recipe: <recipe>`, then run diff_ledger.py — the ledger treats both paths the same.
++"""
++from __future__ import annotations
++
++import argparse
++import os
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "AIDER_MODEL")
++
++
++def git(*args: str, cwd: Path) -> str:
++    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
++
++
++def main(argv=None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("recipe", help="markdown recipe passed to aider as --message-file")
++    ap.add_argument("files", nargs="*", help="files aider may edit (added to the chat)")
++    ap.add_argument("--read", action="append", default=[], help="read-only context files (default: CONVENTIONS.md if present)")
++    ap.add_argument("--model", help="aider model id (else aider's default / AIDER_MODEL)")
++    ap.add_argument("--dry-run", action="store_true", help="aider --dry-run: show edits, write nothing")
++    ap.add_argument("--allow-dirty", action="store_true")
++    ap.add_argument("--no-ledger", action="store_true")
++    ap.add_argument("--ledger", default="docs/diffs")
++    a = ap.parse_args(argv)
++
++    try:
++        root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
++    except subprocess.CalledProcessError:
++        sys.exit("aider_scaffold: not inside a git repository")
++    recipe = Path(a.recipe)
++    if not recipe.exists():
++        sys.exit(f"aider_scaffold: recipe not found: {recipe}")
++    for f in a.files:
++        if not Path(f).exists():
++            Path(f).parent.mkdir(parents=True, exist_ok=True)  # aider creates new files when they are named; keep parents ready
++    reads = a.read or ([str(root / "CONVENTIONS.md")] if (root / "CONVENTIONS.md").exists() else [])
++    before = git("rev-parse", "HEAD", cwd=root).strip()
++
++    dirty = git("status", "--porcelain", "--untracked-files=no", cwd=root).strip()
++    if dirty and not a.allow_dirty:
++        sys.exit("aider_scaffold: working tree has uncommitted changes; commit or stash them first (or --allow-dirty)\n" + dirty)
++
++    aider = shutil.which("aider") or str(Path.home() / ".local" / "bin" / "aider")
++    cmd = [aider, "--yes-always", "--no-stream", "--no-check-update", "--no-analytics", "--message-file", str(recipe),
++           "--commit-prompt", f"Write a conventional one-line summary of the change, then a blank line, then the trailer line 'Recipe: {recipe.as_posix()}'."]
++    if a.model:
++        cmd += ["--model", a.model]
++    if a.dry_run:
++        cmd += ["--dry-run"]
++    for r in reads:
++        cmd += ["--read", r]
++    cmd += a.files
++
++    have_key = any(os.environ.get(k) for k in KEY_VARS) or a.model
++    if not have_key or not Path(aider).exists():
++        why = "no LLM API key in the environment" if Path(aider).exists() else f"aider not found at {aider}"
++        print(f"aider_scaffold: cannot run aider ({why}).\n\nRecipe {recipe}:\n" + "-" * 72)
++        print(recipe.read_text(encoding="utf-8").rstrip())
++        print("-" * 72 + f"\nFiles: {', '.join(a.files) or '(none named)'}\nRead-only context: {', '.join(reads) or '(none)'}")
++        print("Command that would run:\n  " + " ".join(cmd))
++        print("\nApply the recipe by hand, then:\n  git commit -m '<summary>' -m 'Recipe: " + recipe.as_posix() + "' -m 'Scaffolded-by: hand (no LLM key)'\n  python3 "
++              + str(Path(__file__).with_name("diff_ledger.py")) + f" --ledger {a.ledger}")
++        return 2
++
++    print("aider_scaffold: " + " ".join(cmd))
++    rc = subprocess.run(cmd, cwd=root).returncode
++    after = git("rev-parse", "HEAD", cwd=root).strip()
++    print(f"aider_scaffold: aider exit {rc}; HEAD {before[:7]} → {after[:7]}" + (" (no commit)" if before == after else ""))
++    if not a.no_ledger and before != after:
++        subprocess.run([sys.executable, str(Path(__file__).with_name("diff_ledger.py")), "--ledger", a.ledger, "--since", before], cwd=root, check=False)
++    return rc
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.claude/skills/aider-scaffold/scripts/diff_ledger.py b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+new file mode 100644
+index 0000000..93fc8f6
+--- /dev/null
++++ b/.claude/skills/aider-scaffold/scripts/diff_ledger.py
+@@ -0,0 +1,138 @@
++#!/usr/bin/env python3
++"""diff_ledger — one reviewable patch per commit, so every AI suggestion can be read with `git diff`.
++
++    python3 diff_ledger.py                      # append patches for commits not yet in the ledger (current branch)
++    python3 diff_ledger.py --aider-only         # only commits aider made (author/committer " (aider)", trailer, "aider: " prefix)
++    python3 diff_ledger.py --since <rev>        # restrict to <rev>..HEAD
++    python3 diff_ledger.py --check              # exit 1 when commits are missing from the ledger (CI / pre-push)
++    python3 diff_ledger.py --ledger docs/diffs  # where patches and INDEX.md live (default)
++
++Each commit becomes docs/diffs/NNNN-<shortsha>-<slug>.patch (full `git show --format=... --patch`), and INDEX.md gets
++one row: n · sha · date · author · recipe (from a `Recipe:` or `Scaffolded-by:` trailer when present) · files · +/-.
++Idempotent: commits already listed (by full sha in INDEX.md) are skipped; nothing is rewritten. Works in any git repo
++(the root is discovered with `git rev-parse --show-toplevel`); no project-specific strings.
++
++aider 0.86.x marks its commits with: author or committer name ending in " (aider)" (default --attribute-author/
++--attribute-committer), optionally the trailer "Co-authored-by: aider (<model>) <aider@aider.chat>"
++(--attribute-co-authored-by) and optionally the message prefix "aider: " (--attribute-commit-message-author). The
++--aider-only filter accepts any of the three.
++"""
++from __future__ import annotations
++
++import argparse
++import re
++import subprocess
++import sys
++from pathlib import Path
++
++SEP = "\x1f"
++AIDER_NAME = re.compile(r"\(aider\)\s*$")
++AIDER_TRAILER = re.compile(r"^Co-authored-by: aider \(", re.M)
++RECIPE_TRAILER = re.compile(r"^(?:Recipe|Scaffolded-by|Scaffolded-By):\s*(.+)$", re.M)
++
++
++def git(*args: str, cwd: Path | None = None) -> str:
++    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
++
++
++def repo_root() -> Path:
++    try:
++        return Path(git("rev-parse", "--show-toplevel").strip())
++    except subprocess.CalledProcessError:
++        sys.exit("diff_ledger: not inside a git repository")
++
++
++def commits(root: Path, since: str | None, ledger_rel: str) -> list[dict]:
++    rng = f"{since}..HEAD" if since else "HEAD"
++    fmt = SEP.join(["%H", "%h", "%aI", "%an", "%cn", "%s", "%b"]) + "\x1e"
++    raw = git("log", "--reverse", "--no-merges", f"--format={fmt}", rng, cwd=root)
++    out = []
++    for rec in raw.split("\x1e"):
++        rec = rec.strip("\n")
++        if not rec:
++            continue
++        sha, short, date, an, cn, subject, body = rec.split(SEP, 6)
++        files = git("show", "--name-only", "--format=", sha, cwd=root).split()
++        if files and all(f.startswith(ledger_rel.rstrip("/") + "/") for f in files):
++            continue  # the ledger's own commits are not ledgered (otherwise --check could never pass)
++        out.append({"sha": sha, "short": short, "date": date[:10], "author": an, "committer": cn, "subject": subject, "body": body})
++    return out
++
++
++def is_aider(c: dict) -> bool:
++    return bool(AIDER_NAME.search(c["author"]) or AIDER_NAME.search(c["committer"]) or AIDER_TRAILER.search(c["body"]) or c["subject"].startswith("aider: "))
++
++
++def recipe_of(c: dict) -> str:
++    m = RECIPE_TRAILER.search(c["body"])
++    return m.group(1).strip() if m else ""
++
++
++def slug(s: str, n: int = 48) -> str:
++    s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
++    return (s[:n] or "change").rstrip("-")
++
++
++def stats(root: Path, sha: str) -> tuple[int, int, int]:
++    raw = git("show", "--numstat", "--format=", sha, cwd=root)
++    files = add = rem = 0
++    for line in raw.splitlines():
++        parts = line.split("\t")
++        if len(parts) >= 3:
++            files += 1
++            add += int(parts[0]) if parts[0].isdigit() else 0
++            rem += int(parts[1]) if parts[1].isdigit() else 0
++    return files, add, rem
++
++
++def existing(index: Path) -> set[str]:
++    if not index.exists():
++        return set()
++    return set(re.findall(r"\b([0-9a-f]{40})\b", index.read_text(encoding="utf-8")))
++
++
++HEADER = "# Diff ledger\n\nOne patch per commit; read any suggestion with `git show <sha>` or open the `.patch`. Rows are appended by `diff_ledger.py`; never edit by hand.\n\n| # | commit | date | author | aider | recipe | files | +/- | patch |\n|---|---|---|---|---|---|---|---|---|\n"
++
++
++def main(argv=None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--ledger", default="docs/diffs", help="directory for patches and INDEX.md (repo-relative)")
++    ap.add_argument("--since", help="only commits after this revision (exclusive)")
++    ap.add_argument("--aider-only", action="store_true", help="only commits aider made")
++    ap.add_argument("--check", action="store_true", help="do not write; exit 1 if any commit is missing from the ledger")
++    a = ap.parse_args(argv)
++
++    root = repo_root()
++    ledger = root / a.ledger
++    index = ledger / "INDEX.md"
++    seen = existing(index)
++    todo = [c for c in commits(root, a.since, a.ledger) if c["sha"] not in seen and (is_aider(c) if a.aider_only else True)]
++    if a.check:
++        for c in todo:
++            print(f"missing: {c['short']} {c['subject']}")
++        print(f"diff_ledger --check: {len(todo)} commit(s) not in {index.relative_to(root)}")
++        return 1 if todo else 0
++    if not todo:
++        print("diff_ledger: nothing new")
++        return 0
++    ledger.mkdir(parents=True, exist_ok=True)
++    if not index.exists():
++        index.write_text(HEADER, encoding="utf-8")
++    n = len(seen)
++    rows = []
++    for c in todo:
++        n += 1
++        name = f"{n:04d}-{c['short']}-{slug(c['subject'])}.patch"
++        patch = git("show", "--format=fuller", "--patch", "--stat", c["sha"], cwd=root)
++        (ledger / name).write_text(patch, encoding="utf-8")
++        files, add, rem = stats(root, c["sha"])
++        rows.append(f"| {n} | `{c['short']}` {c['sha']} | {c['date']} | {c['author']} | {'yes' if is_aider(c) else 'no'} | {recipe_of(c) or '—'} | {files} | +{add}/−{rem} | [{name}]({name}) |\n")
++        print(f"ledger +{name}")
++    with index.open("a", encoding="utf-8") as f:
++        f.writelines(rows)
++    print(f"diff_ledger: {len(rows)} patch(es) appended to {index.relative_to(root)}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.gitignore b/.gitignore
+index 3bf4bfa..1064a80 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,3 +7,7 @@ __pycache__/
+ .venv/
+ .cursorindexingignore
+ .specstory/
++
++# aider / tooling state
++.aider/
++.aider*.history*
+diff --git a/CONVENTIONS.md b/CONVENTIONS.md
+new file mode 100644
+index 0000000..47943a7
+--- /dev/null
++++ b/CONVENTIONS.md
+@@ -0,0 +1,16 @@
++# Conventions for scaffolded code in CloudBQ (read by aider on every run)
++
++- **Idempotent by construction.** Every step may be re-run with the same inputs and must leave the same state:
++  rows MERGE into `hubspot.new_deals` on `deal_id`; the watermark in `hubspot.report_state` advances only after a
++  successful MERGE; HubSpot write-backs PATCH values and skip rows that already hold them.
++- **Gate before live.** `?dry_run=1` (function), `--dry-run` (scripts) or an unset `*_APPROVE_*` variable computes
++  everything and writes nothing. One explicit flag opens the live path; schedulers are enabled only after a dry run.
++- **Shared truth in BigQuery, local state in the clone.** Anything two orchestrators (Cloud Run function, n8n,
++  remote JS) must agree on lives in the `hubspot` dataset — never in a local file or an n8n static variable.
++- **No secrets, no project ids in git.** `HUBSPOT_TOKEN` comes from Secret Manager; `PROJECT`, `REGION`, `DATASET`
++  come from `.env` (gitignored) via `.env.example`; scripts fail loudly on a missing or placeholder value.
++- **Same arithmetic everywhere.** The hot-score constants (`W`, `BIAS`, `THRESHOLD`, `CR`, `MAXC`) are defined once per
++  surface and covered by the offline test vectors in `tests/`; a change to one copy is a change to all.
++- **One block, one commit.** Do not refactor neighbouring code in a scaffold step; keep the trailer
++  `Recipe: <recipe path>` in the commit body so `docs/diffs/INDEX.md` can name it.
++- **Python 3.12 (functions-framework), Node 22 (write-back job), standard SQL (BigQuery).** Standard libraries first.

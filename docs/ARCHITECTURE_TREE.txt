@@ -1,0 +1,202 @@
+Folder PATH listing for volume CloudBQ
+Volume serial number is 6C596755 5069:2285
+CloudBQ
+│   .aider.conf.yml
+│   .aiderignore
+│   .env.example
+│   .gitignore
+│   CONVENTIONS.md
+│   README.md
+│   UNIVERSAL_WORKFLOW.md
+│
+├───.claude
+│   ├───agents
+│   │       discovery-agent.md
+│   │       implementation-agent.md
+│   │
+│   └───skills
+│       ├───aider-scaffold
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │   │   aider.conf.yml
+│       │   │   │   aiderignore
+│       │   │   │   CONVENTIONS.template.md
+│       │   │   │
+│       │   │   └───recipes
+│       │   │           a_deploy_canonical.md
+│       │   │           a_main_idempotency.md
+│       │   │           a_notebook_witness.md
+│       │   │           b_n8n_cloud_run.md
+│       │   │           b_workflows_generated.md
+│       │   │           c_bigquery_compute.md
+│       │   │           c_l2_deal_tiers.md
+│       │   │           c_writeback_job.md
+│       │   │           docs_pass1_set.md
+│       │   │           docs_universal_workflow.md
+│       │   │           scoring_hot_score_ports.md
+│       │   │           tooling_regen_workflow.md
+│       │   │           tooling_reusable_skills.md
+│       │   │
+│       │   ├───references
+│       │   │       aider-0.86-commit-signature.md
+│       │   │
+│       │   └───scripts
+│       │           aider_scaffold.py
+│       │           diff_ledger.py
+│       │
+│       ├───pass-sequence
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │       EXECUTION_SURFACES.template.md
+│       │   │       PASS_SEQUENCE.template.md
+│       │   │
+│       │   ├───evals
+│       │   │       evals.json
+│       │   │
+│       │   ├───references
+│       │   │       pattern.md
+│       │   │       surfaces-spec.md
+│       │   │       worked-example.md
+│       │   │
+│       │   └───scripts
+│       │           build_run_sheet.py
+│       │           build_surfaces_xlsx.py
+│       │           dump_surfaces_xlsx.py
+│       │
+│       ├───regen-workflow
+│       │   │   SKILL.md
+│       │   │
+│       │   ├───assets
+│       │   │       commit_if_changed.sh
+│       │   │       update_readme_index.py
+│       │   │
+│       │   ├───references
+│       │   │       github-actions-facts.md
+│       │   │
+│       │   └───scripts
+│       │           new_regen_workflow.py
+│       │
+│       └───tree-f-visualizer
+│           │   SKILL.md
+│           │
+│           ├───assets
+│           │       template.html
+│           │
+│           ├───references
+│           │       tree-f-format.md
+│           │
+│           └───scripts
+│                   tree_f.py
+│
+├───.github
+│   └───workflows
+│           ci.yml
+│           regenerate.yml
+│           update-readme-index.yml
+│
+├───alternative
+│       cloudcompute.md
+│
+├───cloud_function_new_deals
+│       .gcloudignore
+│       bigquery_schema.sql
+│       deploy.sh
+│       main.py
+│       n8n_NewDeals_Delivery.json
+│       README.md
+│       requirements.txt
+│
+├───deploy
+│   └───n8n
+│           cloudsql.sh
+│           deploy_n8n.sh
+│           import_workflows.sh
+│           scheduler.sh
+│           secrets.sh
+│           service.yaml
+│
+├───docs
+│   │   architecture.manifest.json
+│   │   architecture.yaml
+│   │   architecture_tree.html
+│   │   ARCHITECTURE_TREE.txt
+│   │   EXECUTION_SURFACES.md
+│   │   EXECUTION_SURFACES.xlsx
+│   │   execution_surfaces.yaml
+│   │   EXECUTION_SURFACES_L2.xlsx
+│   │   execution_surfaces_l2.yaml
+│   │   EXECUTION_SURFACES_TOOLING.xlsx
+│   │   execution_surfaces_tooling.yaml
+│   │   PASS1_SEQUENCE.md
+│   │   PASS2_L2_TIERS.md
+│   │   RUNBOOK_CLOUD_SHELL.md
+│   │   SCENARIOS.md
+│   │
+│   ├───diffs
+│   │       INDEX.md
+│   │
+│   └───discovery
+│           pass_sequence_port.md
+│           README.md
+│           scenario_A.md
+│           scenario_B.md
+│           scenario_C.md
+│           scorer_repos.md
+│           synthesis.md
+│
+├───notebooks
+│       cloudbq_deploy_and_witness.ipynb
+│       l2_deal_tiers.ipynb
+│       README.md
+│
+├───scoring
+│       deal_tiers_v1.constants.json
+│       hot_score_v1.constants.json
+│       hot_score_v1.mjs
+│       hot_score_v1.sql
+│       README.md
+│
+├───sql
+│       apply.sh
+│       audit_tables.sql
+│       deals_synced_v1.sql
+│       deal_tiers_apply.sql
+│       deal_tiers_v1.sql
+│       hot_deals_v1.sql
+│       new_deals_weekly.sql
+│       refresh_pipeline_labels.sh
+│       scheduled_query.sh
+│       sync_transfer.sh
+│
+├───tests
+│       hot_score_vectors.json
+│       hot_score_vectors.sql
+│       test_deal_tiers.py
+│       test_docs_consistency.py
+│       test_hot_score.py
+│       test_hot_score_sql_duckdb.py
+│       test_main_offline.py
+│       test_n8n_code.py
+│       test_notebook.py
+│       test_regen_workflow.py
+│
+├───workflows
+│   │   credentials.map.json.example
+│   │   NEW_DEALS_DELIVERY.json
+│   │   NEW_DEALS_ERRORS.json
+│   │   NEW_DEALS_FULL.json
+│   │
+│   └───src
+│           build_workflow.py
+│           node_code.template.js
+│           shape_score.js
+│
+└───writeback
+        bootstrap_property.sh
+        deploy_job.sh
+        Dockerfile
+        index.mjs
+        package.json
+

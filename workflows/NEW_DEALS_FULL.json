@@ -1,0 +1,749 @@
+{
+ "id": "NEW_DEALS_FULL",
+ "name": "NEW_DEALS_FULL",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "new-deals-run",
+    "authentication": "headerAuth",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "name": "Webhook: new-deals-run",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    300
+   ],
+   "credentials": {
+    "httpHeaderAuth": {
+     "id": "REPLACE_WITH_HEADER_AUTH",
+     "name": "new-deals webhook token"
+    }
+   },
+   "webhookId": "new-deals-run"
+  },
+  {
+   "parameters": {
+    "assignments": {
+     "assignments": [
+      {
+       "id": "a1",
+       "name": "entity",
+       "type": "string",
+       "value": "={{ ['SEALSQ','ICALPS'].includes(($json.query.entity || 'SEALSQ').toUpperCase()) ? ($json.query.entity || 'SEALSQ').toUpperCase() : 'INVALID' }}"
+      },
+      {
+       "id": "a2",
+       "name": "dry_run",
+       "type": "boolean",
+       "value": "={{ $json.query.dry_run === '1' }}"
+      },
+      {
+       "id": "a3",
+       "name": "run_ts",
+       "type": "string",
+       "value": "={{ $now.toUTC().startOf('second').toISO({ suppressMilliseconds: true }) }}"
+      },
+      {
+       "id": "a4",
+       "name": "overlap_minutes",
+       "type": "number",
+       "value": 5
+      },
+      {
+       "id": "a5",
+       "name": "first_run_days",
+       "type": "number",
+       "value": 7
+      },
+      {
+       "id": "a6",
+       "name": "portal_id",
+       "type": "string",
+       "value": "={{ $env.PORTAL_ID || '9201667' }}"
+      },
+      {
+       "id": "a7",
+       "name": "bq_project",
+       "type": "string",
+       "value": "={{ $env.BQ_PROJECT }}"
+      },
+      {
+       "id": "a8",
+       "name": "bq_dataset",
+       "type": "string",
+       "value": "={{ $env.BQ_DATASET || 'hubspot' }}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "name": "Params",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    220,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "=SELECT FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', watermark) AS watermark FROM `{{ $json.bq_project }}.{{ $json.bq_dataset }}.report_state` WHERE report_id = 'NEW_DEALS_{{ $json.entity }}'",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "Read watermark",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    440,
+    300
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   },
+   "alwaysOutputData": true
+  },
+  {
+   "parameters": {
+    "mode": "runOnceForAllItems",
+    "jsCode": "// half-open window [watermark − overlap, run_ts); computed ONCE — every later node references this item, never $now again\nconst P = $('Params').first().json; const wm = $input.first().json.watermark;\nconst runTs = new Date(P.run_ts); const start = wm ? new Date(wm) : new Date(runTs.getTime() - P.first_run_days * 86400000);\nconst qs = new Date(start.getTime() - P.overlap_minutes * 60000);\nconst iso = (d) => d.toISOString().replace('.000Z', 'Z');\nreturn [{ json: { watermark_in: iso(start), query_start: iso(qs), query_end: iso(runTs), hs_start: iso(qs).replace('Z', '.000Z'), hs_end: iso(runTs).replace('Z', '.000Z') } }];"
+   },
+   "name": "Window",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    660,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "method": "POST",
+    "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+    "authentication": "predefinedCredentialType",
+    "nodeCredentialType": "hubspotAppToken",
+    "options": {
+     "pagination": {
+      "pagination": {
+       "paginationMode": "updateAParameterInEachRequest",
+       "paginationCompleteWhen": "other",
+       "completeExpression": "={{ !$response.body.paging }}",
+       "limitPagesFetched": false,
+       "parameters": {
+        "parameters": [
+         {
+          "type": "body",
+          "name": "after",
+          "value": "={{ $response.body.paging.next.after }}"
+         }
+        ]
+       }
+      }
+     }
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'createdate', operator: 'GTE', value: $json.hs_start }, { propertyName: 'createdate', operator: 'LT', value: $json.hs_end }] }], properties: [\"dealname\", \"createdate\", \"final_customer\", \"sales_region\", \"pipeline\", \"dealstage\", \"hs_deal_stage_probability\", \"amount\", \"amount_in_home_currency\", \"deal_currency_code\", \"closedate\", \"asp_in_usd_q2_2022_calculation\", \"tpm__k_y\", \"services_value_2026\", \"calculation___pipeline_2026__k__\", \"product_hierarchy\", \"prod___product_name_new_\", \"application\", \"hubspot_owner_id\", \"hs_object_source_label\", \"hs_object_source_detail_1\", \"icalps_dealtype\", \"icalps_stage\", \"icalps_dealstatus\", \"num_contacted_notes\", \"notes_last_updated\", \"revenue_state\", \"hs_created_by_user_id\"], sorts: [{ propertyName: 'createdate', direction: 'ASCENDING' }], limit: 200 }) }}"
+   },
+   "name": "HubSpot search",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    880,
+    300
+   ],
+   "credentials": {
+    "hubspotAppToken": {
+     "id": "REPLACE_WITH_HUBSPOT",
+     "name": "HubSpot private app (read)"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "method": "GET",
+    "url": "https://api.hubapi.com/crm/v3/pipelines/deals",
+    "authentication": "predefinedCredentialType",
+    "nodeCredentialType": "hubspotAppToken",
+    "options": {}
+   },
+   "name": "Pipelines",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1100,
+    300
+   ],
+   "credentials": {
+    "hubspotAppToken": {
+     "id": "REPLACE_WITH_HUBSPOT",
+     "name": "HubSpot private app (read)"
+    }
+   },
+   "executeOnce": true
+  },
+  {
+   "parameters": {
+    "method": "GET",
+    "url": "https://api.hubapi.com/crm/v3/owners?limit=100",
+    "authentication": "predefinedCredentialType",
+    "nodeCredentialType": "hubspotAppToken",
+    "options": {
+     "pagination": {
+      "pagination": {
+       "paginationMode": "updateAParameterInEachRequest",
+       "paginationCompleteWhen": "other",
+       "completeExpression": "={{ !$response.body.paging }}",
+       "limitPagesFetched": false,
+       "parameters": {
+        "parameters": [
+         {
+          "type": "qs",
+          "name": "after",
+          "value": "={{ $response.body.paging.next.after }}"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "name": "Owners",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1320,
+    300
+   ],
+   "credentials": {
+    "hubspotAppToken": {
+     "id": "REPLACE_WITH_HUBSPOT",
+     "name": "HubSpot private app (read)"
+    }
+   },
+   "executeOnce": true
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "=SELECT deal_id, name_key FROM `{{ $('Params').first().json.bq_project }}.{{ $('Params').first().json.bq_dataset }}.new_deals` WHERE createdate >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) AND name_key != ''",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "Recent names",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    1540,
+    300
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   },
+   "onError": "continueRegularOutput",
+   "alwaysOutputData": true,
+   "executeOnce": true
+  },
+  {
+   "parameters": {
+    "mode": "runOnceForAllItems",
+    "jsCode": "// NEW_DEALS_FULL · Code node \"Shape + score\" (runOnceForAllItems). GENERATED by workflows/src/build_workflow.py — do not edit here.\nconst C = {\"version\": \"v1\", \"fitted\": \"2026-10-01\", \"weights\": {\"stage_prob\": 2.0712, \"proximity_2026\": 1.2399, \"missing_2026_field\": -0.4136, \"pipeline_conversion\": 1.0918, \"arr_points\": 4.9843, \"engagement\": 1.3018, \"recency\": 0.0, \"not_in_forecast\": 1.562}, \"bias\": -6.4788, \"threshold\": 45.0, \"conversion\": {\"12096408\": {\"won\": 84, \"total\": 730}, \"13772279\": {\"won\": 51, \"total\": 303}}, \"hardware_pipeline\": \"12096408\", \"max_contacted_notes\": 223, \"horizon_date\": \"2026-12-31\", \"horizon_decay_days\": 730, \"arr_tiers\": {\"PKI\": [[20, 0.5], [50, 1], [null, 2]], \"default\": [[100, 0.5], [500, 1], [1000, 2], [null, 3]]}, \"arr_tier_divisor\": 3, \"recency_days\": [[90, 1.0], [180, 0.5]], \"forecast_states\": [\"Forecast\", \"BIBA\"]};\n// shape_score.js — pure functions injected into the n8n Code node by build_workflow.py (no imports; `C` = constants object).\n// Port of hot_score(), name_key() and shape() from cloud_function_new_deals/main.py. Verified by tests/test_n8n_code.py\n// against the Python implementation on identical inputs.\nconst num = (v) => { if (v === null || v === undefined || v === '') return 0; const f = Number(v); return Number.isFinite(f) ? f : 0; };\nconst daysBetween = (later, earlier) => Math.trunc((later - earlier) / 86400000);\nconst CRMAX = Math.max(...Object.values(C.conversion).map((c) => c.won / c.total));\n\nfunction hotScore(p, now) {\n  const cr = C.conversion[p.pipeline];\n  if (!cr) return [null, null];\n  const arr = num(p.asp_in_usd_q2_2022_calculation) || num(p.tpm__k_y) || num(p.services_value_2026);\n  const tiers = p.product_hierarchy === 'PKI' ? C.arr_tiers.PKI : C.arr_tiers.default;\n  let pts = tiers[tiers.length - 1][1];\n  for (const [limit, value] of tiers) {\n    if (limit === null) { pts = value; break; }\n    if (limit === tiers[0][0] ? arr < limit : arr <= limit) { pts = value; break; }\n  }\n  let prox = 0;\n  if (p.closedate) { const d = new Date(p.closedate); prox = d.getUTCFullYear() <= 2026 ? 1 : Math.max(0, 1 - daysBetween(d, new Date(C.horizon_date + 'T00:00:00Z')) / C.horizon_decay_days); }\n  const hw = p.pipeline === C.hardware_pipeline;\n  const missing = (hw ? !num(p.calculation___pipeline_2026__k__) : !num(p.services_value_2026)) ? 1 : 0;\n  let rec = 0;\n  if (p.notes_last_updated) { const dd = daysBetween(now, new Date(p.notes_last_updated)); rec = dd <= C.recency_days[0][0] ? C.recency_days[0][1] : (dd <= C.recency_days[1][0] ? C.recency_days[1][1] : 0); }\n  const f = { stage_prob: num(p.hs_deal_stage_probability), proximity_2026: prox, missing_2026_field: missing, pipeline_conversion: (cr.won / cr.total) / CRMAX,\n    arr_points: pts / C.arr_tier_divisor, engagement: Math.log1p(num(p.num_contacted_notes)) / Math.log1p(C.max_contacted_notes), recency: rec,\n    not_in_forecast: C.forecast_states.includes(p.revenue_state) ? 0 : 1 };\n  const z = Object.keys(C.weights).reduce((a, k) => a + C.weights[k] * f[k], 0) + C.bias;\n  const s = 100 / (1 + Math.exp(-z));\n  return [Math.round(s * 10) / 10, s >= C.threshold];\n}\n\nfunction nameKey(p) {\n  const base = (p.final_customer || '').trim() || (p.dealname || '').split(/[-/|(]/)[0];\n  return base.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);\n}\n\nfunction shapeRows(deals, others, entity, pl, st, owners, runTs, known, portal) {\n  const batchKeys = {};\n  for (const d of [...deals, ...others]) { const k = nameKey(d.properties || {}); (batchKeys[k] ??= []).push(String(d.id)); }\n  const iso = runTs.toISOString().replace('.000Z', '+00:00');\n  return deals.map((d) => {\n    const p = d.properties || {}; const did = String(d.id); const k = nameKey(p);\n    const dupBatch = (batchKeys[k] || []).filter((x) => x !== did);\n    const dupKnown = (known[k] || []).filter((x) => x !== did && !dupBatch.includes(x));\n    const [score, hot] = hotScore(p, runTs);\n    const ownerId = p.hubspot_owner_id === undefined || p.hubspot_owner_id === null ? null : String(p.hubspot_owner_id);\n    return { entity, deal_id: did, dealname: p.dealname ?? null, final_customer: p.final_customer ?? null, name_key: k,\n      createdate: p.createdate ?? null, created_by_user_id: p.hs_created_by_user_id ?? null, source: p.hs_object_source_label ?? null,\n      owner: ownerId === null ? null : (owners[ownerId] ?? ownerId), sales_region: p.sales_region ?? null,\n      pipeline: pl[p.pipeline] ?? p.pipeline ?? null, pipeline_id: p.pipeline ?? null, stage: st[p.dealstage] ?? p.dealstage ?? null,\n      probability_pct: Math.round(num(p.hs_deal_stage_probability) * 1000) / 10, amount: num(p.amount), currency: p.deal_currency_code ?? null,\n      amount_kusd: num(p.amount_in_home_currency), closedate: (p.closedate || '').slice(0, 10) || null,\n      arr_ky: num(p.asp_in_usd_q2_2022_calculation), product_family: p.product_hierarchy ?? null, product: p.prod___product_name_new_ ?? null,\n      application: p.application ?? null, icalps_dealtype: p.icalps_dealtype ?? null, icalps_stage: p.icalps_stage ?? null,\n      day1_hot_score: score, day1_hot_flag: hot,\n      duplicate_suspect: dupBatch.length > 0 || dupKnown.length > 0, duplicate_of: [...dupBatch, ...dupKnown].join(', ') || null,\n      deal_url: `https://app.hubspot.com/go-to/${portal}/0-3/${did}`, first_seen_run: iso, last_seen_run: iso };\n  });\n}\nconst MERGE_SQL = \"MERGE __FQ__.new_deals` t USING (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r) s ON t.deal_id = s.deal_id WHEN MATCHED THEN UPDATE SET entity = s.entity, dealname = s.dealname, final_customer = s.final_customer, name_key = s.name_key, createdate = s.createdate, created_by_user_id = s.created_by_user_id, source = s.source, owner = s.owner, sales_region = s.sales_region, pipeline = s.pipeline, pipeline_id = s.pipeline_id, stage = s.stage, probability_pct = s.probability_pct, amount = s.amount, currency = s.currency, amount_kusd = s.amount_kusd, closedate = s.closedate, arr_ky = s.arr_ky, product_family = s.product_family, product = s.product, application = s.application, icalps_dealtype = s.icalps_dealtype, icalps_stage = s.icalps_stage, duplicate_suspect = s.duplicate_suspect, duplicate_of = s.duplicate_of, deal_url = s.deal_url, last_seen_run = s.last_seen_run WHEN NOT MATCHED THEN INSERT (entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) VALUES (s.entity, s.deal_id, s.dealname, s.final_customer, s.name_key, s.createdate, s.created_by_user_id, s.source, s.owner, s.sales_region, s.pipeline, s.pipeline_id, s.stage, s.probability_pct, s.amount, s.currency, s.amount_kusd, s.closedate, s.arr_ky, s.product_family, s.product, s.application, s.icalps_dealtype, s.icalps_stage, s.day1_hot_score, s.day1_hot_flag, s.duplicate_suspect, s.duplicate_of, s.deal_url, s.first_seen_run, s.last_seen_run)\";\nconst HISTORY_SQL = \"DELETE FROM __FQ__.new_deals_history` WHERE run_ts = TIMESTAMP '__RUN_TS__' AND entity = '__ENTITY__' AND orchestrator = 'n8n'; INSERT INTO __FQ__.new_deals_history` (run_ts, orchestrator, entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run) SELECT TIMESTAMP '__RUN_TS__', 'n8n', entity, deal_id, dealname, final_customer, name_key, createdate, created_by_user_id, source, owner, sales_region, pipeline, pipeline_id, stage, probability_pct, amount, currency, amount_kusd, closedate, arr_ky, product_family, product, application, icalps_dealtype, icalps_stage, day1_hot_score, day1_hot_flag, duplicate_suspect, duplicate_of, deal_url, first_seen_run, last_seen_run FROM (SELECT JSON_VALUE(r, '$.entity') AS entity, JSON_VALUE(r, '$.deal_id') AS deal_id, JSON_VALUE(r, '$.dealname') AS dealname, JSON_VALUE(r, '$.final_customer') AS final_customer, JSON_VALUE(r, '$.name_key') AS name_key, SAFE_CAST(JSON_VALUE(r, '$.createdate') AS TIMESTAMP) AS createdate, JSON_VALUE(r, '$.created_by_user_id') AS created_by_user_id, JSON_VALUE(r, '$.source') AS source, JSON_VALUE(r, '$.owner') AS owner, JSON_VALUE(r, '$.sales_region') AS sales_region, JSON_VALUE(r, '$.pipeline') AS pipeline, JSON_VALUE(r, '$.pipeline_id') AS pipeline_id, JSON_VALUE(r, '$.stage') AS stage, SAFE_CAST(JSON_VALUE(r, '$.probability_pct') AS FLOAT64) AS probability_pct, SAFE_CAST(JSON_VALUE(r, '$.amount') AS FLOAT64) AS amount, JSON_VALUE(r, '$.currency') AS currency, SAFE_CAST(JSON_VALUE(r, '$.amount_kusd') AS FLOAT64) AS amount_kusd, SAFE_CAST(JSON_VALUE(r, '$.closedate') AS DATE) AS closedate, SAFE_CAST(JSON_VALUE(r, '$.arr_ky') AS FLOAT64) AS arr_ky, JSON_VALUE(r, '$.product_family') AS product_family, JSON_VALUE(r, '$.product') AS product, JSON_VALUE(r, '$.application') AS application, JSON_VALUE(r, '$.icalps_dealtype') AS icalps_dealtype, JSON_VALUE(r, '$.icalps_stage') AS icalps_stage, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_score') AS FLOAT64) AS day1_hot_score, SAFE_CAST(JSON_VALUE(r, '$.day1_hot_flag') AS BOOL) AS day1_hot_flag, SAFE_CAST(JSON_VALUE(r, '$.duplicate_suspect') AS BOOL) AS duplicate_suspect, JSON_VALUE(r, '$.duplicate_of') AS duplicate_of, JSON_VALUE(r, '$.deal_url') AS deal_url, SAFE_CAST(JSON_VALUE(r, '$.first_seen_run') AS TIMESTAMP) AS first_seen_run, SAFE_CAST(JSON_VALUE(r, '$.last_seen_run') AS TIMESTAMP) AS last_seen_run FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(__ROWS__))) r)\";\nconst WATERMARK_SQL = \"MERGE __FQ__.report_state` t USING (SELECT '__RID__' AS report_id, TIMESTAMP '__TS__' AS watermark) s ON t.report_id = s.report_id WHEN MATCHED THEN UPDATE SET watermark = s.watermark, updated_at = CURRENT_TIMESTAMP(), lock_until = NULL WHEN NOT MATCHED THEN INSERT (report_id, watermark, updated_at) VALUES (s.report_id, s.watermark, CURRENT_TIMESTAMP())\";\nconst RUNLOG_SQL = \"INSERT INTO __FQ__.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status) VALUES (TIMESTAMP '__RUN_TS__', '__ENTITY__', 'window', __DRY__, 'n8n', TIMESTAMP '__WM__', TIMESTAMP '__QS__', TIMESTAMP '__QE__', __N__, IF(__DRY__, 0, __N__), __DUP__, __HOT__, 'OK')\";\nconst ENTITIES = { SEALSQ: { pipelines: ['12096408', '13772279', '705868909', '934982230'], currency: 'USD (home)' }, ICALPS: { pipelines: ['766126206'], currency: 'EUR (stored)' } };\nconst P = $('Params').first().json;\nconst W = $('Window').first().json;\nconst runTs = new Date(P.run_ts);\nconst found = $('HubSpot search').all().flatMap((i) => i.json.results || []);\nconst pipelinesResp = $('Pipelines').first().json.results || [];\nconst pl = Object.fromEntries(pipelinesResp.map((p) => [p.id, p.label]));\nconst st = Object.fromEntries(pipelinesResp.flatMap((p) => (p.stages || []).map((s) => [s.id, s.label])));\nconst owners = Object.fromEntries($('Owners').all().flatMap((i) => i.json.results || []).map((o) => [String(o.id), `${o.firstName || ''} ${o.lastName || ''}`.trim() || o.email || '']));\nconst known = {};\nfor (const i of $('Recent names').all()) { const r = i.json || {}; if (r.name_key && r.deal_id) (known[r.name_key] ??= []).push(String(r.deal_id)); }\nconst scope = ENTITIES[P.entity].pipelines;\nconst deals = found.filter((d) => scope.includes((d.properties || {}).pipeline));\nconst ids = new Set(deals.map((d) => String(d.id)));\nconst others = found.filter((d) => !ids.has(String(d.id)));\nconst rows = shapeRows(deals, others, P.entity, pl, st, owners, runTs, known, P.portal_id);\nrows.sort((a, b) => ((b.amount_kusd || 0) - (a.amount_kusd || 0)) || (a.deal_id < b.deal_id ? -1 : a.deal_id > b.deal_id ? 1 : 0));\nconst sqlStr = (s) => \"'''\" + String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, \"\\\\'\") + \"'''\";\nconst rowsLiteral = sqlStr(JSON.stringify(rows));\nconst fq = `\\`${P.bq_project}.${P.bq_dataset}`;\nconst payload = { report_id: `NEW_DEALS_${P.entity}`, run_timestamp: P.run_ts, orchestrator: 'n8n', dry_run: P.dry_run === true,\n  window: { mode: 'window', watermark_in: W.watermark_in, query_start: W.query_start, query_end: W.query_end },\n  row_count: rows.length, rows_written: 0, duplicate_suspects: rows.filter((r) => r.duplicate_suspect).length,\n  day1_hot: rows.filter((r) => r.day1_hot_flag).map((r) => r.deal_id), currency_note: ENTITIES[P.entity].currency, rows };\nconst merge_sql = rows.length ? MERGE_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral) : 'SELECT 1';   // function form: deal text may contain $& $$\nconst history_sql = rows.length ? HISTORY_SQL.replaceAll('__FQ__', fq).replace('__ROWS__', () => rowsLiteral).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity) : 'SELECT 1';\nconst watermark_sql = WATERMARK_SQL.replaceAll('__FQ__', fq).replaceAll('__RID__', `NEW_DEALS_${P.entity}`).replaceAll('__TS__', P.run_ts);\nconst runlog_sql = RUNLOG_SQL.replaceAll('__FQ__', fq).replaceAll('__RUN_TS__', P.run_ts).replaceAll('__ENTITY__', P.entity).replaceAll('__DRY__', String(P.dry_run === true))\n  .replaceAll('__WM__', W.watermark_in).replaceAll('__QS__', W.query_start).replaceAll('__QE__', W.query_end)\n  .replaceAll('__N__', String(rows.length)).replaceAll('__DUP__', String(payload.duplicate_suspects)).replaceAll('__HOT__', String(payload.day1_hot.length));\nreturn [{ json: { ...payload, merge_sql, history_sql, watermark_sql, runlog_sql } }];\n"
+   },
+   "name": "Shape + score",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1760,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict",
+      "version": 2
+     },
+     "conditions": [
+      {
+       "id": "c1",
+       "leftValue": "={{ $('Params').first().json.dry_run }}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   },
+   "name": "Dry run?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    1980,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "={{ $('Shape + score').first().json.merge_sql }}",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "MERGE new_deals",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    2200,
+    420
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "={{ $('Shape + score').first().json.history_sql }}",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "History slice",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    2420,
+    420
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "={{ $('Shape + score').first().json.watermark_sql }}",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "Advance watermark",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    2640,
+    420
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "resource": "database",
+    "operation": "executeQuery",
+    "projectId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $env.BQ_PROJECT }}"
+    },
+    "sqlQuery": "={{ $('Shape + score').first().json.runlog_sql }}",
+    "options": {
+     "location": "={{ $env.BQ_LOCATION || 'EU' }}",
+     "useLegacySql": false
+    }
+   },
+   "name": "Run log",
+   "type": "n8n-nodes-base.googleBigQuery",
+   "typeVersion": 2.1,
+   "position": [
+    2860,
+    420
+   ],
+   "credentials": {
+    "googleApi": {
+     "id": "REPLACE_WITH_GOOGLE_SA",
+     "name": "n8n-bq service account"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "assignments": {
+     "assignments": [
+      {
+       "id": "r1",
+       "name": "rows",
+       "type": "array",
+       "value": "={{ $('Shape + score').first().json.rows }}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "name": "Rows source",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    3080,
+    420
+   ]
+  },
+  {
+   "parameters": {
+    "fieldToSplitOut": "rows",
+    "include": "noOtherFields",
+    "options": {}
+   },
+   "name": "Rows",
+   "type": "n8n-nodes-base.splitOut",
+   "typeVersion": 1,
+   "position": [
+    3300,
+    420
+   ]
+  },
+  {
+   "parameters": {
+    "operation": "xlsx",
+    "binaryPropertyName": "NEW",
+    "options": {
+     "fileName": "={{ $('Shape + score').first().json.report_id }}_{{ $('Shape + score').first().json.run_timestamp.slice(0,10) }}.xlsx",
+     "headerRow": true,
+     "sheetName": "New deals"
+    }
+   },
+   "name": "XLSX",
+   "type": "n8n-nodes-base.convertToFile",
+   "typeVersion": 1.1,
+   "position": [
+    3520,
+    420
+   ]
+  },
+  {
+   "parameters": {
+    "fromEmail": "={{ $env.MAIL_FROM }}",
+    "toEmail": "={{ $env.MAIL_TO }}",
+    "subject": "={{ $('Shape + score').first().json.report_id }} — {{ $('Shape + score').first().json.row_count }} new deal(s), {{ $('Shape + score').first().json.duplicate_suspects }} duplicate suspect(s)",
+    "emailFormat": "text",
+    "text": "={{ (() => { const b = $('Shape + score').first().json; return `${b.report_id} · run ${b.run_timestamp} (n8n)\\nwindow: ${JSON.stringify(b.window)}\\nrows: ${b.row_count} · duplicate suspects: ${b.duplicate_suspects} · day-1 hot: ${b.day1_hot.join(', ') || 'none'}\\namounts: ${b.currency_note}\\n\\n` + b.rows.map(r => `${r.duplicate_suspect ? '[DUP] ' : ''}${r.day1_hot_flag ? '[HOT] ' : ''}${r.dealname} — ${r.final_customer || '-'} — ${r.pipeline} / ${r.stage} ${r.probability_pct}% — ${r.amount_kusd} — created ${(r.createdate||'').slice(0,10)} — ${r.owner}\\n${r.deal_url}`).join('\\n\\n'); })() }}",
+    "options": {
+     "attachments": "NEW"
+    }
+   },
+   "name": "Email",
+   "type": "n8n-nodes-base.emailSend",
+   "typeVersion": 2.1,
+   "position": [
+    3740,
+    420
+   ],
+   "credentials": {
+    "smtp": {
+     "id": "REPLACE_WITH_SMTP",
+     "name": "SMTP relay"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ JSON.stringify((({ rows, merge_sql, history_sql, watermark_sql, runlog_sql, ...rest }) => rest)($('Shape + score').first().json)) }}",
+    "options": {}
+   },
+   "name": "Respond",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    3740,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook: new-deals-run": {
+   "main": [
+    [
+     {
+      "node": "Params",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Params": {
+   "main": [
+    [
+     {
+      "node": "Read watermark",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read watermark": {
+   "main": [
+    [
+     {
+      "node": "Window",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Window": {
+   "main": [
+    [
+     {
+      "node": "HubSpot search",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "HubSpot search": {
+   "main": [
+    [
+     {
+      "node": "Pipelines",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Pipelines": {
+   "main": [
+    [
+     {
+      "node": "Owners",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Owners": {
+   "main": [
+    [
+     {
+      "node": "Recent names",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Recent names": {
+   "main": [
+    [
+     {
+      "node": "Shape + score",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Shape + score": {
+   "main": [
+    [
+     {
+      "node": "Dry run?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Dry run?": {
+   "main": [
+    [
+     {
+      "node": "Respond",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "MERGE new_deals",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "MERGE new_deals": {
+   "main": [
+    [
+     {
+      "node": "History slice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "History slice": {
+   "main": [
+    [
+     {
+      "node": "Advance watermark",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Advance watermark": {
+   "main": [
+    [
+     {
+      "node": "Run log",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Run log": {
+   "main": [
+    [
+     {
+      "node": "Rows source",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Rows source": {
+   "main": [
+    [
+     {
+      "node": "Rows",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Rows": {
+   "main": [
+    [
+     {
+      "node": "XLSX",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "XLSX": {
+   "main": [
+    [
+     {
+      "node": "Email",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Email": {
+   "main": [
+    [
+     {
+      "node": "Respond",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "active": false,
+ "settings": {
+  "executionOrder": "v1",
+  "timezone": "Europe/Zurich",
+  "errorWorkflow": "REPLACE_WITH_ERRORS_ID",
+  "saveManualExecutions": true
+ },
+ "meta": {
+  "generated_by": "workflows/src/build_workflow.py",
+  "scenario": "B2",
+  "note": "Cloud Scheduler → webhook (Header Auth); ?dry_run=1 computes and responds without writing; writes happen in order MERGE → history → watermark → run log → delivery."
+ }
+}
