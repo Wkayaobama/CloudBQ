@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # scheduled_query.sh — register or update one BigQuery scheduled query per entity running sql/new_deals_weekly.sql.
-#   sql/scheduled_query.sh                 create-or-update both; schedule "every monday 04:00" (UTC — scheduled queries ignore DST:
-#                                          04:00 UTC is 05:00/06:00 Europe/Zurich, always before the 05:30-Zurich write-back and A's 07:00)
+#   sql/scheduled_query.sh                 create-or-update both; schedules SEALSQ "every monday 03:53", ICALPS "every monday 04:23" (UTC — scheduled queries ignore DST:
+#                                          per-entity, off the hour: SEALSQ 03:53 UTC, ICALPS 04:23 UTC — two scripts in one minute would be
+#                                          cancelled as conflicting transactions, and an on-the-hour schedule can trigger twice; both before A's 07:00 Zurich)
 #   DISABLE_SCHEDULE=1 sql/scheduled_query.sh   register without auto-scheduling (the gate: run one backfill by hand first)
 #   DRYRUN=1 sql/scheduled_query.sh        render the two scripts, run `bq query --dry_run` on each (syntax + bytes), register nothing
 # Settings from ../.env: PROJECT DATASET BQ_LOCATION PORTAL_ID SQL_SA_NAME (default new-deals-sql) SYNC_DATASET SYNC_DEALS_TABLE
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
-: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}" "${SYNC_DATASET:?}" "${SYNC_DEALS_TABLE:?set SYNC_DEALS_TABLE in .env (the landing reads the sync table directly)}"
+: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC_SEALSQ:=every monday 03:53}" "${SCHEDULE_UTC_ICALPS:=every monday 04:23}" "${SYNC_DATASET:?}" "${SYNC_DEALS_TABLE:?set SYNC_DEALS_TABLE in .env (the landing reads the sync table directly)}"
 [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
 DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
+declare -A SCHED=([SEALSQ]="$SCHEDULE_UTC_SEALSQ" [ICALPS]="$SCHEDULE_UTC_ICALPS")   # never the same minute, never on the hour
+for E in SEALSQ ICALPS; do [[ "${SCHED[$E]}" != *:00 ]] || { echo "SCHEDULE_UTC_$E is on the hour (${SCHED[$E]}): BigQuery may trigger it twice — use e.g. 03:53" >&2; exit 2; }; done
+[[ "${SCHED[SEALSQ]}" != "${SCHED[ICALPS]}" ]] || { echo "the two entities share a schedule minute: their transactions would cancel each other" >&2; exit 2; }
 
 # render: splice sql/land_raw.sql at its marker (sed `r` appends the file after the marker line), then substitute the placeholders
 render() { sed -e "/^-- @include land_raw.sql[[:space:]]*$/r $HERE/land_raw.sql" "$HERE/new_deals_weekly.sql" \
@@ -44,9 +48,9 @@ for E in SEALSQ ICALPS; do
   PARAMS=$(python3 -c 'import json,sys; print(json.dumps({"query": sys.stdin.read()}))' <<<"$Q")
   if [[ -z "$EXISTING" ]]; then
     bq mk --transfer_config --project_id="$PROJECT" --location="$BQ_LOCATION" --data_source=scheduled_query --display_name="$NAME" \
-       --schedule="$SCHEDULE_UTC" --service_account_name="$SA" --params="$PARAMS" ${DISABLE_SCHEDULE:+--no_auto_scheduling}
+       --schedule="${SCHED[$E]}" --service_account_name="$SA" --params="$PARAMS" ${DISABLE_SCHEDULE:+--no_auto_scheduling}
   else
-    bq update --transfer_config --params="$PARAMS" --schedule="$SCHEDULE_UTC" --service_account_name="$SA" "$EXISTING"
+    bq update --transfer_config --params="$PARAMS" --schedule="${SCHED[$E]}" --service_account_name="$SA" "$EXISTING"
   fi
 done
 cat <<TXT

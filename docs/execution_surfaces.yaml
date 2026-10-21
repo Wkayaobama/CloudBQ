@@ -118,7 +118,7 @@ motions:
     script in one transaction, SA new-deals-sql) plus a Node 22 Cloud Run job new-deals-writeback (SA new-deals-writeback, 1 task,
 
     --max-retries 2, --task-timeout 900s); Breeze reads materialised properties; Claude iterates with bq --dry_run and a hubspot_dev dataset.'
-  driver: 'Chain of clocks: DTS transfer every day 02:00 UTC → scheduled queries new-deals-<entity>-C "every monday 04:00" (UTC only) →
+  driver: 'Chain of clocks: DTS transfer every day 02:00 UTC → scheduled queries new-deals-<entity>-C "every monday 03:53" / "04:23" (per entity, off the hour, UTC only) →
 
     Cloud Scheduler new-deals-writeback 30 5 * * 1 Europe/Zurich POSTing jobs.run with --oauth-service-account-email new-deals-scheduler@.
 
@@ -227,7 +227,7 @@ layers:
     secret n8n-webhook-token, --attempt-deadline 900s, 3 retries, created PAUSED; `scheduler.sh enable` resumes. (In-app Schedule Trigger
 
     is not used: it never fires at minScale 0, B-G01.)'
-  C: 'sql/sync_transfer.sh: DTS "every day 02:00" (UTC) → sql/scheduled_query.sh: "every monday 04:00" (UTC only, DST-insensitive) →
+  C: 'sql/sync_transfer.sh: DTS "every day 02:00" (UTC) → sql/scheduled_query.sh: "every monday 03:53" (SEALSQ) / "04:23" (ICALPS) — per entity and off the hour (two scripts in one minute would be cancelled as conflicting transactions; an on-the-hour schedule can trigger twice), UTC only, DST-insensitive →
 
     writeback/deploy_job.sh: Cloud Scheduler new-deals-writeback "30 5 * * 1" Europe/Zurich POST jobs.run with --oauth-service-account-email
 
@@ -235,7 +235,7 @@ layers:
   parity: Conditional
   diverges: 'Same result when A and B2 read the same SCHEDULE_* values from .env (they do) and C''s chain keeps its slack (sync 02:00 UTC < query
 
-    04:00 UTC < write-back 05:30 Zurich < A''s 07:00 Zurich). C''s scheduled query drifts one hour across DST relative to the Zurich jobs
+    03:53 / 04:23 UTC < write-back 05:30 Zurich < A''s 07:00 Zurich). C''s scheduled query drifts one hour across DST relative to the Zurich jobs
 
     (C-G3); Scheduler retries re-run the same half-open window in A/B2 but only re-issue jobs.run in C (C-G9).'
   remediation: '.env SCHEDULE_SEALSQ / SCHEDULE_ICALPS shared by deploy.sh and scheduler.sh; SCHEDULE_UTC and WRITEBACK_SCHEDULE in
@@ -1091,7 +1091,7 @@ remediation:
   layer: L4
   surfaces: C
   cause: DTS is a scheduled full refresh; HubSpot's native sync is ≥ 6 h.
-  fix: Chain with slack (transfer 02:00 UTC, query Mon 04:00 UTC), lookback_days = 14 ≥ 2× cadence, freshness guard in sql/new_deals_weekly.sql
+  fix: Chain with slack (transfer 02:00 UTC, queries Mon 03:53 / 04:23 UTC), lookback_days = 14 ≥ 2× cadence, freshness guard in sql/new_deals_weekly.sql
     (RAISE + ABORTED run row when MAX(lastmodified) < run_ts − 36 h); accept one-cycle lag or keep A's extractor.
   verified: fixed in sql/new_deals_weekly.sql, sql/sync_transfer.sh, sql/scheduled_query.sh (guard not yet exercised — first authenticated run)
 - id: R33
@@ -1099,7 +1099,7 @@ remediation:
   layer: L3
   surfaces: C
   cause: No IANA time-zone option on scheduled queries.
-  fix: 'SCHEDULE_UTC="every monday 04:00" chosen so it is always before the 05:30-Zurich write-back and A''s 07:00; alternative: drive the SQL
+  fix: 'SCHEDULE_UTC_SEALSQ="every monday 03:53" / SCHEDULE_UTC_ICALPS="every monday 04:23" (per entity, off the hour — pass 3 phase 2 review) chosen so both are always before the 05:30-Zurich write-back and A''s 07:00; alternative: drive the SQL
     from the Zurich-scheduled job.'
   verified: fixed in sql/scheduled_query.sh (slack by construction)
 - id: R34

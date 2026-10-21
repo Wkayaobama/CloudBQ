@@ -40,7 +40,7 @@ writeback/deploy_job.sh → deploy_job.sh execute (dry) → deploy_job.sh live �
 Needs: a second private app with `crm.objects.deals.write` (`hubspot-token-write`), a one-off `crm.schemas.deals.write` token.
 Cannot: see a deal created after the last sync until the next run (no event mode; 36 h freshness guard); let Breeze compute
 anything (HubSQL: no arithmetic, no CASE, no window functions) — Breeze reads the written-back properties.
-Chain timing: sync 02:00 UTC → scheduled queries Mon 04:00 UTC → write-back Mon 05:30 Europe/Zurich → A's report 07:00/07:20.
+Chain timing: sync 02:00 UTC → scheduled queries Mon 03:53 (SEALSQ) / 04:23 (ICALPS) UTC → write-back Mon 05:30 Europe/Zurich → A's report 07:00/07:20.
 
 ## The parallel lane
 

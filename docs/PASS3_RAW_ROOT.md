@@ -87,6 +87,27 @@ SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASE
   run in the dev dataset compared with the previous script's rows for the same run_time (same deal_ids, same day1_hot_score, same
   duplicate_of).
 - Lane A is untouched by phase 2: it still shapes in Python and lands in shadow.
+- Review follow-ups (platform critic, 2026-10-21): the table function's window keeps one row per deal (`QUALIFY … ORDER BY fetched_at
+  DESC`) — a doubled slice (a delete-older that failed after its INSERT, a paged search repeating a deal) would otherwise abort the
+  MERGE ("multiple rows from the source match one row") or insert the deal twice; the procedure's guards are NULL-safe (`NOT IN` and
+  `IF` treat NULL as false), it RAISEs when the caller named `raw_landing_failed` and no slice exists (an OK run with 0 rows would
+  otherwise advance C's watermark), the handler's ROLLBACK is wrapped so an engine-cancelled transaction cannot hide the FAILED row,
+  and `duration_ms` is documented as ending at `BEGIN TRANSACTION` (inside a transaction `CURRENT_TIMESTAMP()` is its start). The two
+  lane-C transfer configs are now scheduled per entity and off the hour (SEALSQ 03:53 UTC, ICALPS 04:23 UTC; `scheduled_query.sh`
+  refuses a shared minute or an on-the-hour schedule): two scripts in one minute would be cancelled as conflicting transactions, and
+  BigQuery may trigger an on-the-hour schedule twice. Pre-existing hazard, surfaced by the review. Unconfirmed until a dev dataset
+  runs them: strict-mode resolution of the TEMP table inside the procedure (fallback `OPTIONS(strict_mode=FALSE)`).
+- Review follow-ups (semantics critic, 2026-10-21): the window's `[window_start, run_ts)` bound applies only when a window start is
+  given — an event passes NULL and keeps a deal created in run_ts's own second (shape() had no createdate predicate in event mode);
+  `rows_written` is the MERGE's own `@@row_count` (the older-slice guard may skip rows, so `COUNT(*)` overstated); the
+  `dedup_horizon_partial` test reads the window the rule reads and is a heuristic (full when the oldest landed deal of the last 90 days
+  is at least 83 days old); the structure tests pin the UDF's 12 arguments positionally against `scoring/hot_score_v1.sql` and every
+  element of every gaps literal; `python3 tests/test_pass3_sql.py --write` regenerates the vectors SQL (plain runs only check).
+  Known, by design or pre-existing: `probability_pct` rounds half away from zero in SQL and half-to-even in Python on exact binary ties
+  (HubSpot probabilities are whole percents); `SAFE_CAST` is stricter than Python's `_num()` (`" 12 "`, `"1_000"`) and the UDF scores a
+  malformed closedate as proximity 0 where Python raised — HubSpot never delivers such strings; `name_key` stores `''` where the old
+  lane-C script stored NULL (dealname NULL and no customer) — the duplicate guard excludes both; `STRING_AGG` orders twins by createdate
+  then deal_id (D3); a deleted HubSpot deal stays a twin candidate for 90 days in the root where the sync's full refresh dropped it.
 
 Operator sequence for the cut-over: `cloud_function_new_deals/deploy.sh tables` (adds the two tables and the column; safe to re-run),
 `deploy.sh deploy` (the function now lands), `sql/apply.sh` (the UDF, the views, the table function, the procedure), the vectors check
@@ -276,8 +297,8 @@ new_deals_batch(run_ts TIMESTAMP, entity STRING, orchestrator STRING, mode STRIN
 
 Callers:
 - lane C scheduled query: landing (§2), then
-  `CALL `${PROJECT}.${DATASET}.new_deals_batch`(TIMESTAMP_TRUNC(@run_time, SECOND), '${ENTITY}', 'bigquery-scheduled-query', 'window', TRUE, 'NEW_DEALS_${ENTITY}_C', NULL, <run_ts − 14 d>, <run_ts>, 0)`;
-- lane A function: lease → search → land → `CALL … (run_ts, entity, 'cloud-run-function', mode, FALSE, NULL, watermark_in, qstart, run_ts, started_ms)`
+  `CALL `${PROJECT}.${DATASET}.new_deals_batch`(v_run_ts, v_entity, 'bigquery-scheduled-query', 'window', TRUE, 'NEW_DEALS_${ENTITY}_C', v_watermark_in, <run_ts − 14 d>, v_run_ts, <elapsed ms>, v_gaps)`;
+- lane A function: lease → search → land → `CALL … (run_ts, entity, 'cloud-run-function', mode, FALSE, NULL, watermark_in, qstart, run_ts, started_ms, gaps)`
   → write_watermark (main.py:148-151: advances NEW_DEALS_<entity> and releases the lease in one statement, unchanged) → deliver →
   on delivery failure `UPDATE new_deals_runs SET status = 'OK_DELIVERY_FAILED', error = @err WHERE run_ts = @ts AND entity = @e AND orchestrator = @o`
   (DML on a query-inserted row, safe per main.py:192); on exception: write_run FAILED (main.py:302) and release the lease, as today.

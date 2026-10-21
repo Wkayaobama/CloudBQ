@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline structure checks for the pass-3 SQL objects (sql/land_raw.sql, sql/deals_landed_v1.sql, sql/new_deals_batch.sql).
 
-    python3 tests/test_pass3_sql.py        or        python3 -m pytest tests -q
+    python3 tests/test_pass3_sql.py        or        python3 -m pytest tests -q        (--write regenerates tests/pass3_batch_vectors.sql)
 
 A `bq --dry_run` needs credentials and stops at the first IF, so what can be proved offline is structural: the adapter view types
 exactly the properties the landing carries (main.PROPS), the table function's column list equals hubspot.new_deals in order (the
@@ -70,6 +70,19 @@ def test_table_function_columns_equal_new_deals_in_order():
     assert "INSERT ROW" in PROC and "SELECT * FROM `${PROJECT}.${DATASET}.new_deals_batch_rows`" in PROC
 
 
+def test_udf_call_arguments_match_the_udf_signature_positionally():
+    udf = (ROOT / "scoring/hot_score_v1.sql").read_text()
+    sig = udf[udf.index("hot_score_v1`(") + len("hot_score_v1`("):udf.index(")\nRETURNS")]
+    params = re.findall(r"([a-z0-9_]+) (?:STRING|FLOAT64|TIMESTAMP)", sig)
+    call = VIEW[VIEW.index("UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`(") + len("UNNEST([`${PROJECT}.${DATASET}.hot_score_v1`("):]
+    call = call[:call.index(")]) AS hs")]
+    args = [a.strip() for a in call.replace("\n", " ").split(",")]
+    rename = {"pipeline": "w.pipeline_id", "hs_deal_stage_probability": "w.stage_probability", "run_ts": "p_run_ts"}
+    want = [rename.get(p, "w." + p) for p in params]
+    assert args == want, list(zip(args, want))
+    assert len(params) == 12
+
+
 def test_merge_update_list_excludes_the_frozen_columns():
     upd = PROC.split("THEN UPDATE SET")[1].split("WHEN NOT MATCHED")[0]
     for frozen in main.FROZEN: assert not re.search(rf"\b{frozen} =", upd), frozen
@@ -102,11 +115,19 @@ def test_procedure_contract_shape():
     assert "EXCEPTION WHEN ERROR THEN" in PROC and "ROLLBACK TRANSACTION" in PROC and "'FAILED'" in PROC and "RAISE;" in PROC
     assert "GREATEST(t.watermark, s.watermark)" in PROC and "lock_until" in PROC
     assert "CREATE OR REPLACE TEMP TABLE batch" in PROC, "two CALLs in one script must not collide on the temp table"
+    assert "IF p_mode IS NULL OR p_mode NOT IN" in PROC and PROC.count("IFNULL(p_advance_state, FALSE)") == 3, "NOT IN / IF treat NULL as false: the guards must be NULL-safe"
+    assert "'raw_landing_failed' IN UNNEST(v_gaps)" in PROC and "no slice exists for this key" in PROC, "a failed landing with no slice must not become an OK run with 0 rows"
+    assert "BEGIN ROLLBACK TRANSACTION; EXCEPTION WHEN ERROR THEN END;" in PROC, "a cancelled transaction must not hide the FAILED row"
+    win = VIEW[VIEW.index("WITH win AS ("):VIEW.index("), horizon AS (")]
+    assert "QUALIFY ROW_NUMBER() OVER (PARTITION BY deal_id ORDER BY fetched_at DESC) = 1" in win, "one source row per deal: a doubled slice must never reach the MERGE"
+    assert "(p_window_start IS NULL OR (createdate >= p_window_start AND createdate < p_run_ts))" in win, "an event (NULL window) must keep a deal created in run_ts's own second"
+    assert "SET v_written = @@row_count" in PROC and "COUNT(*), v_written," in PROC, "rows_written is what the MERGE touched, not COUNT(*)"
 
 
 def test_every_emitted_gap_is_in_the_vocabulary():
     emitted = set()
-    for sql in (PROC, WEEKLY, LAND): emitted |= set(re.findall(r"'([a-z_]+)'\]", sql))
+    for sql in (PROC, WEEKLY, LAND):
+        for arr in re.findall(r"\[((?:'[a-z_]+',?\s*)+)\]", sql): emitted |= set(re.findall(r"'([a-z_]+)'", arr))
     src = (ROOT / "cloud_function_new_deals/main.py").read_text()
     emitted |= set(re.findall(r'gaps\.append\("([a-z_]+)"\)', src))
     assert emitted <= VOCAB, emitted - VOCAB
@@ -160,7 +181,7 @@ def emit_batch_vectors_sql(vectors: dict) -> str:
         "       r.deal_id IS NOT NULL AND (   -- a dropped row must not pass as a NULL-expected case\n"
         "         (e.exp_score IS NULL AND r.day1_hot_score IS NULL AND r.day1_hot_flag IS NULL)\n"
         "         OR (ABS(r.day1_hot_score - e.exp_score) <= 0.1 AND r.day1_hot_flag = e.exp_hot)) AS ok\n"
-        "FROM e LEFT JOIN `${PROJECT}.${DATASET}.new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', NULL) r ON r.deal_id = e.id\n"
+        "FROM e LEFT JOIN `${PROJECT}.${DATASET}.new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', CAST(NULL AS TIMESTAMP)) r ON r.deal_id = e.id\n"
         "ORDER BY e.id;\n"
         "DELETE FROM `${PROJECT}.${DATASET}.deals_raw` WHERE entity = 'VECTORS' AND orchestrator = 'vectors';\n")
 
@@ -169,14 +190,15 @@ def test_batch_vectors_sql_is_current():
     import json
     vectors = json.loads((ROOT / "tests/hot_score_vectors.json").read_text())
     want = emit_batch_vectors_sql(vectors); have = ROOT / "tests/pass3_batch_vectors.sql"
-    assert have.exists() and have.read_text() == want, "regenerate: python3 tests/test_pass3_sql.py"
-    assert want.count("STRUCT(") == 3 * len(vectors["cases"]) and "new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', NULL)" in want
+    assert have.exists() and have.read_text() == want, "regenerate: python3 tests/test_pass3_sql.py --write"
+    assert want.count("STRUCT(") == 3 * len(vectors["cases"]) and "new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', CAST(NULL AS TIMESTAMP))" in want
 
 
 if __name__ == "__main__":
     import json
-    (ROOT / "tests/pass3_batch_vectors.sql").write_text(emit_batch_vectors_sql(json.loads((ROOT / "tests/hot_score_vectors.json").read_text())))
-    print("wrote tests/pass3_batch_vectors.sql")
+    if "--write" in sys.argv:
+        (ROOT / "tests/pass3_batch_vectors.sql").write_text(emit_batch_vectors_sql(json.loads((ROOT / "tests/hot_score_vectors.json").read_text())))
+        print("wrote tests/pass3_batch_vectors.sql")
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn): fn(); print("ok ", name)
     print("pass-3 sql structure OK")

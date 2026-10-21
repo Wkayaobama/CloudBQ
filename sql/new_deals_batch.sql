@@ -23,10 +23,15 @@ BEGIN
   DECLARE v_in_txn BOOL DEFAULT FALSE;
   DECLARE v_lock TIMESTAMP;
   DECLARE v_oldest TIMESTAMP;
+  DECLARE v_written INT64 DEFAULT 0;
   BEGIN
-    IF p_mode NOT IN ('window', 'event', 'dry') THEN RAISE USING MESSAGE = 'new_deals_batch: mode must be window | event | dry'; END IF;
-    IF p_advance_state AND p_state_report_id IS NULL THEN RAISE USING MESSAGE = 'new_deals_batch: advance_state needs a state_report_id'; END IF;
-    IF p_advance_state THEN   -- a fallback caller must not collide with a live lane-A run of the same entity (L15)
+    IF p_mode IS NULL OR p_mode NOT IN ('window', 'event', 'dry') THEN RAISE USING MESSAGE = 'new_deals_batch: mode must be window | event | dry'; END IF;   -- NOT IN is NULL for NULL, and IF treats NULL as false
+    IF IFNULL(p_advance_state, FALSE) AND p_state_report_id IS NULL THEN RAISE USING MESSAGE = 'new_deals_batch: advance_state needs a state_report_id'; END IF;
+    IF 'raw_landing_failed' IN UNNEST(v_gaps)
+       AND NOT EXISTS (SELECT 1 FROM `${PROJECT}.${DATASET}.deals_raw` WHERE run_ts = p_run_ts AND entity = p_entity AND orchestrator = p_orchestrator) THEN
+      RAISE USING MESSAGE = 'new_deals_batch: the landing failed and no slice exists for this key — nothing to compute (an empty window lands an empty slice legitimately only when the landing succeeded)';
+    END IF;
+    IF IFNULL(p_advance_state, FALSE) THEN   -- a fallback caller must not collide with a live lane-A run of the same entity (L15)
       SET v_lock = (SELECT lock_until FROM `${PROJECT}.${DATASET}.report_state` WHERE report_id = CONCAT('NEW_DEALS_', p_entity));
       IF v_lock IS NOT NULL AND v_lock > CURRENT_TIMESTAMP() THEN
         RAISE USING MESSAGE = CONCAT('new_deals_batch: a lane-A run holds the lease for ', p_entity, ' until ', CAST(v_lock AS STRING));
@@ -36,8 +41,11 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM `${PROJECT}.${DATASET}.labels_raw` WHERE run_ts = p_run_ts AND entity = p_entity AND orchestrator = p_orchestrator) THEN
       SET v_gaps = ARRAY_CONCAT(v_gaps, ['labels_missing']);   -- the caller may have named it already (lane C's landing)
     END IF;
-    SET v_oldest = (SELECT MIN(createdate) FROM `${PROJECT}.${DATASET}.deals_raw` WHERE run_ts <= p_run_ts);
-    IF v_oldest IS NULL OR v_oldest > TIMESTAMP_SUB(p_run_ts, INTERVAL 90 DAY) THEN
+    -- heuristic: the horizon the duplicate rule reads is [run_ts − 90 d, run_ts); it counts as full when its oldest landed deal is at
+    -- least 83 days old (a 90-day set landed in one go reaches ~90; a root grown week by week by lane A alone gets there after 12 weeks)
+    SET v_oldest = (SELECT MIN(createdate) FROM `${PROJECT}.${DATASET}.deals_raw`
+                    WHERE run_ts <= p_run_ts AND createdate >= TIMESTAMP_SUB(p_run_ts, INTERVAL 90 DAY) AND createdate < p_run_ts);
+    IF v_oldest IS NULL OR v_oldest > TIMESTAMP_SUB(p_run_ts, INTERVAL 83 DAY) THEN
       SET v_gaps = ARRAY_CONCAT(v_gaps, ['dedup_horizon_partial']);
     END IF;
 
@@ -67,6 +75,7 @@ BEGIN
         application = s.application, icalps_dealtype = s.icalps_dealtype, icalps_stage = s.icalps_stage,
         duplicate_suspect = s.duplicate_suspect, duplicate_of = s.duplicate_of, deal_url = s.deal_url, last_seen_run = s.last_seen_run
       WHEN NOT MATCHED THEN INSERT ROW;
+      SET v_written = @@row_count;   -- rows inserted or updated; the guard may skip an older slice's rows, so COUNT(*) would overstate
 
       -- L13: the per-deal history slice (replaced for the same key) and the one summary row (replaced for the same key)
       DELETE FROM `${PROJECT}.${DATASET}.new_deals_history`
@@ -79,12 +88,12 @@ BEGIN
       INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
         (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms, data_gaps)
       SELECT p_run_ts, p_entity, p_mode, FALSE, p_orchestrator, p_watermark_in, p_query_start, p_query_end,
-             COUNT(*), COUNT(*), COUNTIF(duplicate_suspect), COUNTIF(day1_hot_flag), 'OK', NULL,
-             IFNULL(p_started_ms, 0) + TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), v_t0, MILLISECOND), v_gaps
+             COUNT(*), v_written, COUNTIF(duplicate_suspect), COUNTIF(day1_hot_flag), 'OK', NULL,
+             IFNULL(p_started_ms, 0) + TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), v_t0, MILLISECOND), v_gaps   -- inside a transaction CURRENT_TIMESTAMP() is its start: duration_ms counts up to the transaction's opening, not the MERGE
       FROM batch;
 
       -- L8: state advances inside the same transaction as the MERGE (engine-enforced "only after"); GREATEST: a replay never rewinds
-      IF p_advance_state THEN
+      IF IFNULL(p_advance_state, FALSE) THEN
         MERGE `${PROJECT}.${DATASET}.report_state` t
         USING (SELECT p_state_report_id AS report_id, p_run_ts AS watermark) s ON t.report_id = s.report_id
         WHEN MATCHED THEN UPDATE SET watermark = GREATEST(t.watermark, s.watermark), updated_at = CURRENT_TIMESTAMP()
@@ -95,7 +104,9 @@ BEGIN
       SET v_in_txn = FALSE;
     END IF;
   EXCEPTION WHEN ERROR THEN
-    IF v_in_txn THEN ROLLBACK TRANSACTION; END IF;
+    IF v_in_txn THEN   -- a transaction the engine already cancelled (conflicting writer) may count as closed: never let the ROLLBACK itself hide the FAILED row
+      BEGIN ROLLBACK TRANSACTION; EXCEPTION WHEN ERROR THEN END;
+    END IF;
     INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
       (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, status, error, duration_ms, data_gaps)
     VALUES (p_run_ts, p_entity, p_mode, p_mode = 'dry', p_orchestrator, p_watermark_in, p_query_start, p_query_end, 0, 0, 'FAILED',

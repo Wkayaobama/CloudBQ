@@ -43,6 +43,6 @@ SELECT e.id, e.exp_score, r.day1_hot_score, e.exp_hot, r.day1_hot_flag, r.duplic
        r.deal_id IS NOT NULL AND (   -- a dropped row must not pass as a NULL-expected case
          (e.exp_score IS NULL AND r.day1_hot_score IS NULL AND r.day1_hot_flag IS NULL)
          OR (ABS(r.day1_hot_score - e.exp_score) <= 0.1 AND r.day1_hot_flag = e.exp_hot)) AS ok
-FROM e LEFT JOIN `${PROJECT}.${DATASET}.new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', NULL) r ON r.deal_id = e.id
+FROM e LEFT JOIN `${PROJECT}.${DATASET}.new_deals_batch_rows`(v_run_ts, 'VECTORS', 'vectors', CAST(NULL AS TIMESTAMP)) r ON r.deal_id = e.id
 ORDER BY e.id;
 DELETE FROM `${PROJECT}.${DATASET}.deals_raw` WHERE entity = 'VECTORS' AND orchestrator = 'vectors';

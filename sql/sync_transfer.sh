@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sync_transfer.sh — HubSpot → BigQuery with the Google BigQuery Data Transfer Service HubSpot connector (Preview, free while
 # in Preview; full refresh on every run). Creates or reports the transfer config for assets Deals + Owners, daily 02:00 UTC,
-# so the Monday 04:00 UTC scheduled query reads a sync at most ~26 h old (freshness guard is 36 h).
+# so the Monday 03:53 / 04:23 UTC scheduled queries read a sync at most ~26 h old (freshness guard is 36 h).
 # Needs a HubSpot private-app token with crm.objects.deals.read + crm.objects.owners.read in HUBSPOT_TOKEN (not stored here:
 # the connector keeps its own copy inside the transfer config).
 set -euo pipefail

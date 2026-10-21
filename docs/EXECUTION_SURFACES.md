@@ -15,7 +15,7 @@ pasted into §5 verbatim.
 |---|---|---|---|---|
 | **A** · Cloud Run function | `git clone`; `deploy.sh deploy` (source build) | Cloud Run gen2 service, python312, 1 instance × 1 request, scale to zero | Cloud Scheduler → `GET ?entity=…` with OIDC; `deploy.sh dry/run` by hand | `hubspot.report_state`, `hubspot.new_deals`, `new_deals_runs`, `new_deals_history` |
 | **B** · n8n on Cloud Run | pinned `n8nio/n8n` image; `deploy/n8n/*.sh`; workflow JSON imported by id | n8n on Cloud Run + Cloud SQL Postgres, minScale 0 | Cloud Scheduler → webhook with `X-Delivery-Token`; manual execution = rehearsal | the same BigQuery tables; n8n credentials + executions in Cloud SQL |
-| **C** · Hybrid | `sql/apply.sh`, `sql/scheduled_query.sh`, `writeback/deploy_job.sh` | BigQuery scheduled queries (UTC) + Node 22 Cloud Run job | DTS sync 02:00 UTC → scheduled query Mon 04:00 UTC → Scheduler → `jobs.run` 05:30 Zurich | the same BigQuery tables (`report_state` row `…_C`), `writeback_log`; HubSpot properties `hot_score_v1`/`hot_flag_v1` |
+| **C** · Hybrid | `sql/apply.sh`, `sql/scheduled_query.sh`, `writeback/deploy_job.sh` | BigQuery scheduled queries (UTC) + Node 22 Cloud Run job | DTS sync 02:00 UTC → scheduled query Mon 03:53 / 04:23 UTC → Scheduler → `jobs.run` 05:30 Zurich | the same BigQuery tables (`report_state` row `…_C`), `writeback_log`; HubSpot properties `hot_score_v1`/`hot_flag_v1` |
 
 Parity of a layer or a step is one of three words. **Parallel**: same artefact and same result on every lane whatever runtime
 produces it, pinned by a test or an equality check (outcome parity — the columns are scenarios, not terminals, so "same mechanism"

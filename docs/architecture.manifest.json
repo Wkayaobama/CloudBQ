@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "78F85D62 A4CF:86A4",
+ "serial": "EC2E4B12 51DD:05DE",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -1450,7 +1450,7 @@
    "layer": "L3",
    "status": "new",
    "parity": "Conditional",
-   "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
+   "role": "Register/update one scheduled query per entity (SEALSQ every monday 03:53 UTC, ICALPS 04:23 — off the hour, never the same minute; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
    "notes": "scheduled queries run on UTC only; 04:00 UTC is always before the 05:30-Zurich write-back and A's 07:00",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "layers_list": [
@@ -3647,7 +3647,7 @@
        "layer": "L3",
        "status": "new",
        "parity": "Conditional",
-       "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
+       "role": "Register/update one scheduled query per entity (SEALSQ every monday 03:53 UTC, ICALPS 04:23 — off the hour, never the same minute; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
        "notes": "scheduled queries run on UTC only; 04:00 UTC is always before the 05:30-Zurich write-back and A's 07:00",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
        "layers_list": [

@@ -42,9 +42,9 @@ SELECT
 FROM `${PROJECT}.${DATASET}.deals_raw`;
 
 -- S7  new_deals_batch_rows: the shaped, scored, de-duplicated batch of one run — pure, read-only, callable by anyone with read
---     access. Column list and order = hubspot.new_deals (the procedure MERGEs with INSERT ROW). The window: the slice's in-scope deals
---     created before run_ts and, when p_window_start is given, at or after it (lane A: the search already applied its window, so the
---     bound is a no-op; lane C: its 14-day lookback over the 90-day slice). Duplicates (S6): every deal the root knows as of run_ts
+--     access. Column list and order = hubspot.new_deals (the procedure MERGEs with INSERT ROW). The window: the slice's in-scope deals, one
+--     row per deal (latest fetched_at), bounded to [p_window_start, run_ts) when p_window_start is given (lane A: the search already
+--     applied its window, so the bound is a no-op; lane C: its 14-day lookback over the 90-day slice); NULL = the whole slice (an event). Duplicates (S6): every deal the root knows as of run_ts
 --     (any entity, any orchestrator, in-scope or not, 90-day horizon), latest observation per deal_id — lane C's rule for both lanes
 --     (decision D3); duplicate_of ordered by createdate. Labels: the slice's own labels_raw rows, label falling back to the id.
 --     Debug a past run X without writing: SELECT * FROM `${PROJECT}.${DATASET}.new_deals_batch_rows`(X, 'SEALSQ', 'cloud-run-function', NULL)
@@ -54,7 +54,8 @@ AS
 WITH win AS (
   SELECT * FROM `${PROJECT}.${DATASET}.deals_landed_v1`
   WHERE run_ts = p_run_ts AND entity = p_entity AND orchestrator = p_orchestrator AND in_scope
-    AND createdate < p_run_ts AND (p_window_start IS NULL OR createdate >= p_window_start)
+    AND (p_window_start IS NULL OR (createdate >= p_window_start AND createdate < p_run_ts))   -- NULL (an event, a debugger): the whole slice — an event deal created in run_ts's own second must not be dropped
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY deal_id ORDER BY fetched_at DESC) = 1   -- a doubled slice (delete-older failed, a paged search repeating a deal) must never reach the MERGE: one source row per deal
 ), horizon AS (
   SELECT deal_id, createdate, name_key
   FROM `${PROJECT}.${DATASET}.deals_landed_v1`
