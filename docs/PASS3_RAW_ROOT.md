@@ -1,7 +1,8 @@
 # Pass 3 — the raw root: a run_ts-keyed landing table that makes every run reconstructible
 
 Scope: CloudBQ new-deals pipeline, lanes A (Cloud Run function) and C (BigQuery scheduled script). Branch claude/cloud-run-bigquery-pipeline-e94ziy.
-Status: **phase 1 implemented (this commit, recipe `.claude/skills/aider-scaffold/assets/recipes/a_raw_root.md`); phases 2 and 3 pending.**
+Status: **phase 1 implemented (136c77e + follow-ups 7370537, recipe `a_raw_root.md`); phase 2 implemented (this commit, recipe
+`c_raw_batch.md`); phase 3 pending.**
 The plan below was revised after an adversarial review (platform critic, semantics critic, cross-examiner; 5 high and 7 medium findings
 folded in) and approved by the operator on 2026-10-21. Line references point at the code as it stood before phase 1 (fb9ee7d) where a
 section explains a defect, and at the current files where it describes the implementation.
@@ -66,8 +67,30 @@ GROUP BY 1, 2, 3 HAVING status IS NULL OR status != 'OK';
 SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASET}.new_deals_runs` ORDER BY run_ts DESC LIMIT 20;
 ```
 
+## Phase 2 as implemented
+
+- `sql/deals_landed_v1.sql`: the VIEW `deals_landed_v1` (S2) and the TABLE FUNCTION `new_deals_batch_rows(run_ts, entity, orchestrator,
+  window_start)` (S7). The fourth parameter is new against §3: lane C's 14-day lookback is a run parameter (recorded as
+  `new_deals_runs.query_start`), so the pure batch takes it explicitly; lane A passes its query_start too (a no-op bound, since the
+  search applied it) and a debugger passes NULL or the value from the runs row. `name_key` is computed in the view, once.
+- `sql/new_deals_batch.sql`: the PROCEDURE `new_deals_batch` (S8) with an eleventh parameter, `gaps ARRAY<STRING>`, the caller's
+  data_gaps so far; the procedure adds `labels_missing` (if not already named) and `dedup_horizon_partial`. An event run's history
+  DELETE is scoped to the batch's own deals (two events of one entity in the same second share the key). `CREATE OR REPLACE TEMP TABLE`
+  so two CALLs in one script never collide.
+- `sql/new_deals_weekly.sql`: DECLAREs → freshness guard → gaps → landing inside `BEGIN … EXCEPTION` → `SET v_watermark_in` → CALL.
+  The script holds no transaction any more; "before `BEGIN TRANSACTION`" in the phase-1 notes above now reads "before the CALL".
+- `sql/apply.sh` applies the two new files last; `sql/scheduled_query.sh` is unchanged (it renders and registers whatever the script is).
+- Verification, honestly stated (§5): offline, `tests/test_pass3_sql.py` proves structure (view ⇔ PROPS, column order ⇔ new_deals,
+  frozen set, no sync view, the contract, the vocabulary, apply order) and `DRYRUN=1 sql/apply.sh` / `DRYRUN=1 sql/scheduled_query.sh`
+  prove rendering. A `bq --dry_run` cannot execute a CALL, so the first AUTHENTICATED step is `tests/pass3_batch_vectors.sql` in a dev
+  dataset (15 vectors landed, read through the view and the table function, compared, dropped — every row ok = TRUE), then one transfer
+  run in the dev dataset compared with the previous script's rows for the same run_time (same deal_ids, same day1_hot_score, same
+  duplicate_of).
+- Lane A is untouched by phase 2: it still shapes in Python and lands in shadow.
+
 Operator sequence for the cut-over: `cloud_function_new_deals/deploy.sh tables` (adds the two tables and the column; safe to re-run),
-`deploy.sh deploy` (the function now lands), `sql/scheduled_query.sh` (re-registers the two scripts with the landing block),
+`deploy.sh deploy` (the function now lands), `sql/apply.sh` (the UDF, the views, the table function, the procedure), the vectors check
+above in a dev dataset, `sql/scheduled_query.sh` (re-registers the two scripts: landing + CALL),
 `RUN_TS=<cut-over> sql/backfill_raw.sh` (one invocation lands both entities; append ICALPS for one), then the acceptance SQL after the first live run of each lane.
 
 ## 0 · The claim being fixed, and why the fix is one table (plus its small companion)
@@ -205,7 +228,7 @@ S3 window      S2 WHERE run_ts = @run_ts AND in_scope                       [wat
 S4 shaping     S3 ⋈ labels_raw(run_ts)                                      name_key as new_deals_weekly.sql:23; label = COALESCE(label, id)
 S5 scoring     S4                                                            hot_score_v1 UDF with run_ts as "now" (:50-52)
 S6 duplicates  S2, bounded (below)                                          lane C's rule (self-join, STRING_AGG ORDER BY createdate, :28-31)
-S7 batch       TABLE FUNCTION new_deals_batch_rows(run_ts, entity, orchestrator) = S2…S6 — pure, read-only, callable by anyone
+S7 batch       TABLE FUNCTION new_deals_batch_rows(run_ts, entity, orchestrator, window_start) = S2…S6 — pure, read-only, callable by anyone
 S8 write       PROCEDURE new_deals_batch(…) = INSERT history slice FROM S7 → MERGE new_deals → runs row → state (if asked); one transaction
 S9 output      payload = SELECT FROM new_deals_history(run_ts) ⋈ new_deals_runs(run_ts); delivery POSTs that
 ```
@@ -234,7 +257,8 @@ S8 — the procedure and its contract (every ambiguity from the review resolved 
 ```
 new_deals_batch(run_ts TIMESTAMP, entity STRING, orchestrator STRING, mode STRING,            -- window | event | dry
                 advance_state BOOL, state_report_id STRING,                                   -- who owns report_state, if anyone
-                watermark_in TIMESTAMP, query_start TIMESTAMP, query_end TIMESTAMP, started_ms INT64)   -- the runs-row window fields
+                watermark_in TIMESTAMP, query_start TIMESTAMP, query_end TIMESTAMP, started_ms INT64,   -- the runs-row window fields
+                gaps ARRAY<STRING>)                                                                   -- the caller's data_gaps so far
 ```
 - reads deals_landed_v1 and labels_raw ONLY — never deals_synced_v1 / owners_synced_v1 / pipelines_synced_v1 / pipeline_stages_synced_v1,
   so the function SA needs no grant on the sync dataset (deploy.sh:75-76 grants ${DATASET} only); a phase-2 check greps `_synced_v1`
@@ -308,9 +332,9 @@ Phase 1 — the root, in shadow. IMPLEMENTED (recipe a_raw_root.md; see "Phase 1
   properties is the dict; dry does not land; landing failure non-fatal and named; clean run's data_gaps = [] (warehouse twins read);
   event mode lands one deal; plus the review follow-ups (strict replacement, labels-only failure, time-box, un-migrated runs table).
   Acceptance (SQL, after the first live run): the four probes above.
-Phase 2 — the single implementation (lane C changes here).
+Phase 2 — the single implementation (lane C changes here). IMPLEMENTED (recipe c_raw_batch.md; see "Phase 2 as implemented" above).
   deals_landed_v1 (S2); new_deals_batch_rows (S7); new_deals_batch (S8) with the contract above; scheduled_query.sh registers the
-  landing + CALL script; DRYRUN=1 validates what a dry run can validate (below). Rollback: re-register the previous script
+  landing + CALL script; DRYRUN=1 validates what a dry run can validate (below); tests/pass3_batch_vectors.sql is the executed check. Rollback: re-register the previous script
   (bq update --params with the prior commit's rendering).
   Verification, honestly stated: a bq --dry_run of a CALL proves existence and signature only; a dry run stops at the first IF and
   cannot dry-run CREATE TEMP TABLE, and today's `DRYRUN=1 sql/scheduled_query.sh` therefore validates only the DECLAREs and the guard

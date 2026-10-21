@@ -30,7 +30,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
    `docs/EXECUTION_SURFACES_L2.xlsx`, `scoring/deal_tiers_v1.constants.json`, `sql/deal_tiers_v1.sql` + `sql/deal_tiers_apply.sql`, `notebooks/l2_deal_tiers.ipynb`.
 8. **Pass 3 (the raw root)** — `docs/PASS3_RAW_ROOT.md`: why a past run could not be recomputed from BigQuery and why the fix is a
    run_ts-keyed landing table rather than an orchestrator; the operator's decisions; phase 1 (shipped): `deals_raw` / `labels_raw`,
-   `new_deals_runs.data_gaps`, `sql/land_raw.sql`, `sql/backfill_raw.sh`; phases 2–3 (single SQL implementation, hand-off) pending.
+   `new_deals_runs.data_gaps`, `sql/land_raw.sql`, `sql/backfill_raw.sh`; phase 2 (shipped): one SQL implementation over the root —
+   `sql/deals_landed_v1.sql` (view + table function) and `sql/new_deals_batch.sql` (procedure), lane C calls it; phase 3 (lane A hand-off) pending.
 
 ## Tooling (reusable, project-agnostic — also installed in IC-DBT-BQ)
 
@@ -45,7 +46,7 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 ## Verify before you push
 
 ```bash
-python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py
+python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py && python3 tests/test_pass3_sql.py
 for f in cloud_function_new_deals/deploy.sh sql/*.sh writeback/*.sh deploy/n8n/*.sh; do bash -n "$f"; done
 node --check writeback/index.mjs && python3 workflows/src/build_workflow.py --check
 python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify   # to /tmp: rebuild the committed workbook only when the YAML changed (UNIVERSAL_WORKFLOW.md §4.4)

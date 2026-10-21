@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "EDF3F3EB 4A54:A713",
+ "serial": "78F85D62 A4CF:86A4",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,19 +44,19 @@
  ],
  "counts": {
   "dirs": 38,
-  "files": 132,
-  "annotated": 98,
+  "files": 137,
+  "annotated": 102,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 89,
+   "new": 93,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 59,
-   "B": 64,
-   "C": 68
+   "A": 63,
+   "B": 68,
+   "C": 72
   }
  },
  "lanes": {
@@ -180,14 +180,17 @@
   "L4": {
    "A": [
     "cloud_function_new_deals/main.py",
-    "docs/PASS3_RAW_ROOT.md"
+    "docs/PASS3_RAW_ROOT.md",
+    "sql/deals_landed_v1.sql"
    ],
    "B": [
     "docs/PASS3_RAW_ROOT.md",
+    "sql/deals_landed_v1.sql",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
     "docs/PASS3_RAW_ROOT.md",
+    "sql/deals_landed_v1.sql",
     "sql/deals_synced_v1.sql",
     "sql/land_raw.sql",
     "sql/new_deals_weekly.sql",
@@ -202,6 +205,7 @@
     "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
     "scoring/README.md",
+    "sql/deals_landed_v1.sql",
     "tests/hot_score_vectors.json",
     "tests/test_deal_tiers.py",
     "tests/test_hot_score.py"
@@ -212,6 +216,7 @@
     "scoring/hot_score_v1.constants.json",
     "scoring/hot_score_v1.mjs",
     "scoring/README.md",
+    "sql/deals_landed_v1.sql",
     "tests/hot_score_vectors.json",
     "tests/test_deal_tiers.py",
     "tests/test_hot_score.py"
@@ -224,6 +229,7 @@
     "scoring/hot_score_v1.mjs",
     "scoring/hot_score_v1.sql",
     "scoring/README.md",
+    "sql/deals_landed_v1.sql",
     "sql/deal_tiers_v1.sql",
     "sql/hot_deals_v1.sql",
     "tests/hot_score_vectors.json",
@@ -235,27 +241,31 @@
   },
   "L6": {
    "A": [
-    "cloud_function_new_deals/main.py"
+    "cloud_function_new_deals/main.py",
+    "sql/deals_landed_v1.sql"
    ],
    "B": [
+    "sql/deals_landed_v1.sql",
     "tests/test_n8n_code.py",
     "workflows/src/node_code.template.js",
     "workflows/src/shape_score.js",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
+    "sql/deals_landed_v1.sql",
     "sql/hot_deals_v1.sql",
-    "sql/new_deals_weekly.sql",
     "sql/refresh_pipeline_labels.sh"
    ]
   },
   "L7": {
    "A": [
     "cloud_function_new_deals/bigquery_schema.sql",
-    "cloud_function_new_deals/main.py"
+    "cloud_function_new_deals/main.py",
+    "sql/new_deals_batch.sql"
    ],
    "B": [
     "cloud_function_new_deals/bigquery_schema.sql",
+    "sql/new_deals_batch.sql",
     "workflows",
     "workflows/NEW_DEALS_FULL.json"
    ],
@@ -264,18 +274,21 @@
     "sql",
     "sql/deal_tiers_apply.sql",
     "sql/deal_tiers_v1.sql",
+    "sql/new_deals_batch.sql",
     "sql/new_deals_weekly.sql"
    ]
   },
   "L8": {
    "A": [
-    "cloud_function_new_deals/main.py"
+    "cloud_function_new_deals/main.py",
+    "sql/new_deals_batch.sql"
    ],
    "B": [
+    "sql/new_deals_batch.sql",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
-    "sql/new_deals_weekly.sql"
+    "sql/new_deals_batch.sql"
    ]
   },
   "L9": {
@@ -311,13 +324,17 @@
     "notebooks",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "notebooks/README.md",
+    "tests/pass3_batch_vectors.sql",
     "tests/test_main_offline.py",
-    "tests/test_notebook.py"
+    "tests/test_notebook.py",
+    "tests/test_pass3_sql.py"
    ],
    "B": [
     ".github/workflows/ci.yml",
     "docs/PASS1_SEQUENCE.md",
     "docs/PASS2_L2_TIERS.md",
+    "tests/pass3_batch_vectors.sql",
+    "tests/test_pass3_sql.py",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
@@ -325,7 +342,9 @@
     "docs/PASS1_SEQUENCE.md",
     "docs/PASS2_L2_TIERS.md",
     "notebooks/l2_deal_tiers.ipynb",
-    "sql/scheduled_query.sh"
+    "sql/scheduled_query.sh",
+    "tests/pass3_batch_vectors.sql",
+    "tests/test_pass3_sql.py"
    ]
   },
   "L12": {
@@ -355,6 +374,7 @@
     "docs/PASS3_RAW_ROOT.md",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "sql/audit_tables.sql",
+    "sql/new_deals_batch.sql",
     "tests/test_docs_consistency.py"
    ],
    "B": [
@@ -369,6 +389,7 @@
     "docs/execution_surfaces_l2.yaml",
     "docs/PASS3_RAW_ROOT.md",
     "sql/audit_tables.sql",
+    "sql/new_deals_batch.sql",
     "tests/test_docs_consistency.py"
    ],
    "C": [
@@ -385,6 +406,7 @@
     "sql/deal_tiers_apply.sql",
     "sql/deal_tiers_v1.sql",
     "sql/land_raw.sql",
+    "sql/new_deals_batch.sql",
     "sql/new_deals_weekly.sql",
     "tests/test_docs_consistency.py",
     "writeback/index.mjs"
@@ -403,13 +425,16 @@
   },
   "L15": {
    "A": [
-    "cloud_function_new_deals/main.py"
+    "cloud_function_new_deals/main.py",
+    "sql/new_deals_batch.sql"
    ],
    "B": [
-    "deploy/n8n/service.yaml"
+    "deploy/n8n/service.yaml",
+    "sql/new_deals_batch.sql"
    ],
    "C": [
     "sql/deal_tiers_apply.sql",
+    "sql/new_deals_batch.sql",
     "writeback/deploy_job.sh",
     "writeback/index.mjs"
    ]
@@ -1234,7 +1259,7 @@
    ],
    "layer": "L0",
    "status": "new",
-   "role": "Render ${PROJECT} ${DATASET} ${SYNC_*} and apply every SQL object in dependency order; DRYRUN=1 renders",
+   "role": "Render ${PROJECT} ${DATASET} ${SYNC_*} and apply every SQL object in dependency order (… → deals_landed_v1 + new_deals_batch_rows → new_deals_batch); DRYRUN=1 renders",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "parity": "Divergent",
    "kind": "file",
@@ -1263,6 +1288,26 @@
    "parity": "Conditional",
    "role": "One-time landing of the 90-day set per entity with orchestrator = backfill at the cut-over run_ts (RUN_TS env), so the duplicate horizon is full from day one; DRYRUN=1 renders + bq --dry_run",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "kind": "file",
+   "exists": true
+  },
+  "sql/deals_landed_v1.sql": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L5",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 3 S2 + S7: the VIEW deals_landed_v1 (one typed column per landed property, name_key computed once) and the TABLE FUNCTION new_deals_batch_rows(run_ts, entity, orchestrator, window_start) — the pure batch of any run (window, labels, duplicates over the root, hot_score_v1), column order = new_deals; read-only, callable by anyone",
+   "notes": "reads deals_raw / labels_raw only; the executed check is tests/pass3_batch_vectors.sql",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
+   "layers_list": [
+    "L5",
+    "L4",
+    "L6"
+   ],
    "kind": "file",
    "exists": true
   },
@@ -1347,6 +1392,27 @@
    "kind": "file",
    "exists": true
   },
+  "sql/new_deals_batch.sql": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L7",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 3 S8: the PROCEDURE new_deals_batch(…) — the one write path: lease check, TEMP batch from the table function, dry → one runs row, else ONE transaction MERGE (frozen four, older-slice guard) → history → runs row → report_state (GREATEST) with ROLLBACK + FAILED row on error",
+   "notes": "lane C calls it from phase 2; lane A from phase 3",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
+   "layers_list": [
+    "L7",
+    "L8",
+    "L13",
+    "L15"
+   ],
+   "kind": "file",
+   "exists": true
+  },
   "sql/new_deals_weekly.sql": {
    "scenarios": [
     "C"
@@ -1354,14 +1420,12 @@
    "layer": "L7",
    "status": "new",
    "parity": "Parallel",
-   "role": "Scheduled script per entity: freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, outside the transaction) → ONE transaction window → shape → duplicates → MERGE → history → run log (+data_gaps) → report_state NEW_DEALS_<entity>_C",
-   "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "role": "Scheduled script per entity (pass 3 phase 2): freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, inside BEGIN … EXCEPTION → raw_landing_failed) → CALL new_deals_batch(…, advance_state TRUE, NEW_DEALS_<entity>_C, v_gaps); the batch, the MERGE, the audit rows and the state live in the procedure",
+   "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; phase 1 by a_raw_root.md, phase 2 by .claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "layers_list": [
     "L7",
     "L4",
-    "L6",
-    "L8",
     "L13"
    ],
    "kind": "file",
@@ -1432,6 +1496,20 @@
    "parity": "Parallel",
    "role": "bq query that proves the UDF on the same vectors (ok = TRUE per row)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
+   "kind": "file",
+   "exists": true
+  },
+  "tests/pass3_batch_vectors.sql": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "The EXECUTED check of phase 2 (dev dataset, credentials): the 15 vectors landed as a deals_raw slice, read through the view and the table function, score and flag compared, slice dropped — every row ok = TRUE",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
    "kind": "file",
    "exists": true
   },
@@ -1522,6 +1600,20 @@
    "parity": "Conditional",
    "role": "Notebook valid (nbformat), code cells compile, every deploy.sh step mirrored in order, enable flag-guarded, secret prompted, no outputs committed",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+   "kind": "file",
+   "exists": true
+  },
+  "tests/test_pass3_sql.py": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L11",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "Offline structure of the pass-3 SQL: view types exactly main.PROPS, table-function columns == new_deals in order, MERGE update list excludes the frozen four, no sync view read, procedure contract, data_gaps vocabulary, apply order, vectors SQL current; writes tests/pass3_batch_vectors.sql",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
    "kind": "file",
    "exists": true
   },
@@ -1954,6 +2046,12 @@
               "name": "c_l2_deal_tiers.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/c_l2_deal_tiers.md",
+              "exists": true
+             },
+             {
+              "name": "c_raw_batch.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
               "exists": true
              },
              {
@@ -3310,7 +3408,7 @@
        ],
        "layer": "L0",
        "status": "new",
-       "role": "Render ${PROJECT} ${DATASET} ${SYNC_*} and apply every SQL object in dependency order; DRYRUN=1 renders",
+       "role": "Render ${PROJECT} ${DATASET} ${SYNC_*} and apply every SQL object in dependency order (… → deals_landed_v1 + new_deals_batch_rows → new_deals_batch); DRYRUN=1 renders",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
        "parity": "Divergent"
       }
@@ -3347,6 +3445,30 @@
        "parity": "Conditional",
        "role": "One-time landing of the 90-day set per entity with orchestrator = backfill at the cut-over run_ts (RUN_TS env), so the duplicate horizon is full from day one; DRYRUN=1 renders + bq --dry_run",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md"
+      }
+     },
+     {
+      "name": "deals_landed_v1.sql",
+      "kind": "file",
+      "path": "sql/deals_landed_v1.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L5",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 3 S2 + S7: the VIEW deals_landed_v1 (one typed column per landed property, name_key computed once) and the TABLE FUNCTION new_deals_batch_rows(run_ts, entity, orchestrator, window_start) — the pure batch of any run (window, labels, duplicates over the root, hot_score_v1), column order = new_deals; read-only, callable by anyone",
+       "notes": "reads deals_raw / labels_raw only; the executed check is tests/pass3_batch_vectors.sql",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
+       "layers_list": [
+        "L5",
+        "L4",
+        "L6"
+       ]
       }
      },
      {
@@ -3451,6 +3573,31 @@
       }
      },
      {
+      "name": "new_deals_batch.sql",
+      "kind": "file",
+      "path": "sql/new_deals_batch.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L7",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 3 S8: the PROCEDURE new_deals_batch(…) — the one write path: lease check, TEMP batch from the table function, dry → one runs row, else ONE transaction MERGE (frozen four, older-slice guard) → history → runs row → report_state (GREATEST) with ROLLBACK + FAILED row on error",
+       "notes": "lane C calls it from phase 2; lane A from phase 3",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
+       "layers_list": [
+        "L7",
+        "L8",
+        "L13",
+        "L15"
+       ]
+      }
+     },
+     {
       "name": "new_deals_weekly.sql",
       "kind": "file",
       "path": "sql/new_deals_weekly.sql",
@@ -3462,14 +3609,12 @@
        "layer": "L7",
        "status": "new",
        "parity": "Parallel",
-       "role": "Scheduled script per entity: freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, outside the transaction) → ONE transaction window → shape → duplicates → MERGE → history → run log (+data_gaps) → report_state NEW_DEALS_<entity>_C",
-       "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+       "role": "Scheduled script per entity (pass 3 phase 2): freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, inside BEGIN … EXCEPTION → raw_landing_failed) → CALL new_deals_batch(…, advance_state TRUE, NEW_DEALS_<entity>_C, v_gaps); the batch, the MERGE, the audit rows and the state live in the procedure",
+       "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; phase 1 by a_raw_root.md, phase 2 by .claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
        "layers_list": [
         "L7",
         "L4",
-        "L6",
-        "L8",
         "L13"
        ]
       }
@@ -3578,6 +3723,24 @@
        "parity": "Parallel",
        "role": "bq query that proves the UDF on the same vectors (ok = TRUE per row)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md"
+      }
+     },
+     {
+      "name": "pass3_batch_vectors.sql",
+      "kind": "file",
+      "path": "tests/pass3_batch_vectors.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "The EXECUTED check of phase 2 (dev dataset, credentials): the 15 vectors landed as a deals_raw slice, read through the view and the table function, score and flag compared, slice dropped — every row ok = TRUE",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md"
       }
      },
      {
@@ -3696,6 +3859,24 @@
        "parity": "Conditional",
        "role": "Notebook valid (nbformat), code cells compile, every deploy.sh step mirrored in order, enable flag-guarded, secret prompted, no outputs committed",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md"
+      }
+     },
+     {
+      "name": "test_pass3_sql.py",
+      "kind": "file",
+      "path": "tests/test_pass3_sql.py",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L11",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "Offline structure of the pass-3 SQL: view types exactly main.PROPS, table-function columns == new_deals in order, MERGE update list excludes the frozen four, no sync view read, procedure contract, data_gaps vocabulary, apply order, vectors SQL current; writes tests/pass3_batch_vectors.sql",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_raw_batch.md"
       }
      },
      {

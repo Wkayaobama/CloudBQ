@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is EDF3F3EB 4A54:A713
+Volume serial number is 78F85D62 A4CF:86A4
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -32,6 +32,7 @@ CloudBQ
 │       │   │           b_workflows_generated.md
 │       │   │           c_bigquery_compute.md
 │       │   │           c_l2_deal_tiers.md
+│       │   │           c_raw_batch.md
 │       │   │           c_writeback_job.md
 │       │   │           docs_pass1_set.md
 │       │   │           docs_universal_workflow.md
@@ -164,11 +165,13 @@ CloudBQ
 │       apply.sh
 │       audit_tables.sql
 │       backfill_raw.sh
+│       deals_landed_v1.sql
 │       deals_synced_v1.sql
 │       deal_tiers_apply.sql
 │       deal_tiers_v1.sql
 │       hot_deals_v1.sql
 │       land_raw.sql
+│       new_deals_batch.sql
 │       new_deals_weekly.sql
 │       refresh_pipeline_labels.sh
 │       scheduled_query.sh
@@ -177,6 +180,7 @@ CloudBQ
 ├───tests
 │       hot_score_vectors.json
 │       hot_score_vectors.sql
+│       pass3_batch_vectors.sql
 │       test_deal_tiers.py
 │       test_docs_consistency.py
 │       test_hot_score.py
@@ -184,6 +188,7 @@ CloudBQ
 │       test_main_offline.py
 │       test_n8n_code.py
 │       test_notebook.py
+│       test_pass3_sql.py
 │       test_regen_workflow.py
 │
 ├───workflows
