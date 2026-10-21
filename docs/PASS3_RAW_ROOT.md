@@ -1,8 +1,9 @@
 # Pass 3 — the raw root: a run_ts-keyed landing table that makes every run reconstructible
 
 Scope: CloudBQ new-deals pipeline, lanes A (Cloud Run function) and C (BigQuery scheduled script). Branch claude/cloud-run-bigquery-pipeline-e94ziy.
-Status: **phase 1 implemented (136c77e + follow-ups 7370537, recipe `a_raw_root.md`); phase 2 implemented (this commit, recipe
-`c_raw_batch.md`); phase 3 pending.**
+Status: **all three phases implemented — phase 1 (136c77e + follow-ups 7370537, recipe `a_raw_root.md`), phase 2 (bf473ba, recipe
+`c_raw_batch.md`), phase 3 (this commit, recipe `a_hand_off.md`). What remains is authenticated: the executed checks of §5 and the
+first live runs.**
 The plan below was revised after an adversarial review (platform critic, semantics critic, cross-examiner; 5 high and 7 medium findings
 folded in) and approved by the operator on 2026-10-21. Line references point at the code as it stood before phase 1 (fb9ee7d) where a
 section explains a defect, and at the current files where it describes the implementation.
@@ -109,9 +110,48 @@ SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASE
   lane-C script stored NULL (dealname NULL and no customer) — the duplicate guard excludes both; `STRING_AGG` orders twins by createdate
   then deal_id (D3); a deleted HubSpot deal stays a twin candidate for 90 days in the root where the sync's full refresh dropped it.
 
+## Phase 3 as implemented
+
+- `cloud_function_new_deals/main.py`: lease → search → land (fatal now; `raw_landing_failed` named on the FAILED row) → `CALL
+  new_deals_batch(@run_ts, @entity, @orchestrator, @mode, FALSE, NULL, @watermark_in, @query_start, @query_end, @started_ms,
+  @gaps)` → `write_watermark` (window mode, after the CALL, releases the lease) → payload rendered from the history slice the procedure
+  wrote → delivery → on failure `UPDATE new_deals_runs SET status = 'OK_DELIVERY_FAILED'`. On an exception the function writes the
+  FAILED row only if the procedure did not (one `SELECT COUNT(*)` on the key), releases the lease, re-raises. Dry (D1): lands with
+  `mode = 'dry'`, CALLs with `mode = 'dry'`, no lease, no watermark, no delivery, payload from the table function. Removed:
+  `merge_rows()`, `write_history()`, `recent_names()`, the per-run staging table, `dedup_scope_batch_only`. Kept as test oracles:
+  `shape()`, `hot_score()`, `name_key()`. New env: `CALL_TIMEOUT_S` (300 s).
+- `tests/test_main_offline.py` (20 tests): the FakeBQ answers the CALL (and marks that a runs row exists), serves the history slice and
+  the table-function rows from `main.shape()` typed as the client returns them, answers the runs-row read, and can fail the landing,
+  the CALL (with or without a row) or the read-back. The oracle is the Python shaper; the SQL batch is
+  proved by `tests/test_pass3_sql.py` offline and by `tests/pass3_batch_vectors.sql` once credentials exist.
+- n8n B2 retired (D6): `workflows/NEW_DEALS_FULL.json`, `workflows/src/shape_score.js`, `workflows/src/node_code.template.js`,
+  `deploy/n8n/scheduler.sh`, `tests/test_n8n_code.py`, `scoring/hot_score_v1.mjs` deleted; `build_workflow.py` builds the delivery and
+  error workflows only; `tests/test_hot_score.py` drops the JS parity check; `scoring/README.md` names the UDF as THE implementation.
+  B1 (the delivery tail) is unchanged. The discovery report `docs/discovery/scenario_B.md` keeps B2's design for the record, and the
+  B cells of `docs/execution_surfaces.yaml` are marked retired rather than rewritten.
+- S9 deviation: the payload's rows come from `new_deals_history` (dry: the table function) and its `data_gaps` are the function's own
+  list; the procedure's `labels_missing` / `dedup_horizon_partial` are on the runs row only, not in the delivered payload.
+- The implemented test names differ from the §5 plan: test_live_lands_before_the_call_and_advances_the_watermark_after_it,
+  test_call_carries_the_window_the_gaps_and_advance_state_false, test_dry_lands_calls_with_mode_dry_and_touches_no_sink_or_state,
+  test_call_failure_releases_the_lease_and_writes_no_second_failed_row, test_failure_before_the_call_writes_the_failed_row_here,
+  test_event_mode_calls_with_mode_event_and_never_touches_state, test_delivery_failure_amends_the_runs_row,
+  test_landing_failure_fails_the_run_names_it_and_releases_the_lease, test_labels_only_failure_fails_the_run_after_the_deals_slice_landed.
+- `deploy.sh routines` (new; run by `deploy` and `all` before the function deploy) creates the UDF, the view, the table function and the
+  procedure without lane C's `SYNC_*` settings — `sql/apply.sh` refuses to run without them (R36) and would otherwise be the only path.
+- Review follow-ups (semantics critic, 2026-10-21): the read-back of the rows happens BEFORE the watermark advances, so a transient
+  read error keeps the window replayable; a failure after the CALL amends the procedure's OK row to FAILED (a report that was never
+  delivered must not read as a clean run) instead of adding none; the payload's `rows_written` and `data_gaps` come from the runs row
+  the procedure wrote (its `labels_missing` / `dedup_horizon_partial` join the function's own list); an event reads only its own deal
+  and the procedure never replaces another event's runs row (two events in one second share the key); both landing deletes are scoped
+  by mode, so a dry landing in the same second never deletes a live slice; the CALL passes literal NULLs for a missing window (never a
+  NULL-valued query parameter) and cancels its job on timeout; the budgets fit Cloud Run's 540 s: 4 × LAND_TIMEOUT_S (45) +
+  CALL_TIMEOUT_S (240) + 3 delivery tries × 30 s + 20 s = 530 s. The `_jsonable` rendering is pinned by typed fake rows.
+- Rollback: the previous commit (the Python path is one commit behind).
+
 Operator sequence for the cut-over: `cloud_function_new_deals/deploy.sh tables` (adds the two tables and the column; safe to re-run),
-`deploy.sh deploy` (the function now lands), `sql/apply.sh` (the UDF, the views, the table function, the procedure), the vectors check
-above in a dev dataset, `sql/scheduled_query.sh` (re-registers the two scripts: landing + CALL),
+`sql/apply.sh` (the UDF, the views, the table function, the procedure — the function CALLs the procedure from this deploy on, so apply
+BEFORE `deploy.sh deploy`), the vectors check above in a dev dataset, `deploy.sh deploy`, `deploy.sh dry` (now lands + CALLs with mode
+dry: one runs row per entity, rows_written 0), `sql/scheduled_query.sh` (re-registers the two scripts: landing + CALL),
 `RUN_TS=<cut-over> sql/backfill_raw.sh` (one invocation lands both entities; append ICALPS for one), then the acceptance SQL after the first live run of each lane.
 
 ## 0 · The claim being fixed, and why the fix is one table (plus its small companion)
@@ -251,7 +291,7 @@ S5 scoring     S4                                                            hot
 S6 duplicates  S2, bounded (below)                                          lane C's rule (self-join, STRING_AGG ORDER BY createdate, :28-31)
 S7 batch       TABLE FUNCTION new_deals_batch_rows(run_ts, entity, orchestrator, window_start) = S2…S6 — pure, read-only, callable by anyone
 S8 write       PROCEDURE new_deals_batch(…) = INSERT history slice FROM S7 → MERGE new_deals → runs row → state (if asked); one transaction
-S9 output      payload = SELECT FROM new_deals_history(run_ts) ⋈ new_deals_runs(run_ts); delivery POSTs that
+S9 output      payload = SELECT FROM new_deals_history(run_ts) (as built: runs-row fields are not joined, see "Phase 3 as implemented"); delivery POSTs that
 ```
 
 S2 — deals_landed_v1 exposes exactly: run_ts, entity, orchestrator, mode, source, in_scope, fetched_at, deal_id, createdate, pipeline_id
@@ -299,9 +339,9 @@ Callers:
 - lane C scheduled query: landing (§2), then
   `CALL `${PROJECT}.${DATASET}.new_deals_batch`(v_run_ts, v_entity, 'bigquery-scheduled-query', 'window', TRUE, 'NEW_DEALS_${ENTITY}_C', v_watermark_in, <run_ts − 14 d>, v_run_ts, <elapsed ms>, v_gaps)`;
 - lane A function: lease → search → land → `CALL … (run_ts, entity, 'cloud-run-function', mode, FALSE, NULL, watermark_in, qstart, run_ts, started_ms, gaps)`
-  → write_watermark (main.py:148-151: advances NEW_DEALS_<entity> and releases the lease in one statement, unchanged) → deliver →
+  → write_watermark (main.py:154-157 today, :148-151 at fb9ee7d: advances NEW_DEALS_<entity> and releases the lease in one statement, unchanged) → deliver →
   on delivery failure `UPDATE new_deals_runs SET status = 'OK_DELIVERY_FAILED', error = @err WHERE run_ts = @ts AND entity = @e AND orchestrator = @o`
-  (DML on a query-inserted row, safe per main.py:192); on exception: write_run FAILED (main.py:302) and release the lease, as today.
+  (DML on a query-inserted row, safe per main.py:192); on exception: write_run FAILED (main.py:302 at fb9ee7d; as built, only when no runs row exists — runs_row_exists()) and release the lease, as today.
   So the lease and the watermark stay entirely in the function (§7 holds), and the offline order assertion becomes CALL → SET watermark.
 - event mode: land the one deal (mode = 'event'), CALL with mode = 'event' and advance_state = FALSE; no state is touched, as today
   (main.py:288 `if not event`).
@@ -365,7 +405,7 @@ Phase 2 — the single implementation (lane C changes here). IMPLEMENTED (recipe
   path scenario_C.md already names): load the 15 vectors of tests/hot_score_vectors.json as a deals_raw slice (synthetic deal_id = case
   id, createdate = run_ts − 1 day), SELECT from new_deals_batch_rows, compare day1_hot_score / day1_hot_flag to the expected values —
   the first authenticated step of phase 2, not an offline one; (3) parity for one lane-C run_ts: deals_landed_v1 vs deals_synced_v1.
-Phase 3 — the hand-off (lane A changes here).
+Phase 3 — the hand-off (lane A changes here). IMPLEMENTED (recipe a_hand_off.md; see "Phase 3 as implemented" above).
   main.py CALLs the procedure after landing (landing fatal from now on); shape()/hot_score() become test oracles
   (tests/test_hot_score.py keeps main.py as the vector source); per-run staging and recent_names() removed; dry per D1; payload per D4;
   B2 per D6; docs: PASS3 sequence page, execution_surfaces.yaml rows (L4 extraction = the root; L13 audit = root + history + runs), the
@@ -391,6 +431,6 @@ Phase 3 — the hand-off (lane A changes here).
 
 ## 7 · What stays exactly as it is
 
-deploy.sh (identity, tables, secret, deploy, invoker, gates, probes), the lease (main.py:137-146), the watermark-after-MERGE rule and
+deploy.sh (identity, tables, secret, deploy, invoker, gates, probes), the lease (main.py:137-146 at fb9ee7d), the watermark-after-MERGE rule and
 write_watermark (:148-151), the frozen four columns, the freshness guard, the n8n B1 delivery tail, the tiers pass and its views, the
 hot-score constants and vectors.

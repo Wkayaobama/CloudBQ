@@ -11,20 +11,22 @@ Order: `deploy.sh check-env → enable-apis → iam → tables → secret → de
 What it owns: extraction (exact `createdate` window from the watermark), scoring, shaping, MERGE, watermark, audit, delivery POST.
 Needs: a GCP project, a read-only HubSpot private app, an operator with admin roles. Cost: cents per month (scale to zero).
 Cannot: write back to HubSpot (read-only token); receive HubSpot webhooks while private (event mode not deployed).
-Idempotency: immutable `createdate`, half-open window with overlap, MERGE on `deal_id`, watermark after MERGE, per-run staging,
+Idempotency: immutable `createdate`, half-open window with overlap, MERGE on `deal_id` (in the procedure), watermark after the CALL,
 lease per entity, frozen day-1 columns, dry mode that reads.
 
 ## B · n8n on Cloud Run (`deploy/n8n/`, `workflows/`)
 
-Two shapes. **B1** (recommended): n8n is only the delivery tail — A posts the payload to `NEW_DEALS_DELIVERY` (Header Auth), n8n
-builds the XLSX and sends the email (and a text-only email on a zero-row week). **B2**: n8n owns the whole pipeline
-(`NEW_DEALS_FULL`): same window, same scorer (generated Code node, proven equal to Python), same MERGE target and frozen columns,
-same watermark table — reached through n8n nodes.
-Order: `secrets.sh → cloudsql.sh → deploy_n8n.sh → (UI: owner account, 2FA, credentials) → import_workflows.sh → manual test
-execution with ?dry_run=1 → scheduler.sh create → scheduler.sh enable`.
-Needs: Cloud SQL (≈ $9/month, the floor), a pinned image, the HubSpot token copied into an n8n credential, an SA key for BigQuery.
+One shape since pass 3 phase 3. **B1**: n8n is only the delivery tail — A posts the payload to `NEW_DEALS_DELIVERY` (Header Auth),
+n8n builds the XLSX and sends the email (and a text-only email on a zero-row week). **B2** (n8n owning the whole pipeline with a
+generated Code node, `NEW_DEALS_FULL`) was retired (decision D6, `docs/PASS3_RAW_ROOT.md`): the batch is one SQL implementation over
+the raw root that every lane CALLs, so a second shaper had nothing left to mirror; the discovery report `docs/discovery/scenario_B.md`
+keeps its design for the record.
+Order: `secrets.sh → cloudsql.sh → deploy_n8n.sh → (UI: owner account, 2FA, credentials) → import_workflows.sh` (errors + delivery
+workflows), then `DELIVERY_WEBHOOK_URL` in the function's `.env` and `deploy.sh deploy`.
+Needs: Cloud SQL (≈ $9/month, the floor), a pinned image, SMTP and the Header Auth credential (the HubSpot token copy and the BigQuery
+SA key were B2's).
 Cannot: keep secrets in Secret Manager at runtime (community edition), fire a Schedule Trigger while scaled to zero (hence Cloud
-Scheduler → webhook), authenticate keylessly to BigQuery.
+Scheduler → webhook); B1 touches neither HubSpot nor BigQuery.
 Trade: the editor as the operating surface and per-node execution data, against a second copy of everything and seven moving parts.
 
 ## C · Hybrid (`sql/`, `writeback/`, Breeze)
@@ -44,7 +46,7 @@ Chain timing: sync 02:00 UTC → scheduled queries Mon 03:53 (SEALSQ) / 04:23 (I
 
 ## The parallel lane
 
-Whichever orchestrator runs, these are the same: the arithmetic (`scoring/`, pinned by vectors across Python, JS and SQL), the
+Whichever orchestrator runs, these are the same: the arithmetic (the one `hot_score_v1` UDF, pinned by vectors with Python as the oracle), the
 target table and key (`hubspot.new_deals` ON `deal_id`, frozen day-1 columns), the state semantics (`hubspot.report_state`, advance
 only after a successful MERGE), replay (rewind the state row, re-run; MERGE converges), and the audit tables (`new_deals_runs`,
 `new_deals_history`). That is the idempotent outcome the lane matrix marks **Parallel**; everything else is Conditional (same result
@@ -55,5 +57,5 @@ remediation).
 
 Run **A** as the production orchestrator (cheapest, fewest parts, exact window, event path possible later), with **B1** as its
 delivery tail, and add **C**'s compute + write-back when the score must be visible inside HubSpot (Breeze, workflows) — C's SQL
-and the job are already the same arithmetic and the same tables. Build **B2** only if the n8n editor has to be the operating surface;
-its JSON is generated and tested, so that choice costs no re-implementation.
+and the job are already the same arithmetic and the same tables — since pass 3 the same implementation: `sql/new_deals_batch.sql`
+over the raw root, which A lands and CALLs. B2 is retired (D6).

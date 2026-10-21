@@ -6,10 +6,10 @@ report. Three candidate orchestrators are scaffolded side by side so the choice 
 | Lane | Where | Owns | Status |
 |---|---|---|---|
 | **A** Cloud Run function | `cloud_function_new_deals/` | window, score, MERGE, watermark, audit, delivery POST | code + offline tests; first deploy pending |
-| **B** n8n on Cloud Run | `deploy/n8n/`, `workflows/` | B1 delivery tail (recommended) · B2 whole pipeline (generated) | manifests, scripts, generated JSON + parity test |
+| **B** n8n on Cloud Run | `deploy/n8n/`, `workflows/` | B1 delivery tail (recommended); B2 whole pipeline retired in pass 3 (D6) | manifests, scripts, generated JSON |
 | **C** Hybrid | `sql/`, `writeback/` | BigQuery compute over the synced deals, Node 22 write-back, Breeze reads | SQL, scripts, job; needs the first sync run |
 
-Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned by `tests/hot_score_vectors.json`), the tables in
+Shared by every lane: `scoring/` (one hot score — the BigQuery UDF, with Python as the test oracle — pinned by `tests/hot_score_vectors.json`), the tables in
 `cloud_function_new_deals/bigquery_schema.sql` + `sql/audit_tables.sql`, and `CONVENTIONS.md`.
 
 ## Read in this order
@@ -31,7 +31,8 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 8. **Pass 3 (the raw root)** — `docs/PASS3_RAW_ROOT.md`: why a past run could not be recomputed from BigQuery and why the fix is a
    run_ts-keyed landing table rather than an orchestrator; the operator's decisions; phase 1 (shipped): `deals_raw` / `labels_raw`,
    `new_deals_runs.data_gaps`, `sql/land_raw.sql`, `sql/backfill_raw.sh`; phase 2 (shipped): one SQL implementation over the root —
-   `sql/deals_landed_v1.sql` (view + table function) and `sql/new_deals_batch.sql` (procedure), lane C calls it; phase 3 (lane A hand-off) pending.
+   `sql/deals_landed_v1.sql` (view + table function) and `sql/new_deals_batch.sql` (procedure); phase 3 (shipped): the function
+   lands and CALLs it, dry per D1, payload from the tables, n8n B2 retired. Next: the authenticated checks and the first live runs.
 
 ## Tooling (reusable, project-agnostic — also installed in IC-DBT-BQ)
 
@@ -46,7 +47,7 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
 ## Verify before you push
 
 ```bash
-python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py && python3 tests/test_pass3_sql.py
+python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_pass3_sql.py
 for f in cloud_function_new_deals/deploy.sh sql/*.sh writeback/*.sh deploy/n8n/*.sh; do bash -n "$f"; done
 node --check writeback/index.mjs && python3 workflows/src/build_workflow.py --check
 python3 .claude/skills/pass-sequence/scripts/build_surfaces_xlsx.py --spec docs/execution_surfaces.yaml --out /tmp/surfaces.xlsx --verify   # to /tmp: rebuild the committed workbook only when the YAML changed (UNIVERSAL_WORKFLOW.md §4.4)

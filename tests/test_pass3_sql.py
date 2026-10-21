@@ -131,7 +131,8 @@ def test_every_emitted_gap_is_in_the_vocabulary():
     src = (ROOT / "cloud_function_new_deals/main.py").read_text()
     emitted |= set(re.findall(r'gaps\.append\("([a-z_]+)"\)', src))
     assert emitted <= VOCAB, emitted - VOCAB
-    for v in ("raw_landing_failed", "dedup_scope_batch_only", "event_no_window"): assert v in emitted, v
+    for v in ("raw_landing_failed", "raw_slice_replaced", "event_no_window"): assert v in emitted, v
+    assert "dedup_scope_batch_only" not in emitted, "since phase 3 the duplicate horizon is the root; the value stays in the vocabulary for rows written before"
     for v in ("sync_stale", "source_detail_unavailable", "raw_backfilled_from_current_sync", "labels_missing", "dedup_horizon_partial"): assert v in emitted, v
     comment = re.search(r"data_gaps: what a run could not read or compute \((.*?)\)", DDL, re.S).group(1)
     assert {c.strip() for c in comment.replace("\n--", "").split(",")} == VOCAB

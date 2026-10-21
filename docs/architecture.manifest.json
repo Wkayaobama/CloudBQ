@@ -4,11 +4,11 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "EC2E4B12 51DD:05DE",
+ "serial": "D0FB0654 D9E5:B990",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
-  "B": "n8n on Cloud Run (B1 delivery tail · B2 owns the workflow JSON)",
+  "B": "n8n on Cloud Run (B1 delivery tail; B2 — n8n owning the pipeline — retired in pass 3 phase 3)",
   "C": "Hybrid (BigQuery computes · Node 22 job writes back · Breeze consumes · Claude iterates)"
  },
  "layers": {
@@ -44,19 +44,19 @@
  ],
  "counts": {
   "dirs": 38,
-  "files": 137,
-  "annotated": 102,
+  "files": 132,
+  "annotated": 96,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 93,
+   "new": 87,
    "proposed": 0
   },
   "by_scenario": {
    "A": 63,
-   "B": 68,
-   "C": 72
+   "B": 62,
+   "C": 71
   }
  },
  "lanes": {
@@ -169,9 +169,7 @@
    "A": [
     "cloud_function_new_deals/deploy.sh"
    ],
-   "B": [
-    "deploy/n8n/scheduler.sh"
-   ],
+   "B": [],
    "C": [
     "sql/scheduled_query.sh",
     "writeback/deploy_job.sh"
@@ -185,8 +183,7 @@
    ],
    "B": [
     "docs/PASS3_RAW_ROOT.md",
-    "sql/deals_landed_v1.sql",
-    "workflows/NEW_DEALS_FULL.json"
+    "sql/deals_landed_v1.sql"
    ],
    "C": [
     "docs/PASS3_RAW_ROOT.md",
@@ -214,7 +211,6 @@
     "scoring",
     "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
-    "scoring/hot_score_v1.mjs",
     "scoring/README.md",
     "sql/deals_landed_v1.sql",
     "tests/hot_score_vectors.json",
@@ -226,7 +222,6 @@
     "scoring",
     "scoring/deal_tiers_v1.constants.json",
     "scoring/hot_score_v1.constants.json",
-    "scoring/hot_score_v1.mjs",
     "scoring/hot_score_v1.sql",
     "scoring/README.md",
     "sql/deals_landed_v1.sql",
@@ -245,11 +240,7 @@
     "sql/deals_landed_v1.sql"
    ],
    "B": [
-    "sql/deals_landed_v1.sql",
-    "tests/test_n8n_code.py",
-    "workflows/src/node_code.template.js",
-    "workflows/src/shape_score.js",
-    "workflows/NEW_DEALS_FULL.json"
+    "sql/deals_landed_v1.sql"
    ],
    "C": [
     "sql/deals_landed_v1.sql",
@@ -266,8 +257,7 @@
    "B": [
     "cloud_function_new_deals/bigquery_schema.sql",
     "sql/new_deals_batch.sql",
-    "workflows",
-    "workflows/NEW_DEALS_FULL.json"
+    "workflows"
    ],
    "C": [
     "cloud_function_new_deals/bigquery_schema.sql",
@@ -284,8 +274,7 @@
     "sql/new_deals_batch.sql"
    ],
    "B": [
-    "sql/new_deals_batch.sql",
-    "workflows/NEW_DEALS_FULL.json"
+    "sql/new_deals_batch.sql"
    ],
    "C": [
     "sql/new_deals_batch.sql"
@@ -298,8 +287,7 @@
    ],
    "B": [
     "cloud_function_new_deals/n8n_NewDeals_Delivery.json",
-    "workflows/NEW_DEALS_DELIVERY.json",
-    "workflows/NEW_DEALS_FULL.json"
+    "workflows/NEW_DEALS_DELIVERY.json"
    ],
    "C": []
   },
@@ -334,8 +322,7 @@
     "docs/PASS1_SEQUENCE.md",
     "docs/PASS2_L2_TIERS.md",
     "tests/pass3_batch_vectors.sql",
-    "tests/test_pass3_sql.py",
-    "workflows/NEW_DEALS_FULL.json"
+    "tests/test_pass3_sql.py"
    ],
    "C": [
     ".github/workflows/ci.yml",
@@ -677,7 +664,7 @@
    "layer": "L0",
    "status": "modify",
    "parity": "Divergent",
-   "role": "Step runner (check-env … invoker | dry | enable | run | replay | probe | status | logs); canonical gcloud run deploy --function; DRYRUN=1 rehearses offline",
+   "role": "Step runner (check-env … tables routines secret deploy invoker | dry | enable | run | replay | probe | status | logs); routines = the UDF, view, table function and procedure the function CALLs (pass 3); canonical gcloud run deploy --function; DRYRUN=1 rehearses offline",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_deploy_canonical.md",
    "layers_list": [
     "L0",
@@ -699,8 +686,8 @@
    "layer": "L7",
    "status": "modify",
    "parity": "Parallel",
-   "role": "HTTP function: watermark window → HubSpot search → land the search in deals_raw / labels_raw (pass 3 root, shadow) → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit with data_gaps; JSON logs",
-   "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "role": "HTTP function (pass 3): watermark window → HubSpot search → land the search in deals_raw / labels_raw (fatal) → CALL new_deals_batch (shape, score, duplicates, MERGE, history, runs row — one transaction) → watermark → payload from the history slice → delivery; dry lands with mode dry and CALLs with mode dry (D1); lease; shape()/hot_score() kept as test oracles; JSON logs",
+   "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by a_raw_root.md, phase 3 by .claude/skills/aider-scaffold/assets/recipes/a_hand_off.md",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
    "layers_list": [
     "L7",
@@ -760,7 +747,7 @@
    "layer": "L0",
    "status": "new",
    "parity": "Divergent",
-   "role": "The n8n deploy unit: service manifest + Cloud SQL + secrets + import + scheduler",
+   "role": "The n8n deploy unit for the B1 delivery tail: service manifest + Cloud SQL + secrets + import (the B2 scheduler retired in pass 3 phase 3)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_n8n_cloud_run.md",
    "kind": "dir",
    "exists": true
@@ -797,18 +784,6 @@
    "status": "new",
    "parity": "Divergent",
    "role": "Import the workflow JSON through the public REST API; PUT by stable id; credential placeholder remap",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_n8n_cloud_run.md",
-   "kind": "file",
-   "exists": true
-  },
-  "deploy/n8n/scheduler.sh": {
-   "scenarios": [
-    "B"
-   ],
-   "layer": "L3",
-   "status": "new",
-   "parity": "Conditional",
-   "role": "Cloud Scheduler → n8n webhook with X-Delivery-Token, same clock as A, created paused; enable after the dry run",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_n8n_cloud_run.md",
    "kind": "file",
    "exists": true
@@ -1169,7 +1144,7 @@
    "layer": "L5",
    "status": "new",
    "parity": "Parallel",
-   "role": "One hot score, three runtimes, pinned by shared vectors",
+   "role": "One hot score: the BigQuery UDF is the implementation since pass 3, Python the test oracle, pinned by shared vectors (the JS port retired with B2)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
    "kind": "dir",
    "exists": true
@@ -1198,19 +1173,6 @@
    "status": "new",
    "parity": "Parallel",
    "role": "Every constant and tier boundary once; main.py is checked against it",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
-   "kind": "file",
-   "exists": true
-  },
-  "scoring/hot_score_v1.mjs": {
-   "scenarios": [
-    "B",
-    "C"
-   ],
-   "layer": "L5",
-   "status": "new",
-   "parity": "Parallel",
-   "role": "JS port (Cloud Run job; source for the n8n Code node); raw score == Python within 1e-9 on 15 vectors",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
    "kind": "file",
    "exists": true
@@ -1550,7 +1512,7 @@
    "layer": "L5",
    "status": "new",
    "parity": "Parallel",
-   "role": "Builds the vectors from main.hot_score, checks constants, runs the JS port, emits the SQL check",
+   "role": "Builds the vectors from main.hot_score, checks constants, emits the SQL check (the JS port was retired with B2, D6)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md",
    "kind": "file",
    "exists": true
@@ -1573,21 +1535,9 @@
    ],
    "layer": "L11",
    "status": "new",
-   "role": "Pass 3 root: landing order, slice replacement (strict, whole slice for a window, own deal for an event), JSON dict, dry does not land, failure named, data_gaps as an ArrayQueryParameter, time-boxed jobs, runs row kept on an un-migrated table; Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
+   "role": "Pass 3 phase 3: contract == schema; dry lands with mode dry, CALLs with mode dry, no sink/state/lease; live lands BEFORE the CALL and advances the watermark AFTER it; the CALL's parameters (window, started_ms, gaps as an ArrayQueryParameter, advance_state FALSE); landing failure fatal and named; CALL failure → lease released, no second FAILED row; 409; event mode; delivery failure amends the runs row; the landing invariants of phase 1; time-boxed jobs",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_hand_off.md",
    "parity": "Conditional",
-   "kind": "file",
-   "exists": true
-  },
-  "tests/test_n8n_code.py": {
-   "scenarios": [
-    "B"
-   ],
-   "layer": "L6",
-   "status": "new",
-   "parity": "Conditional",
-   "role": "Generated n8n Code node == main.shape() on identical deals (every row field)",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
    "kind": "file",
    "exists": true
   },
@@ -1638,7 +1588,7 @@
    "layer": "L7",
    "status": "new",
    "parity": "Parallel",
-   "role": "Generated n8n workflows (never hand-edit the Code node or the MERGE SQL)",
+   "role": "Generated n8n workflows: B1 delivery tail + errors (never hand-edit; B2 NEW_DEALS_FULL retired in pass 3 phase 3)",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
    "kind": "dir",
    "exists": true
@@ -1649,33 +1599,9 @@
    ],
    "layer": "L0",
    "status": "new",
-   "role": "Generates the three JSON files from the constants, shape_score.js, the template and the schema; --check gate",
+   "role": "Generates the two n8n JSON files (B1 delivery, errors) from cloud_function_new_deals/n8n_NewDeals_Delivery.json; --check is the pre-push gate; B2 generation retired in pass 3 phase 3",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
    "parity": "Divergent",
-   "kind": "file",
-   "exists": true
-  },
-  "workflows/src/node_code.template.js": {
-   "scenarios": [
-    "B"
-   ],
-   "layer": "L6",
-   "status": "new",
-   "role": "n8n glue around the pure functions: reads the other nodes, builds rows and the four SQL statements",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
-   "parity": "Conditional",
-   "kind": "file",
-   "exists": true
-  },
-  "workflows/src/shape_score.js": {
-   "scenarios": [
-    "B"
-   ],
-   "layer": "L6",
-   "status": "new",
-   "parity": "Conditional",
-   "role": "Pure port of hot_score / name_key / shape (injected into the Code node); equal to Python on the parity test",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
    "kind": "file",
    "exists": true
   },
@@ -1713,27 +1639,6 @@
    "parity": "Divergent",
    "role": "Error Trigger → email with workflow, node, execution URL",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
-   "kind": "file",
-   "exists": true
-  },
-  "workflows/NEW_DEALS_FULL.json": {
-   "scenarios": [
-    "B"
-   ],
-   "layer": "L7",
-   "status": "new",
-   "parity": "Parallel",
-   "role": "B2: webhook → window once → HubSpot search (paginated) → labels → recent names → Code shape+score → IF dry → MERGE (inline JSON literal) → history → watermark → run log → XLSX → email → respond",
-   "notes": "same table, same key, same frozen columns as A; the HTTP Request pagination parameters are best-effort and validated on import",
-   "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
-   "layers_list": [
-    "L7",
-    "L4",
-    "L6",
-    "L8",
-    "L9",
-    "L11"
-   ],
    "kind": "file",
    "exists": true
   },
@@ -2004,6 +1909,12 @@
               "name": "a_deploy_canonical.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/a_deploy_canonical.md",
+              "exists": true
+             },
+             {
+              "name": "a_hand_off.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/a_hand_off.md",
               "exists": true
              },
              {
@@ -2586,7 +2497,7 @@
        "layer": "L0",
        "status": "modify",
        "parity": "Divergent",
-       "role": "Step runner (check-env … invoker | dry | enable | run | replay | probe | status | logs); canonical gcloud run deploy --function; DRYRUN=1 rehearses offline",
+       "role": "Step runner (check-env … tables routines secret deploy invoker | dry | enable | run | replay | probe | status | logs); routines = the UDF, view, table function and procedure the function CALLs (pass 3); canonical gcloud run deploy --function; DRYRUN=1 rehearses offline",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_deploy_canonical.md",
        "layers_list": [
         "L0",
@@ -2612,8 +2523,8 @@
        "layer": "L7",
        "status": "modify",
        "parity": "Parallel",
-       "role": "HTTP function: watermark window → HubSpot search → land the search in deals_raw / labels_raw (pass 3 root, shadow) → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit with data_gaps; JSON logs",
-       "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+       "role": "HTTP function (pass 3): watermark window → HubSpot search → land the search in deals_raw / labels_raw (fatal) → CALL new_deals_batch (shape, score, duplicates, MERGE, history, runs row — one transaction) → watermark → payload from the history slice → delivery; dry lands with mode dry and CALLs with mode dry (D1); lease; shape()/hot_score() kept as test oracles; JSON logs",
+       "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by a_raw_root.md, phase 3 by .claude/skills/aider-scaffold/assets/recipes/a_hand_off.md",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
        "layers_list": [
         "L7",
@@ -2750,22 +2661,6 @@
         }
        },
        {
-        "name": "scheduler.sh",
-        "kind": "file",
-        "path": "deploy/n8n/scheduler.sh",
-        "exists": true,
-        "ann": {
-         "scenarios": [
-          "B"
-         ],
-         "layer": "L3",
-         "status": "new",
-         "parity": "Conditional",
-         "role": "Cloud Scheduler → n8n webhook with X-Delivery-Token, same clock as A, created paused; enable after the dry run",
-         "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_n8n_cloud_run.md"
-        }
-       },
-       {
         "name": "secrets.sh",
         "kind": "file",
         "path": "deploy/n8n/secrets.sh",
@@ -2817,7 +2712,7 @@
        "layer": "L0",
        "status": "new",
        "parity": "Divergent",
-       "role": "The n8n deploy unit: service manifest + Cloud SQL + secrets + import + scheduler",
+       "role": "The n8n deploy unit for the B1 delivery tail: service manifest + Cloud SQL + secrets + import (the B2 scheduler retired in pass 3 phase 3)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_n8n_cloud_run.md"
       }
      }
@@ -3327,23 +3222,6 @@
       }
      },
      {
-      "name": "hot_score_v1.mjs",
-      "kind": "file",
-      "path": "scoring/hot_score_v1.mjs",
-      "exists": true,
-      "ann": {
-       "scenarios": [
-        "B",
-        "C"
-       ],
-       "layer": "L5",
-       "status": "new",
-       "parity": "Parallel",
-       "role": "JS port (Cloud Run job; source for the n8n Code node); raw score == Python within 1e-9 on 15 vectors",
-       "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md"
-      }
-     },
-     {
       "name": "hot_score_v1.sql",
       "kind": "file",
       "path": "scoring/hot_score_v1.sql",
@@ -3387,7 +3265,7 @@
      "layer": "L5",
      "status": "new",
      "parity": "Parallel",
-     "role": "One hot score, three runtimes, pinned by shared vectors",
+     "role": "One hot score: the BigQuery UDF is the implementation since pass 3, Python the test oracle, pinned by shared vectors (the JS port retired with B2)",
      "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md"
     }
    },
@@ -3793,7 +3671,7 @@
        "layer": "L5",
        "status": "new",
        "parity": "Parallel",
-       "role": "Builds the vectors from main.hot_score, checks constants, runs the JS port, emits the SQL check",
+       "role": "Builds the vectors from main.hot_score, checks constants, emits the SQL check (the JS port was retired with B2, D6)",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/scoring_hot_score_ports.md"
       }
      },
@@ -3824,25 +3702,9 @@
        ],
        "layer": "L11",
        "status": "new",
-       "role": "Pass 3 root: landing order, slice replacement (strict, whole slice for a window, own deal for an event), JSON dict, dry does not land, failure named, data_gaps as an ArrayQueryParameter, time-boxed jobs, runs row kept on an un-migrated table; Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
-       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
+       "role": "Pass 3 phase 3: contract == schema; dry lands with mode dry, CALLs with mode dry, no sink/state/lease; live lands BEFORE the CALL and advances the watermark AFTER it; the CALL's parameters (window, started_ms, gaps as an ArrayQueryParameter, advance_state FALSE); landing failure fatal and named; CALL failure → lease released, no second FAILED row; 409; event mode; delivery failure amends the runs row; the landing invariants of phase 1; time-boxed jobs",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_hand_off.md",
        "parity": "Conditional"
-      }
-     },
-     {
-      "name": "test_n8n_code.py",
-      "kind": "file",
-      "path": "tests/test_n8n_code.py",
-      "exists": true,
-      "ann": {
-       "scenarios": [
-        "B"
-       ],
-       "layer": "L6",
-       "status": "new",
-       "parity": "Conditional",
-       "role": "Generated n8n Code node == main.shape() on identical deals (every row field)",
-       "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md"
       }
      },
      {
@@ -3922,41 +3784,9 @@
          ],
          "layer": "L0",
          "status": "new",
-         "role": "Generates the three JSON files from the constants, shape_score.js, the template and the schema; --check gate",
+         "role": "Generates the two n8n JSON files (B1 delivery, errors) from cloud_function_new_deals/n8n_NewDeals_Delivery.json; --check is the pre-push gate; B2 generation retired in pass 3 phase 3",
          "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
          "parity": "Divergent"
-        }
-       },
-       {
-        "name": "node_code.template.js",
-        "kind": "file",
-        "path": "workflows/src/node_code.template.js",
-        "exists": true,
-        "ann": {
-         "scenarios": [
-          "B"
-         ],
-         "layer": "L6",
-         "status": "new",
-         "role": "n8n glue around the pure functions: reads the other nodes, builds rows and the four SQL statements",
-         "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
-         "parity": "Conditional"
-        }
-       },
-       {
-        "name": "shape_score.js",
-        "kind": "file",
-        "path": "workflows/src/shape_score.js",
-        "exists": true,
-        "ann": {
-         "scenarios": [
-          "B"
-         ],
-         "layer": "L6",
-         "status": "new",
-         "parity": "Conditional",
-         "role": "Pure port of hot_score / name_key / shape (injected into the Code node); equal to Python on the parity test",
-         "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md"
         }
        }
       ]
@@ -4009,31 +3839,6 @@
        "role": "Error Trigger → email with workflow, node, execution URL",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md"
       }
-     },
-     {
-      "name": "NEW_DEALS_FULL.json",
-      "kind": "file",
-      "path": "workflows/NEW_DEALS_FULL.json",
-      "exists": true,
-      "ann": {
-       "scenarios": [
-        "B"
-       ],
-       "layer": "L7",
-       "status": "new",
-       "parity": "Parallel",
-       "role": "B2: webhook → window once → HubSpot search (paginated) → labels → recent names → Code shape+score → IF dry → MERGE (inline JSON literal) → history → watermark → run log → XLSX → email → respond",
-       "notes": "same table, same key, same frozen columns as A; the HTTP Request pagination parameters are best-effort and validated on import",
-       "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md",
-       "layers_list": [
-        "L7",
-        "L4",
-        "L6",
-        "L8",
-        "L9",
-        "L11"
-       ]
-      }
      }
     ],
     "ann": {
@@ -4043,7 +3848,7 @@
      "layer": "L7",
      "status": "new",
      "parity": "Parallel",
-     "role": "Generated n8n workflows (never hand-edit the Code node or the MERGE SQL)",
+     "role": "Generated n8n workflows: B1 delivery tail + errors (never hand-edit; B2 NEW_DEALS_FULL retired in pass 3 phase 3)",
      "recipe": ".claude/skills/aider-scaffold/assets/recipes/b_workflows_generated.md"
     }
    },

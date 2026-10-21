@@ -84,7 +84,8 @@ BEGIN
       INSERT INTO `${PROJECT}.${DATASET}.new_deals_history`
       SELECT p_run_ts, entity, p_orchestrator, * EXCEPT(entity) FROM batch;
 
-      DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs` WHERE run_ts = p_run_ts AND entity = p_entity AND orchestrator = p_orchestrator;
+      DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs`
+      WHERE run_ts = p_run_ts AND entity = p_entity AND orchestrator = p_orchestrator AND p_mode <> 'event';   -- events are never replayed; two in one second keep both rows
       INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
         (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms, data_gaps)
       SELECT p_run_ts, p_entity, p_mode, FALSE, p_orchestrator, p_watermark_in, p_query_start, p_query_end,

@@ -17,8 +17,9 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals` (
   first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
 PARTITION BY DATE(createdate) CLUSTER BY entity, deal_id;
 
--- One row per run (window or event; live runs only — a dry run writes no row until decision D1 takes effect in pass 3 phase 3), written
--- last; the audit trail every scenario shares (layer L13).
+-- One row per run (window, event or dry — a dry run leaves one row with dry_run = TRUE and rows_written = 0 since pass 3, D1), written by
+-- the procedure new_deals_batch (OK or FAILED) and by the function only when the run failed before the procedure could; the audit
+-- trail every scenario shares (layer L13).
 CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_runs` (
   run_ts TIMESTAMP NOT NULL, entity STRING, mode STRING, dry_run BOOL, orchestrator STRING,
   watermark_in TIMESTAMP, query_start TIMESTAMP, query_end TIMESTAMP,
@@ -65,8 +66,8 @@ OPTIONS (partition_expiration_days = 730);
 -- raw_landing_failed, raw_slice_replaced, raw_backfilled_from_current_sync, source_detail_unavailable, event_no_window)
 ALTER TABLE `${PROJECT}.${DATASET}.new_deals_runs` ADD COLUMN IF NOT EXISTS data_gaps ARRAY<STRING>;
 
--- Per-run staging tables are created by the function as `${DATASET}.new_deals_staging_<entity>_<run_ts>` and dropped after the MERGE;
--- the service account needs bigquery.dataEditor on the dataset (deploy.sh grants it).
+-- Since pass 3 the function creates no staging table: the procedure MERGEs from a TEMP table of its own; the service account needs
+-- bigquery.dataEditor on the dataset (deploy.sh grants it: tables, routines, the raw landing).
 
 -- Weekly view used by the delivery step / Breeze consumption (new deals created in the last 7 days, newest first)
 CREATE OR REPLACE VIEW `${PROJECT}.${DATASET}.new_deals_last_7d` AS

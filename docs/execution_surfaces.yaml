@@ -20,7 +20,7 @@ verdict: 'Verdict (pre-flight, 2026-10-05, commit 9e7e18a and the critic fixes t
 
   913f63a scenario C, 9e7e18a scenario B; offline evidence tests/test_hot_score.py (15 vectors, JS == Python), tests/test_main_offline.py
 
-  (6 tests), tests/test_n8n_code.py (Code node == main.shape()), DRYRUN=1 rehearsals of deploy.sh, sql/apply.sh, deploy/n8n/*.sh,
+  (6 tests), tests/test_n8n_code.py (Code node == main.shape(); retired with B2 in pass 3 phase 3), DRYRUN=1 rehearsals of deploy.sh, sql/apply.sh, deploy/n8n/*.sh,
 
   writeback/deploy_job.sh. The probe for pass 1 is `deploy.sh probe` / `deploy.sh status` (bq over new_deals, new_deals_runs,
 
@@ -28,7 +28,9 @@ verdict: 'Verdict (pre-flight, 2026-10-05, commit 9e7e18a and the critic fixes t
 
   (workflows/NEW_DEALS_DELIVERY.json) as its delivery tail and C''s compute views + write-back job as the Breeze-facing extension; B2 only if
 
-  the n8n editor must be the operating surface.'
+  the n8n editor must be the operating surface. 2026-10-21 (pass 3 phase 3): B2 retired (D6); L5/L6/L7/L13 are one implementation,
+
+  sql/new_deals_batch.sql over the raw root, that every lane CALLs.'
 legend: 'Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. The columns A/B/C are the three candidate
 
   SCENARIOS (not three terminals), so the Overview''s "Ubuntu" column reads as *runtime*. Layers L0–L17 are the execution layer from code
@@ -48,11 +50,11 @@ legend: 'Legend: Parity column colours — green Parallel, yellow Conditional, o
   workflows/, tests/; scratchpad/discovery/scenario_{A,B,C}.md and result_{A,B,C}.json; the user''s scenario notes and risk table of
 
   2026-10-05. Nothing has run against GCP: every "not yet" is the first authenticated run''s job. Parity here is OUTCOME parity: Parallel means
-  the same tables, keys, constants and audit rows whichever lane runs, proven by tests/ (Python == JS) and by the equality checks once credentials
-  exist; L5/L7/L8/L13 are three code paths that must agree, not one shared code path.'
+  the same tables, keys, constants and audit rows whichever lane runs, proven by tests/ (Python oracle == SQL UDF; since pass 3 one SQL implementation) and by the equality checks once credentials
+  exist; L5/L7/L8/L13 were three code paths that had to agree — since pass 3 phase 3 L5/L6/L7/L13 are one shared SQL path.'
 surfaces:
   A: 'A · Cloud Run function (deploy.sh → gcloud run deploy --function, Scheduler OIDC, Secret Manager, BigQuery MERGE) — operator surfaces: Cloud Shell runbook docs/RUNBOOK_CLOUD_SHELL.md and the Vertex AI Workbench notebook notebooks/cloudbq_deploy_and_witness.ipynb (same deploy.sh)'
-  B: B · n8n on Cloud Run (B1 delivery tail NEW_DEALS_DELIVERY.json; B2 full pipeline NEW_DEALS_FULL.json via Scheduler → webhook)
+  B: 'B · n8n on Cloud Run (B1 delivery tail NEW_DEALS_DELIVERY.json; B2 — n8n owning the pipeline, NEW_DEALS_FULL.json — retired in pass 3 phase 3, decision D6; its cells record the design as built)'
   C: C · BigQuery compute (synced deals, hot_score_v1 UDF, scheduled script) + Node 22 write-back job; Breeze reads, Claude iterates
 motions:
 - motion: A · Cloud Run function + Cloud Scheduler
@@ -68,19 +70,17 @@ motions:
 
     audience = service URL, --attempt-deadline 600s, 3 retries, created PAUSED and resumed by `deploy.sh enable` after `deploy.sh dry`;
 
-    manual: curl with `gcloud auth print-identity-token`; ?dry_run=1 reads everything, writes nothing.'
-  state: 'hubspot.report_state (watermark + lock_until lease per NEW_DEALS_<entity>), hubspot.new_deals (MERGE on deal_id), per-run staging
-
-    new_deals_staging_<entity>_<run_ts> (dropped), hubspot.new_deals_runs + new_deals_history (audit), Secret Manager hubspot-token:<pinned>,
+    manual: curl with `gcloud auth print-identity-token`; ?dry_run=1 lands with mode dry and leaves one runs row (D1), nothing in the sink or the state.'
+  state: 'hubspot.report_state (watermark + lock_until lease per NEW_DEALS_<entity>), hubspot.new_deals (MERGE on deal_id), hubspot.new_deals_runs + new_deals_history (audit), Secret Manager hubspot-token:<pinned>,
 
     .env (gitignored) for PROJECT/REGION/DATASET.'
-  assessment: 'Fully programmed; offline tests prove dry-reads/no-writes, per-run staging, frozen update list, watermark after MERGE, 409 on an
+  assessment: 'Fully programmed; offline tests prove the dry gate (D1), land → CALL new_deals_batch → watermark, the CALL contract, both failure paths, 409 on an
 
     overlapping lease, event mode never touching the watermark. First-deploy expectation medium: one or two IAM / API iterations, and
 
     new_deals_history must exist before the first live run (R44). Cheapest (< $1/month) and the only keyless lane.'
 - motion: B · n8n on Cloud Run (B1 delivery tail; B2 full pipeline)
-  acquire: 'deploy/n8n/{secrets.sh, cloudsql.sh, deploy_n8n.sh, import_workflows.sh, scheduler.sh}; service.yaml applied with
+  acquire: 'deploy/n8n/{secrets.sh, cloudsql.sh, deploy_n8n.sh, import_workflows.sh} (scheduler.sh retired with B2); service.yaml applied with
 
     `gcloud run services replace` (pinned image docker.io/n8nio/n8n:2.41.7); workflows/*.json generated by workflows/src/build_workflow.py
 
@@ -162,7 +162,7 @@ layers:
   remediation: 'Every unit is a create-or-update script reading the same .env (.env.example) and honouring DRYRUN=1; workflows are generated,
     never
 
-    hand-edited (build_workflow.py --check in tests/test_n8n_code.py); docs/diffs ledger keeps one patch per commit.'
+    hand-edited (build_workflow.py --check in CI); docs/diffs ledger keeps one patch per commit.'
   verified: 'DRYRUN=1 deploy.sh (all sub-commands print their commands); DRYRUN=1 deploy/n8n/deploy_n8n.sh (renders service.yaml, no placeholder);
 
     DRYRUN=1 sql/apply.sh (5 files render, 17 DDL statements); DRYRUN=1 writeback/deploy_job.sh; build_workflow --check up to date.
@@ -175,7 +175,7 @@ layers:
     (project) and roles/run.builder to the compute SA; `deploy.sh tables` issues GRANT `roles/bigquery.dataEditor` ON SCHEMA
 
     `$PROJECT.$DATASET` TO "serviceAccount:new-deals-fn@…" after CREATE SCHEMA IF NOT EXISTS.'
-  B: 'B1: n8n never touches BigQuery. B2: Google Service Account credential = exported JSON key of n8n-bq@ written by deploy/n8n/secrets.sh
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B1: n8n never touches BigQuery. B2: Google Service Account credential = exported JSON key of n8n-bq@ written by deploy/n8n/secrets.sh
 
     to deploy/n8n/.secrets/n8n-bq.key.json (gitignored), same jobUser + DCL GRANT; stored encrypted in Cloud SQL under N8N_ENCRYPTION_KEY.
 
@@ -220,7 +220,7 @@ layers:
 - id: L3
   layer: Trigger & schedule
   A: '`deploy.sh invoker`: two Cloud Scheduler HTTP jobs new-deals-SEALSQ "0 7 * * 1" and new-deals-ICALPS "20 7 * * 1" --time-zone Europe/Zurich, GET $URL?entity=…, --oidc-service-account-email new-deals-fn@, --oidc-token-audience $URL, --attempt-deadline 600s, --max-retry-attempts 3, create-or-update, created PAUSED; `deploy.sh enable` resumes only PAUSED jobs and `pause` only ENABLED ones (idempotent, R49). Cloud Scheduler is offered in europe-west6 (locations page, 2026-10-16).'
-  B: 'B1: A''s jobs; the function then POSTs to the webhook. B2: deploy/n8n/scheduler.sh — jobs n8n-new-deals-SEALSQ / -ICALPS with the same
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B1: A''s jobs; the function then POSTs to the webhook. B2: deploy/n8n/scheduler.sh — jobs n8n-new-deals-SEALSQ / -ICALPS with the same
 
     SCHEDULE_SEALSQ / SCHEDULE_ICALPS and time zone from .env, POST $N8N_URL/webhook/new-deals-run?entity=…, header X-Delivery-Token from
 
@@ -251,12 +251,14 @@ layers:
 
     HubSpot POST /crm/v3/objects/deals/search createdate GTE watermark − OVERLAP_MINUTES(5) AND LT run_ts, PROPS (29 properties), sort
 
-    createdate ASC, 200/page; deals filtered by ENTITIES[entity].pipelines, the rest kept as duplicate candidates ("others"). Pass 3
+    createdate ASC, 200/page; deals filtered by ENTITIES[entity].pipelines, the rest kept as duplicate candidates ("others"). Pass 3:
 
-    phase 1: the whole search result (in_scope per deal) and the pipeline/stage/owner maps land in deals_raw / labels_raw keyed by
+    the whole search result (in_scope per deal) and the pipeline/stage/owner maps land in deals_raw / labels_raw keyed by (run_ts,
 
-    (run_ts, entity, orchestrator) before shape() — load first, delete-older second; non-fatal (data_gaps raw_landing_failed); dry does not land.'
-  B: 'B1: in the function. B2: node "Read watermark" (same SELECT, same report_id) → Code node "Window" computes watermark_in / query_start /
+    entity, orchestrator) — load first, delete-older second, time-boxed; since phase 3 a landing failure fails the run (named
+
+    raw_landing_failed) and dry runs land too, with mode = dry (D1). The function computes nothing from the search itself.'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B1: in the function. B2: node "Read watermark" (same SELECT, same report_id) → Code node "Window" computes watermark_in / query_start /
 
     query_end once → HTTP Request "HubSpot search" with the identical filterGroups, PROPS list, sort and limit 200, paginated on
 
@@ -286,17 +288,15 @@ layers:
     search/event mode as the extractor and let C only compute from new_deals. For strict parity C could read new_deals (A''s output)
 
     instead of the sync.'
-  verified: 'A: tests/test_main_offline.py::test_dry_reads_but_writes_nothing (watermark read in dry mode) and test_first_run_without_watermark_uses_first_run_days;
+  verified: 'A: tests/test_main_offline.py::test_dry_lands_calls_with_mode_dry_and_touches_no_sink_or_state (watermark read in dry mode) and test_first_run_without_watermark_uses_first_run_days;
 
     B2: tests/test_n8n_code.py (Window values flow into the payload). C: by reading sql/new_deals_weekly.sql; synced columns unknown until
 
     the first transfer run (R36). Live search: not yet — first authenticated run.'
 - id: L5
   layer: Scoring arithmetic (hot score v1)
-  A: 'main.py hot_score() — W, BIAS = −6.4788, THRESHOLD = 45.0, CR {12096408: 84/730, 13772279: 51/303}, MAXC = 223; round(s, 1);
-
-    (None, None) for other pipelines. Canonical: tests/test_hot_score.py rebuilds tests/hot_score_vectors.json from it.'
-  B: 'workflows/src/shape_score.js hotScore() injected into the Code node "Shape + score" with the constants from
+  A: 'Pass 3 phase 3: the function no longer scores — CALL new_deals_batch runs new_deals_batch_rows, which applies the persistent UDF hot_score_v1 (scoring/hot_score_v1.sql) with run_ts as "now"; main.py hot_score() survives as the test oracle that builds tests/hot_score_vectors.json (tests/test_hot_score.py) and tests/pass3_batch_vectors.sql proves the UDF on the same vectors through the root.'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] workflows/src/shape_score.js hotScore() injected into the Code node "Shape + score" with the constants from
 
     scoring/hot_score_v1.constants.json at build time (build_workflow.py code_js()); scoring/hot_score_v1.mjs is the standalone JS port
 
@@ -309,7 +309,7 @@ layers:
 
     tests/pass3_batch_vectors.sql runs the same 15 vectors through the root → view → table function in a dev dataset.'
   parity: Parallel
-  diverges: 'Nothing by design: one constants file, one vector file, three ports. The only tolerated difference is a 0.1 step at an exact
+  diverges: 'Nothing by design: one constants file, one vector file, one UDF since pass 3 (Python is the test oracle; the JS port retired with B2). The only tolerated difference is a 0.1 step at an exact
 
     rounding tie (Python half-to-even vs JS/SQL half-away), asserted as |Δscore| ≤ 0.1 with raw |Δ| < 1e-9 (B-G11, contested: unreachable
 
@@ -319,17 +319,13 @@ layers:
     (hot_score_v2 + hot_deals_v2), never an edit of v1.'
   verified: 'tests/test_hot_score.py 2026-10-05: 15 vectors, "constants OK · python vectors OK · JS port OK (raw |Δ| < 1e-9, flags equal)";
 
-    tests/test_n8n_code.py row-for-row equality incl. day1_hot_score; SQL UDF: DuckDB harness offline 0/4,000 mismatches
+    (B2 retired) tests/test_n8n_code.py row-for-row equality incl. day1_hot_score; SQL UDF: DuckDB harness offline 0/4,000 mismatches, tests/pass3_batch_vectors.sql through the root
 
     (scenario_C.md) — `bq query < tests/hot_score_vectors.sql` (every ok = TRUE): not yet — first authenticated run.'
 - id: L6
   layer: Shaping & duplicate flag
-  A: 'main.py name_key() (final_customer else first token of dealname split on -/|(, lower-cased alphanumerics, 40 chars) and shape():
-
-    31 columns = bigquery_schema.sql; dup_in_batch across all pipelines in the window; dup_known from recent_names() (new_deals, 90 days,
-
-    every entity, key → [deal_ids], self excluded, ERROR log + empty map on failure); rows sorted (−amount_kusd, deal_id).'
-  B: 'workflows/src/shape_score.js nameKey() / shapeRows() — same regexes, same batch + known logic; node "Recent names" runs the same
+  A: 'Pass 3 phase 3: shaping and the duplicate flag happen in the table function new_deals_batch_rows (sql/deals_landed_v1.sql) over the slice the function landed — name_key in the view, labels from labels_raw, duplicates = lane C''s rule over the root (D3); main.py shape() / name_key() survive as test oracles (tests/test_main_offline.py renders the fake history slice from them).'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] workflows/src/shape_score.js nameKey() / shapeRows() — same regexes, same batch + known logic; node "Recent names" runs the same
 
     90-day SELECT with continue-on-fail (→ empty map like A); same sort. Column list comes from bigquery_schema.sql at build time.'
   C: 'Pass 3 phase 2 — sql/deals_landed_v1.sql: name_key = IFNULL(SUBSTR(REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(final_customer),''''),
@@ -342,25 +338,17 @@ layers:
 
     Before phase 2 the weekly script did the same over the synced views.'
   parity: Conditional
-  diverges: 'Same flag when the twin is in the same window or already in hubspot.new_deals within 90 days. C sees every twin in the synced table,
-
-    including deals A never reported (older than A''s first run) — C is the stricter rule (C-G5); duplicate_of ordering differs
-
-    (A: batch then known; C: by createdate).'
+  diverges: 'None since pass 3 phase 3: one rule over the root for every lane (sql/deals_landed_v1.sql, decision D3); the only residue is the horizon until the root is 90 days old (dedup_horizon_partial on the runs row).'
   remediation: 'For strict parity restrict C''s `recent` CTE to deal_id IN (SELECT deal_id FROM new_deals); otherwise document C as stricter and
 
     compare flags only for deals whose twins are in new_deals (Equality checks).'
-  verified: 'A == B2: tests/test_n8n_code.py::test_code_node_matches_python_shape (every field of every row, dup twin in batch + warehouse);
+  verified: 'A: tests/test_main_offline.py::test_row_contract_equals_schema; one implementation for every lane since pass 3, proved by tests/test_pass3_sql.py and tests/pass3_batch_vectors.sql (B2 retired; its former proof tests/test_n8n_code.py::test_code_node_matches_python_shape covered every field of every row, dup twin in batch + warehouse);
 
     A: tests/test_main_offline.py::test_row_contract_equals_schema (31 columns). C: by reading the SQL; not yet — first authenticated run.'
 - id: L7
   layer: Load → MERGE into hubspot.new_deals
-  A: 'main.py merge_rows(): load_table_from_json into per-run staging new_deals_staging_<entity>_<run_ts> (WRITE_TRUNCATE, schema of
-
-    new_deals), then MERGE `new_deals` t USING staging s ON t.deal_id = s.deal_id WHEN MATCHED UPDATE SET every column except FROZEN =
-
-    (deal_id, first_seen_run, day1_hot_score, day1_hot_flag) WHEN NOT MATCHED INSERT; staging dropped in finally.'
-  B: 'B2 node "MERGE new_deals": one Execute Query whose USING source is SELECT … FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(''''''<rows json>'''''')))
+  A: 'Pass 3 phase 3: ONE statement — CALL `$PROJECT.$DATASET.new_deals_batch`(@run_ts, @entity, ''cloud-run-function'', @mode, FALSE, NULL, @watermark_in, @query_start, @query_end, @started_ms, @gaps) — the procedure MERGEs new_deals from the table function (frozen four untouched, older-slice guard), writes the history slice and the runs row in one transaction; no per-run staging table any more; CALL_TIMEOUT_S (300 s).'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2 node "MERGE new_deals": one Execute Query whose USING source is SELECT … FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(''''''<rows json>'''''')))
     r
 
     with SAFE_CASTs per column type; same ON deal_id, same frozen set — generated by build_workflow.py sql_templates() from
@@ -376,7 +364,7 @@ layers:
 
     writes one runs row and nothing else; any error → ROLLBACK, FAILED runs row, RAISE.'
   parity: Parallel
-  diverges: 'Same target, same key, same update list, same insert; only the MERGE''s source differs (per-run staging table / inline JSON / TEMP
+  diverges: 'Same target, same key, same update list, same insert — since pass 3 one source too: the procedure''s TEMP table for A and C (B2 retired). Before: (per-run staging table / inline JSON / TEMP
 
     table) and none of those sources is shared or persistent, so nothing local can change the outcome. Re-running a window writes nothing
 
@@ -384,19 +372,15 @@ layers:
   remediation: 'None needed. Keep the frozen set in one place per surface (main.py FROZEN, build_workflow.py frozen, the UPDATE list in
 
     new_deals_weekly.sql) and let the Equality check "after a second identical run" prove it.'
-  verified: 'A: tests/test_main_offline.py::test_live_uses_per_run_staging_and_frozen_update_list (one staging table, dropped; day1_* and
+  verified: 'A: tests/test_main_offline.py::test_live_lands_before_the_call_and_advances_the_watermark_after_it (no staging table; the frozen set is proved by tests/test_pass3_sql.py::test_merge_update_list_excludes_the_frozen_columns; day1_* and
 
     first_seen_run absent from UPDATE SET); B2: tests/test_n8n_code.py asserts JSON_QUERY_ARRAY source and no day1_hot_score in the
 
     UPDATE list; C: the UPDATE list read against the schema (27 columns, same exclusions). MERGE executed: not yet — first authenticated run.'
 - id: L8
   layer: Watermark advance
-  A: 'main.py write_watermark(): UPDATE report_state SET watermark = run_ts, updated_at = CURRENT_TIMESTAMP(), lock_until = NULL WHERE
-
-    report_id = ''NEW_DEALS_<entity>'' — called only after merge_rows() and write_history() succeeded, window mode only (event mode and
-
-    dry mode never touch it); the row is created on first run by acquire_lease().'
-  B: 'B2 node "Advance watermark": MERGE report_state USING (SELECT ''NEW_DEALS_<entity>'', TIMESTAMP ''<run_ts>'') … UPDATE SET watermark,
+  A: 'main.py write_watermark(): UPDATE report_state SET watermark = run_ts, updated_at = now, lock_until = NULL WHERE report_id = ''NEW_DEALS_<entity>'' — after a successful CALL and the read-back of the rows (the procedure is called with advance_state = FALSE: the lease and A''s row stay in the function; a read-back failure keeps the window replayable); never in event or dry mode; tests/test_main_offline.py pins the order land → CALL → read → watermark.'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2 node "Advance watermark": MERGE report_state USING (SELECT ''NEW_DEALS_<entity>'', TIMESTAMP ''<run_ts>'') … UPDATE SET watermark,
 
     updated_at, lock_until = NULL / INSERT — wired strictly after "MERGE new_deals" and "History slice" with the default On Error = stop,
 
@@ -418,9 +402,9 @@ layers:
   remediation: 'None needed for the semantics. If C ever becomes the only orchestrator, rename its key to NEW_DEALS_<entity> after pausing A''s
 
     jobs (deploy.sh pause).'
-  verified: 'A: tests/test_main_offline.py::test_live_uses_per_run_staging_and_frozen_update_list (MERGE index < watermark index, lease released)
+  verified: 'A: tests/test_main_offline.py::test_live_lands_before_the_call_and_advances_the_watermark_after_it (CALL index < watermark index, lease released)
 
-    and ::test_event_mode_never_touches_watermark; B2: tests/test_n8n_code.py asserts the watermark MERGE text and report_id; C: by reading
+    and ::test_event_mode_calls_with_mode_event_and_never_touches_state; B2: tests/test_n8n_code.py asserts the watermark MERGE text and report_id; C: by reading
 
     the transaction. report_state rows: not yet — first authenticated run.'
 - id: L9
@@ -428,7 +412,7 @@ layers:
   A: 'main.py _deliver(): POST payload to DELIVERY_WEBHOOK_URL with X-Delivery-Token, 3 tries (0/5/15 s) for a cold n8n; a failure is
 
     recorded as status OK_DELIVERY_FAILED in new_deals_runs and payload.delivery_error. Fallback source: view hubspot.new_deals_last_7d.'
-  B: 'B1 workflows/NEW_DEALS_DELIVERY.json: Webhook new-deals (Header Auth, respond lastNode) → IF Any rows? → Split Out rows → Code
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B1 workflows/NEW_DEALS_DELIVERY.json: Webhook new-deals (Header Auth, respond lastNode) → IF Any rows? → Split Out rows → Code
 
     "Shape columns" → Convert to File XLSX → Email Send (MAIL_FROM/MAIL_TO from env); false branch "Email (no rows)". B2: the same tail
 
@@ -453,7 +437,7 @@ layers:
   A: 'Not performed: the private app is read-only (crm.objects.deals.read, crm.schemas.deals.read, crm.objects.owners.read). A maintains the
 
     table C''s views read from.'
-  B: 'Not generated: B2 could add a HubSpot Deal → Update node or an HTTP Request to /crm/v3/objects/deals/batch/update behind the same
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] Not generated: B2 could add a HubSpot Deal → Update node or an HTTP Request to /crm/v3/objects/deals/batch/update behind the same
 
     skip rule; it would need the write token inside n8n. Not in v1.'
   C: 'writeback/index.mjs (Node 22 Cloud Run job): SELECT from hot_deals_v1_writeback (rows whose hot_score_v1 / hot_flag_v1 IS DISTINCT
@@ -479,8 +463,8 @@ layers:
     and 207 handling read against the HubSpot docs (result_C C-G7). Any PATCH: not yet — first authenticated run (and not before R35).'
 - id: L11
   layer: Dry-run gate
-  A: '`deploy.sh dry`: ?dry_run=1 for both entities; main.py builds the BigQuery client in dry mode, reads watermark + warehouse twins, skips MERGE, history, watermark, run row and delivery; payload carries dry_run: true; the step asserts rows_written == 0 and prints rows/dup/hot/window. curl -sSf: an HTTP 403 (caller lacks run.invoker) or 409 (lease held) fails the gate instead of passing a JSON error as a payload (R50). Nothing is written; the lease is not taken. Same gate from the Workbench notebook (cells 3.8 and 4.6) and the Cloud Shell runbook Phase 7.'
-  B: 'B2: POST /webhook/new-deals-run?entity=…&dry_run=1 → IF "Dry run?" true → "Respond" with the payload (rows_written 0, dry_run true);
+  A: '`deploy.sh dry`: ?dry_run=1 for both entities; since pass 3 phase 3 (D1) a dry run lands its slice with mode = dry and CALLs the procedure with mode = dry — one new_deals_runs row (dry_run TRUE, rows_written 0), no MERGE, no history, no state, no lease, no delivery; the payload comes from new_deals_batch_rows; the step still asserts rows_written == 0 and prints rows/dup/hot/window; curl -sSf: an HTTP 403 or 409 fails the gate (R50).'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2: POST /webhook/new-deals-run?entity=…&dry_run=1 → IF "Dry run?" true → "Respond" with the payload (rows_written 0, dry_run true);
 
     the BigQuery reads still run, the write nodes and the email do not. Manual execution in the editor (pinned data) is the
 
@@ -500,7 +484,7 @@ layers:
     run →
 
     probe → enable on every surface (deploy.sh, scheduler.sh, scheduled_query.sh + deploy_job.sh live).'
-  verified: 'A: tests/test_main_offline.py::test_dry_reads_but_writes_nothing; B2: tests/test_n8n_code.py (dry_run true, rows_written 0) and the
+  verified: 'A: tests/test_main_offline.py::test_dry_lands_calls_with_mode_dry_and_touches_no_sink_or_state; B2 (retired): tests/test_n8n_code.py (dry_run true, rows_written 0) and the
     IF
 
     wiring in NEW_DEALS_FULL.json; C: DRYRUN=1 sql/scheduled_query.sh renders (bq --dry_run itself needs credentials: not yet — first
@@ -509,7 +493,7 @@ layers:
 - id: L12
   layer: Replay / backfill
   A: '`deploy.sh replay ENTITY FROM_ISO`: UPDATE report_state SET watermark = TIMESTAMP ''FROM'', updated_at = now WHERE report_id = ''NEW_DEALS_<entity>'' then `deploy.sh run ENTITY`; MERGE dedupes; day1_* frozen so historical scores survive; new_deals_history slice for the new run_ts; the first run with no watermark looks back FIRST_RUN_DAYS. replay is the idempotency check of the runbook (FROM = window.query_start of the first run); a second `run` opens the next window instead (R52).'
-  B: 'B2: the same UPDATE on report_state (bq query), then POST the webhook without dry_run (or `gcloud scheduler jobs run
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2: the same UPDATE on report_state (bq query), then POST the webhook without dry_run (or `gcloud scheduler jobs run
 
     n8n-new-deals-<entity>`); identical MERGE / frozen set / history DELETE+INSERT by (run_ts, entity, orchestrator = ''n8n'').'
   C: '`bq mk --transfer_run --start_time … --end_time … <transfer config>`: each historical @run_time re-executes sql/new_deals_weekly.sql
@@ -531,16 +515,8 @@ layers:
     tests/test_n8n_code.py; C: sql/scheduled_query.sh prints the replay command. Replayed: not yet — first authenticated run.'
 - id: L13
   layer: Audit trail (history per run)
-  A: 'main.py write_run(): one row per run in hubspot.new_deals_runs (run_ts, entity, mode, dry_run, orchestrator = ''cloud-run-function'',
-
-    window, row_count, rows_written, duplicate_suspects, day1_hot, status OK | OK_DELIVERY_FAILED | FAILED, error, duration_ms) — also in
-
-    the exception path; write_history(): the run''s rows appended to hubspot.new_deals_history (slice replaced by run_ts/entity/orchestrator);
-
-    JSON log line "run complete". Pass 3 phase 1: new_deals_runs.data_gaps ARRAY<STRING> names what the run could not read or compute
-
-    (raw_landing_failed, dedup_scope_batch_only, event_no_window); deals_raw / labels_raw hold the run''s inputs as delivered (JSON).'
-  B: 'B2 nodes "History slice" (DELETE + INSERT new_deals_history … orchestrator = ''n8n'') and "Run log" (INSERT new_deals_runs … ''n8n'',
+  A: 'Pass 3 phase 3: the procedure writes the runs row (status OK, or FAILED with the message before re-raising; dry_run TRUE for a dry run) and the history slice inside its transaction; the function writes the FAILED row itself only when no row exists after a failure (search, landing, a CALL that never reached the procedure), amends the procedure''s OK row to FAILED when it fails after the CALL, and to OK_DELIVERY_FAILED when the delivery tail fails; the payload''s rows_written and data_gaps are read from that row; data_gaps from the function (event_no_window, raw_slice_replaced, raw_landing_failed) plus the procedure''s (labels_missing, dedup_horizon_partial); deals_raw / labels_raw hold the run''s inputs; JSON log line "run complete".'
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2 nodes "History slice" (DELETE + INSERT new_deals_history … orchestrator = ''n8n'') and "Run log" (INSERT new_deals_runs … ''n8n'',
 
     status ''OK''); n8n execution records in Cloud SQL (90 days, EXECUTIONS_DATA_MAX_AGE=2160) and NEW_DEALS_ERRORS.json e-mails failures.
 
@@ -603,12 +579,12 @@ layers:
   layer: Concurrency & retry safety
   A: 'Data model first: report_state.lock_until lease taken by one atomic UPDATE (num_dml_affected_rows == 1, LEASE_MINUTES=12; an
 
-    overlapping run gets 409 and writes nothing), per-run staging table, MERGE on deal_id, watermark after MERGE. Runtime second:
+    overlapping run gets 409 and writes nothing), land → CALL new_deals_batch (MERGE on deal_id in one transaction) → watermark after the CALL. Runtime second:
 
     --max-instances 1 --concurrency 1, --timeout 540 < --attempt-deadline 600s, 3 retries, schedules offset 07:00 / 07:20 so the two
 
     entities never share a minute.'
-  B: 'B2: N8N_CONCURRENCY_PRODUCTION_LIMIT=1 + maxScale 1 serialise executions; Webhook responseMode responseNode (responds when done) with
+  B: '[B2 retired in pass 3 phase 3 (D6): the text records the design as built; only B1 remains] B2: N8N_CONCURRENCY_PRODUCTION_LIMIT=1 + maxScale 1 serialise executions; Webhook responseMode responseNode (responds when done) with
 
     timeoutSeconds 900 ≥ attempt-deadline 900s so Scheduler retries only on real failure; cpu-throttling false; Error Workflow. No lease
 
@@ -683,7 +659,7 @@ steps:
   step: check-env
   gate: ''
   A: deploy.sh check-env — refuses an unset or placeholder PROJECT REGION DATASET FN SA_NAME BQ_LOCATION; requires gcloud and bq
-  B: same .env; deploy/n8n/deploy_n8n.sh refuses an unset PROJECT and N8N_IMAGE=:latest; scheduler.sh / secrets.sh / cloudsql.sh require PROJECT
+  B: same .env; deploy/n8n/deploy_n8n.sh refuses an unset PROJECT and N8N_IMAGE=:latest; secrets.sh / cloudsql.sh require PROJECT (scheduler.sh retired with B2)
   C: same .env; sql/apply.sh refuses placeholders in PROJECT SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE; writeback/deploy_job.sh requires
     HUBSPOT_WRITE_TOKEN_VERSION
   parity: Conditional
@@ -712,9 +688,10 @@ steps:
 - n: 4
   step: tables
   gate: ''
-  A: deploy.sh tables — renders bigquery_schema.sql (CREATE SCHEMA, report_state + lock_until, new_deals, new_deals_runs, new_deals_last_7d) then
-    GRANT dataEditor
-  B: n/a — B2 writes A's tables (its SQL is generated from bigquery_schema.sql); needs new_deals_history from sql/audit_tables.sql too (R44)
+  A: deploy.sh tables — renders bigquery_schema.sql (CREATE SCHEMA, report_state + lock_until, new_deals, new_deals_runs (+data_gaps), new_deals_history,
+    deals_raw, labels_raw, new_deals_last_7d) then GRANT dataEditor; deploy.sh routines — hot_score_v1, deals_landed_v1 + new_deals_batch_rows,
+    new_deals_batch (the objects the function CALLs since pass 3; no SYNC_* needed)
+  B: n/a — n8n writes no table (B1 only; B2 retired in pass 3 phase 3, D6)
   C: sql/apply.sh — bigquery_schema.sql → audit_tables.sql (new_deals_history, writeback_log) → hot_score_v1.sql → deals_synced_v1.sql → hot_deals_v1.sql
   parity: Divergent
   artefact: bq ls $PROJECT:hubspot lists report_state, new_deals, new_deals_runs, new_deals_history, writeback_log, hot_score_v1, the views
@@ -750,7 +727,7 @@ steps:
   gate: ''
   A: deploy.sh invoker — roles/run.invoker for the SA on the service; Scheduler jobs new-deals-SEALSQ / -ICALPS created PAUSED (OIDC, audience
     = URL, 600s, 3 retries)
-  B: deploy/n8n/scheduler.sh create — jobs n8n-new-deals-SEALSQ / -ICALPS created PAUSED (POST webhook, X-Delivery-Token header, 900s, 3 retries)
+  B: 'n/a — B1 has no trigger of its own: the function POSTs to NEW_DEALS_DELIVERY (B2 and deploy/n8n/scheduler.sh retired in pass 3 phase 3, D6)'
   C: writeback/deploy_job.sh deploy also binds roles/run.invoker for new-deals-scheduler@ on the job and creates Scheduler job new-deals-writeback
     (30 5 * * 1 Zurich, OAuth) — enabled, but the job stays DRY
   parity: Divergent
@@ -761,38 +738,37 @@ steps:
   step: dry
   gate: ''
   A: 'deploy.sh dry — curl -sSf $URL?entity=SEALSQ&dry_run=1 and ICALPS with the caller''s identity token (a service account''s carries audience = $URL, R48); asserts rows_written == 0 and dry_run true; an HTTP 403 (caller lacks run.invoker) or 409 (lease held) fails the step (R50); prints rows/dup/hot/window'
-  B: 'curl -X POST -H "X-Delivery-Token: $(gcloud secrets versions access latest --secret n8n-webhook-token)" "$N8N_URL/webhook/new-deals-run?entity=SEALSQ&dry_run=1"
-    (and ICALPS); or a manual execution in the editor'
+  B: 'n/a — B1 has no dry run of its own; a dry run of the function POSTs nothing (B2 retired in pass 3 phase 3, D6)'
   C: DRYRUN=1 sql/scheduled_query.sh (bq query --dry_run of both rendered scripts); writeback/deploy_job.sh execute with WRITEBACK_APPROVE=0 →
     writeback_log rows status DRY; optional full rehearsal in a hubspot_dev dataset
   parity: Conditional
   artefact: 'payload {report_id, run_timestamp, orchestrator, dry_run: true, window{watermark_in, query_start, query_end}, row_count, rows_written:
-    0, duplicate_suspects, day1_hot[], rows[]} (A, B2); bytes processed + DRY rows (C)'
-  notes: THE GATE before any LIVE row below. Same numbers for A and B2 on the same window (Equality checks). C's SQL half has no compute-only
-    mode; its dry run is syntax + the dev dataset.
+    0, duplicate_suspects, day1_hot[], data_gaps[], rows[]} (A; since pass 3 also one new_deals_runs row with dry_run TRUE); bytes processed + DRY rows (C)'
+  notes: THE GATE before any LIVE row below. A's dry run exercises the whole SQL path (landing, table function, the procedure's dry branch), so a
+    missing routine or a broken view fails here (B2 retired). C's SQL half has no compute-only mode; its dry run is syntax + the dev dataset.
 - n: 9
   step: run
   gate: LIVE NEW_DEALS_WRITE
   A: 'deploy.sh run SEALSQ then deploy.sh run ICALPS — one live window run each (the first without a watermark looks back FIRST_RUN_DAYS); prints report_id, run_timestamp, window, row_count, rows_written, duplicate_suspects, day1_hot; refuses an error payload or one without rows_written (R50); each run moves the watermark — the idempotency check is step 13 replay, not a second run (R52)'
-  B: 'curl -X POST -H "X-Delivery-Token: …" "$N8N_URL/webhook/new-deals-run?entity=SEALSQ" (and ICALPS), or gcloud scheduler jobs run n8n-new-deals-SEALSQ'
+  B: 'n/a — B1 runs when the function delivers: the live run POSTs the payload to NEW_DEALS_DELIVERY (B2 retired, D6)'
   C: bq mk --transfer_run --run_time=$(date -u +%FT%TZ) <transfer config new-deals-SEALSQ-C> (and ICALPS); then writeback/deploy_job.sh execute
     (still DRY until step 10)
   parity: Conditional
-  artefact: rows_written == row_count; hubspot.new_deals holds the rows; report_state NEW_DEALS_<entity> (A, B2) / NEW_DEALS_<entity>_C (C) watermark
-    == run_timestamp; one new_deals_runs row per run
-  notes: First run with no watermark looks back FIRST_RUN_DAYS=7 (A, B2) / 14 days lookback (C). Re-running the same window writes nothing new
-    (MERGE). Requires new_deals_history (R44).
+  artefact: rows_written == row_count; hubspot.new_deals holds the rows; report_state NEW_DEALS_<entity> (A) / NEW_DEALS_<entity>_C (C) watermark
+    == run_timestamp; one new_deals_runs row per run (written by the procedure)
+  notes: First run with no watermark looks back FIRST_RUN_DAYS=7 (A) / 14 days lookback (C). Re-running the same window writes nothing new
+    (MERGE). Requires the routines (deploy.sh routines / sql/apply.sh) — a missing procedure fails the CALL (deploy.sh dry catches it).
 - n: 10
   step: enable
   gate: LIVE SCHEDULER_ENABLE
   A: 'deploy.sh enable — gcloud scheduler jobs resume new-deals-SEALSQ / -ICALPS, only those in state PAUSED (idempotent, R49); pause likewise only ENABLED jobs'
-  B: deploy/n8n/scheduler.sh enable — resume n8n-new-deals-SEALSQ / -ICALPS; activate the workflows (UI or POST /api/v1/workflows/<id>/activate)
+  B: 'activate NEW_DEALS_DELIVERY (UI or POST /api/v1/workflows/<id>/activate); nothing to schedule (B2 and scheduler.sh retired, D6)'
   C: sql/scheduled_query.sh without DISABLE_SCHEDULE (bq update --transfer_config re-enables auto scheduling); writeback/deploy_job.sh live (WRITEBACK_APPROVE=1
     on the job)
   parity: Conditional
   artefact: 'jobs ENABLED; gcloud scheduler jobs run new-deals-SEALSQ → HTTP 200 in the job log; C: transfer configs scheduled, job env WRITEBACK_APPROVE=1'
-  notes: Only after step 8 passed on both entities and step 9 was probed. Same clock on A and B2 is the L3 condition; C's chain must keep its
-    slack. Do not run A and B2 live on the same report_id at the same time (they share the watermark row).
+  notes: Only after step 8 passed on both entities and step 9 was probed. C's chain must keep its slack (per-entity, off-the-hour schedules);
+    the procedure refuses to advance C's row while A holds the entity's lease.
 - n: 11
   step: probe
   gate: ''
@@ -811,8 +787,8 @@ steps:
   B: same bq query (rows NEW_DEALS_<entity>); gcloud scheduler jobs describe n8n-new-deals-<entity>
   C: same bq query (rows NEW_DEALS_<entity>_C); bq ls --transfer_run <config>; gcloud run jobs executions list --job new-deals-writeback
   parity: Parallel
-  artefact: one report_state row per entity per orchestrator family (A/B2 share NEW_DEALS_<entity>; C has _C); watermark == last successful run_timestamp;
-    lock_until NULL between runs
+  artefact: 'one report_state row per entity per lane (A: NEW_DEALS_<entity>; C: _C); watermark == last successful run_timestamp;
+    lock_until NULL between runs'
   notes: 'Where am I: the watermark is the checkpoint. The per-surface describe commands are additive.'
 - n: 13
   step: replay
@@ -1161,9 +1137,9 @@ remediation:
   symptom: 'C-G5: duplicate flags diverge between A and C by construction (C sees twins A never reported)'
   layer: L6
   surfaces: A C
-  cause: A's recent_names reads new_deals (90 days); C self-joins the synced table.
+  cause: A''s recent_names read new_deals (90 days); C self-joined the synced table (both before pass 3).
   fix: Documented as Conditional parity (C stricter); for strict parity restrict C's recent CTE to deal_id IN (SELECT deal_id FROM new_deals).
-  verified: open — decision recorded in L6; equality check compares flags only for twins present in new_deals
+  verified: closed in pass 3 phase 3 (D3) — one implementation over the root, sql/deals_landed_v1.sql; the equality check now compares A and C on the same rule
 - id: R42
   symptom: 'C-G13: "table per run" cannot be CREATE TABLE inside a BigQuery transaction'
   layer: L13
@@ -1190,7 +1166,7 @@ remediation:
   cause: new_deals_history DDL lives in sql/audit_tables.sql (scenario C's apply.sh), not in bigquery_schema.sql.
   fix: 'Before the first live run: run sql/apply.sh (or bq query the rendered sql/audit_tables.sql); proposed code change: deploy.sh tables also
     renders sql/audit_tables.sql, or move new_deals_history into bigquery_schema.sql (awaiting consent — docs-only pass).'
-  verified: open — found by reading main.py:write_history vs bigquery_schema.sql on 2026-10-05; step 4 notes carry the workaround
+  verified: closed — new_deals_history lives in bigquery_schema.sql and deploy.sh tables creates it (write_history itself retired in pass 3 phase 3)
 - id: R45
   symptom: 'Synthesis finding: no script enables bigquerydatatransfer.googleapis.com, which scheduled queries and the DTS HubSpot connector need'
   layer: L0
@@ -1207,7 +1183,7 @@ remediation:
   cause: The single-writer guarantee in B2 is the n8n process limit, not the data model.
   fix: 'Keep A and B2 from running live on the same report_id concurrently (step 10 note); optional: add a BigQuery node running A''s atomic lease
     UPDATE before "HubSpot search" and an IF on affected rows.'
-  verified: open — by reading build_workflow.py sql_templates() (WATERMARK_SQL clears lock_until, nothing sets it)
+  verified: closed by retirement — B2 and build_workflow.py sql_templates() were removed in pass 3 phase 3 (D6)
 - id: R47
   symptom: 'Pre-run review (2026-10-16): deploy.sh secret_version() read the Secret Manager version with --format value(name), i.e. projects/N/secrets/hubspot-token/versions/V; `deploy` would have passed that path to --set-secrets and Cloud Run rejects it'
   layer: L2
@@ -1266,7 +1242,7 @@ remediation:
   verified: 'tests/test_main_offline.py (11 root tests: order, slice replacement, JSON dict, dry, failure named, clean gaps as an ArrayQueryParameter, event with the delete scoped to its deal, strict replacement across two landings, labels-only failure, time-boxed jobs, runs row kept on an un-migrated table); rendered scripts (DRYRUN=1 sql/scheduled_query.sh, DRYRUN=1 sql/backfill_raw.sh); review follow-ups folded in (deploy.sh deploy applies tables first, LAND_TIMEOUT_S, lane-C landing non-fatal, IFNULL in_scope, stringify_wide_numbers, splice asserted); acceptance SQL in docs/PASS3_RAW_ROOT.md after the first live run'
 equality_checks:
 - stage: after dry runs (same window, nothing written)
-  compare: payload row_count, duplicate_suspects, day1_hot[] and window per entity — A vs B2 on the same watermark row
+  compare: payload row_count, duplicate_suspects, day1_hot[] and window per entity — A (B2 retired, D6) and, for the same run_ts, the table function
   A: 'deploy.sh dry (prints rows/dup/hot/window per entity); or curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?entity=SEALSQ&dry_run=1"
     | python3 -c ''import json,sys;p=json.load(sys.stdin);print(p["window"],p["row_count"],p["duplicate_suspects"],sorted(p["day1_hot"]))'''
   BC: 'B2: curl -X POST -H "X-Delivery-Token: …" "$N8N_URL/webhook/new-deals-run?entity=SEALSQ&dry_run=1" | same python one-liner. C: DRYRUN=1
@@ -1292,9 +1268,9 @@ equality_checks:
     unchanged; a second new_deals_runs row with rows_written == row_count (the MERGE updated, inserted nothing).
 - stage: any time
   compare: hot score v1 for one deal_id across Python / JS / SQL — tests/hot_score_vectors.*
-  A: python3 tests/test_hot_score.py (rebuilds tests/hot_score_vectors.json from main.py and runs node scoring/hot_score_v1.mjs on them); day1_hot_score
+  A: python3 -m pytest tests/test_hot_score.py tests/test_hot_score_sql_duckdb.py (Python oracle == SQL UDF on 15 vectors + 4,000 deals; the JS port retired with B2); day1_hot_score
     of the deal in the payload / table
-  BC: 'B2: tests/test_n8n_code.py (Code node rows == main.shape()); C: bq query --use_legacy_sql=false < tests/hot_score_vectors.sql (after sql/apply.sh)
+  BC: 'B2 retired (D6); C: bq query --use_legacy_sql=false < tests/hot_score_vectors.sql (after sql/apply.sh)
     and SELECT hot_score_v1 FROM `$PROJECT.hubspot.hot_deals_v1` WHERE deal_id = ''<id>'''
   expected: 'Raw score |Δ| < 1e-9 Python vs JS, rounded score within 0.1, flags equal on all 15 vectors; every row of hot_score_vectors.sql ok
     = TRUE; the deal''s day1_hot_score in new_deals equals the vector for the same inputs (golden: Lattice Keystone C0 ASIC ≈ 81–90 by inputs).'
@@ -1309,7 +1285,7 @@ equality_checks:
   compare: duplicate flags A vs C (for twins present in new_deals)
   A: bq query 'SELECT deal_id, duplicate_suspect, duplicate_of FROM `$PROJECT.hubspot.new_deals` WHERE duplicate_suspect ORDER BY deal_id'
   BC: 'B2: same query after its run; C: same query after its run_time, compared only for deals whose duplicate_of ids exist in new_deals'
-  expected: A == B2 exactly (tests/test_n8n_code.py offline); C ⊇ A — any extra C suspect has a twin older than A's first run (R41).
+  expected: A == C on the same rule (one table function, D3); a difference can only come from the slices themselves (R41 closed).
 - stage: after delivery
   compare: delivered XLSX row count vs payload row_count vs new_deals_last_7d
   A: rows in the e-mailed NEW_DEALS_<entity>_<date>.xlsx (B1 tail) vs row_count in the payload / new_deals_runs
@@ -1324,10 +1300,10 @@ equality_checks:
   compare: every (run_ts, entity, orchestrator, deal_id) of new_deals_history has its row in deals_raw; the JSON carries the property names; data_gaps per run
   A: bq query 'SELECT COUNT(*) FROM `$PROJECT.hubspot.new_deals_history` h LEFT JOIN `$PROJECT.hubspot.deals_raw` r USING (run_ts, entity, orchestrator, deal_id) WHERE r.deal_id IS NULL AND h.orchestrator = ''cloud-run-function'' AND h.run_ts >= TIMESTAMP ''<cut-over>'''
   BC: 'C: same query with orchestrator = ''bigquery-scheduled-query'' (and ''backfill'' for the one-time landing); both: SELECT orchestrator, COUNTIF(JSON_VALUE(properties, ''$.pipeline'') IS NULL) FROM `$PROJECT.hubspot.deals_raw` GROUP BY 1; SELECT run_ts, entity, orchestrator, status, data_gaps FROM `$PROJECT.hubspot.new_deals_runs` ORDER BY run_ts DESC'
-  expected: '0 missing rows for both orchestrators; 0 NULL pipelines in the JSON; data_gaps [] on a clean lane-A run once new_deals holds name_key rows from the last 90 days ([dedup_scope_batch_only] on the first run of an empty warehouse or when recent_names() failed — main.py `if not known`; [raw_slice_replaced] when the key was re-landed); [source_detail_unavailable] on a clean lane-C run (plus raw_backfilled_from_current_sync when run_time is older than an hour); raw slices with no OK runs row = failed or undelivered runs plus the backfill slices, which have no runs row by design'
+  expected: '0 missing rows for both orchestrators; 0 NULL pipelines in the JSON; data_gaps [] on a clean lane-A run once the root''s oldest deal of the last 90 days is at least 83 days old ([dedup_horizon_partial] until then — also right after the backfill; [labels_missing] when no label landed; [raw_slice_replaced] when the key was re-landed; the procedure''s gaps are on the runs row, not in the payload); [source_detail_unavailable] on a clean lane-C run (plus raw_backfilled_from_current_sync when run_time is older than an hour); raw slices with no OK runs row = failed or undelivered runs plus the backfill slices, which have no runs row by design'
 - stage: pass 3 phase 2 — before registering the new lane-C script (dev dataset, credentials)
   compare: the 15 golden vectors through the root → deals_landed_v1 → new_deals_batch_rows vs their expected score and flag; one lane-C run_ts through deals_landed_v1 vs deals_synced_v1
-  A: 'n/a until phase 3 (lane A still shapes in Python; tests/test_hot_score.py pins main.hot_score to the same vectors)'
+  A: 'the same table function serves lane A since phase 3 — after deploy.sh dry: SELECT deal_id, day1_hot_score FROM new_deals_batch_rows(<run_ts>, ''SEALSQ'', ''cloud-run-function'', NULL)'
   BC: 'C: sql/apply.sh against DATASET=hubspot_dev, then bq query --use_legacy_sql=false < <(sed "s/\${PROJECT}/$PROJECT/g; s/\${DATASET}/hubspot_dev/g" tests/pass3_batch_vectors.sql); after one transfer run at run_ts X: SELECT COUNT(*) FROM deals_landed_v1 l FULL JOIN deals_synced_v1 s USING (deal_id) WHERE l.run_ts = X AND l.orchestrator = ''bigquery-scheduled-query'' AND (s.deal_id IS NULL OR l.dealname != s.dealname OR l.stage_probability != s.stage_probability OR l.amount != s.amount)'
   expected: every vectors row ok = TRUE (15 rows; the slice is dropped by the script); the landed/synced comparison returns 0 for deals created in the 90-day window as of X
 parity_meanings:

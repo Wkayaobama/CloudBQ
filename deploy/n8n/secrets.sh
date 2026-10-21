@@ -29,4 +29,4 @@ run bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=
 KEY="$HERE/.secrets/n8n-bq.key.json"; mkdir -p "$HERE/.secrets"
 if [[ "$DRYRUN" == 1 ]]; then echo "  (would create a key for $BQ_SA at $KEY — gitignored; import it as the n8n Google Service Account credential)"
 elif [[ ! -f "$KEY" ]]; then gcloud iam service-accounts keys create "$KEY" --iam-account "$BQ_SA" --project "$PROJECT"; chmod 600 "$KEY"; echo "key written to $KEY (gitignored)"; fi
-echo "next: deploy/n8n/cloudsql.sh → deploy/n8n/deploy_n8n.sh → deploy/n8n/import_workflows.sh → deploy/n8n/scheduler.sh"
+echo "next: deploy/n8n/cloudsql.sh → deploy/n8n/deploy_n8n.sh → deploy/n8n/import_workflows.sh (B1 delivery tail; the function posts to it)"

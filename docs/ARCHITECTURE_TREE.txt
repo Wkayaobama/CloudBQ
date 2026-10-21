@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is EC2E4B12 51DD:05DE
+Volume serial number is D0FB0654 D9E5:B990
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -25,6 +25,7 @@ CloudBQ
 │       │   │   │
 │       │   │   └───recipes
 │       │   │           a_deploy_canonical.md
+│       │   │           a_hand_off.md
 │       │   │           a_main_idempotency.md
 │       │   │           a_notebook_witness.md
 │       │   │           a_raw_root.md
@@ -115,7 +116,6 @@ CloudBQ
 │           cloudsql.sh
 │           deploy_n8n.sh
 │           import_workflows.sh
-│           scheduler.sh
 │           secrets.sh
 │           service.yaml
 │
@@ -157,7 +157,6 @@ CloudBQ
 ├───scoring
 │       deal_tiers_v1.constants.json
 │       hot_score_v1.constants.json
-│       hot_score_v1.mjs
 │       hot_score_v1.sql
 │       README.md
 │
@@ -186,7 +185,6 @@ CloudBQ
 │       test_hot_score.py
 │       test_hot_score_sql_duckdb.py
 │       test_main_offline.py
-│       test_n8n_code.py
 │       test_notebook.py
 │       test_pass3_sql.py
 │       test_regen_workflow.py
@@ -195,12 +193,9 @@ CloudBQ
 │   │   credentials.map.json.example
 │   │   NEW_DEALS_DELIVERY.json
 │   │   NEW_DEALS_ERRORS.json
-│   │   NEW_DEALS_FULL.json
 │   │
 │   └───src
 │           build_workflow.py
-│           node_code.template.js
-│           shape_score.js
 │
 └───writeback
         bootstrap_property.sh

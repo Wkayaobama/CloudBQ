@@ -11,7 +11,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." &
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && { DRY=1; shift; }
 : "${N8N_URL:?}" ; [[ "$DRY" == 1 ]] || : "${N8N_API_KEY:?create one in n8n → Settings → n8n API}"
-FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT/workflows/NEW_DEALS_ERRORS.json" "$ROOT/workflows/NEW_DEALS_DELIVERY.json" "$ROOT/workflows/NEW_DEALS_FULL.json")   # errors first: the others reference its id
+FILES=("$@"); [[ ${#FILES[@]} -gt 0 ]] || FILES=("$ROOT/workflows/NEW_DEALS_ERRORS.json" "$ROOT/workflows/NEW_DEALS_DELIVERY.json")   # errors first: the other references its id (B2 NEW_DEALS_FULL retired, pass 3 phase 3)
 MAP="$ROOT/workflows/credentials.map.json"; IDMAP="$ROOT/workflows/workflow_ids.map.json"; [[ -f "$IDMAP" ]] || echo '{}' > "$IDMAP"
 HDR=$(mktemp); chmod 600 "$HDR"; trap 'rm -f "$HDR"' EXIT; [[ "$DRY" == 1 ]] || printf 'X-N8N-API-KEY: %s\n' "$N8N_API_KEY" > "$HDR"   # the key never appears on argv
 for f in "${FILES[@]}"; do

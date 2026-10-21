@@ -22,7 +22,7 @@ WHERE hs_object_id IS NOT NULL
   AND SAFE_CAST(createdate AS TIMESTAMP) >= TIMESTAMP_SUB(v_run_ts, INTERVAL 90 DAY) AND SAFE_CAST(createdate AS TIMESTAMP) < v_run_ts
 QUALIFY ROW_NUMBER() OVER (PARTITION BY hs_object_id ORDER BY SAFE_CAST(hs_lastmodifieddate AS TIMESTAMP) DESC) = 1;   -- one row per deal (deal_tiers_apply.sql:27)
 DELETE FROM `${PROJECT}.${DATASET}.deals_raw`
-WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = v_orchestrator AND fetched_at < v_landed_at;
+WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = v_orchestrator AND mode = v_mode AND fetched_at < v_landed_at;
 IF @@row_count > 0 THEN SET v_gaps = ARRAY_CONCAT(v_gaps, ['raw_slice_replaced']); END IF;   -- the predecessor is recoverable by time travel only
 
 INSERT INTO `${PROJECT}.${DATASET}.labels_raw` (run_ts, entity, orchestrator, kind, id, label, fetched_at)
