@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is D0FB0654 D9E5:B990
+Volume serial number is AB3E6E20 6E72:C4B8
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -35,11 +35,13 @@ CloudBQ
 │       │   │           c_l2_deal_tiers.md
 │       │   │           c_raw_batch.md
 │       │   │           c_writeback_job.md
+│       │   │           docs_lane_r.md
 │       │   │           docs_pass1_set.md
 │       │   │           docs_universal_workflow.md
 │       │   │           scoring_hot_score_ports.md
 │       │   │           tooling_regen_workflow.md
 │       │   │           tooling_reusable_skills.md
+│       │   │           tooling_surfaces_n_lanes.md
 │       │   │
 │       │   ├───references
 │       │   │       aider-0.86-commit-signature.md

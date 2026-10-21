@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "D0FB0654 D9E5:B990",
+ "serial": "AB3E6E20 6E72:C4B8",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,7 +44,7 @@
  ],
  "counts": {
   "dirs": 38,
-  "files": 132,
+  "files": 134,
   "annotated": 96,
   "proposed": 3,
   "by_status": {
@@ -1972,6 +1972,12 @@
               "exists": true
              },
              {
+              "name": "docs_lane_r.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/docs_lane_r.md",
+              "exists": true
+             },
+             {
               "name": "docs_pass1_set.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/docs_pass1_set.md",
@@ -1999,6 +2005,12 @@
               "name": "tooling_reusable_skills.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/tooling_reusable_skills.md",
+              "exists": true
+             },
+             {
+              "name": "tooling_surfaces_n_lanes.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/tooling_surfaces_n_lanes.md",
               "exists": true
              }
             ],
