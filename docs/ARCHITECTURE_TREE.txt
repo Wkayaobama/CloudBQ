@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is AB3E6E20 6E72:C4B8
+Volume serial number is 1C1A970D 99DB:0B60
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore

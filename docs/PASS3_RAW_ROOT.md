@@ -148,6 +148,10 @@ SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASE
   CALL_TIMEOUT_S (240) + 3 delivery tries × 30 s + 20 s = 530 s. The `_jsonable` rendering is pinned by typed fake rows.
 - Rollback: the previous commit (the Python path is one commit behind).
 
+The lane matrix (`docs/execution_surfaces.yaml`, `docs/EXECUTION_SURFACES.xlsx`) carries the implementation as its own column, lane **R**:
+eighteen layer cells and thirteen step cells say how each layer is performed inside BigQuery; L6 reads Parallel since D3 made one rule
+for every lane; the builder accepts two to six surfaces since this change.
+
 Operator sequence for the cut-over: `cloud_function_new_deals/deploy.sh tables` (adds the two tables and the column; safe to re-run),
 `sql/apply.sh` (the UDF, the views, the table function, the procedure — the function CALLs the procedure from this deploy on, so apply
 BEFORE `deploy.sh deploy`), the vectors check above in a dev dataset, `deploy.sh deploy`, `deploy.sh dry` (now lands + CALLs with mode

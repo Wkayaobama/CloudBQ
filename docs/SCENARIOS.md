@@ -29,6 +29,14 @@ Cannot: keep secrets in Secret Manager at runtime (community edition), fire a Sc
 Scheduler → webhook); B1 touches neither HubSpot nor BigQuery.
 Trade: the editor as the operating surface and per-node execution data, against a second copy of everything and seven moving parts.
 
+## R · The raw root + the one SQL implementation (`sql/deals_landed_v1.sql`, `sql/new_deals_batch.sql`) — pass 3
+
+Not a scenario to choose but what every scenario executes since pass 3: each lane lands its inputs (`deals_raw` / `labels_raw`, one
+slice per run) and CALLs `new_deals_batch`, which shapes, scores (`hot_score_v1`), de-duplicates over the root, MERGEs, writes the
+history slice and the runs row in one transaction; `new_deals_batch_rows` is the same batch read-only, for any past run. It has no
+runtime, trigger or secret of its own — `deploy.sh routines` or `sql/apply.sh` creates it. Its column in the lane matrix says how each
+layer is performed inside BigQuery; design, decisions and acceptance SQL in `docs/PASS3_RAW_ROOT.md`.
+
 ## C · Hybrid (`sql/`, `writeback/`, Breeze)
 
 Compute in BigQuery over a synced copy of HubSpot deals (Google Data Transfer Service HubSpot connector, Preview, daily full

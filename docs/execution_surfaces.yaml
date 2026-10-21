@@ -33,7 +33,9 @@ verdict: 'Verdict (pre-flight, 2026-10-05, commit 9e7e18a and the critic fixes t
   sql/new_deals_batch.sql over the raw root, that every lane CALLs.'
 legend: 'Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. The columns A/B/C are the three candidate
 
-  SCENARIOS (not three terminals), so the Overview''s "Ubuntu" column reads as *runtime*. Layers L0–L17 are the execution layer from code
+  SCENARIOS (not three terminals), so the Overview''s "Ubuntu" column reads as *runtime*; the fourth column R (pass 3, 2026-10-21) is not a scenario but
+
+  the raw root and the one SQL implementation every scenario CALLs — its cells say how each layer is performed inside BigQuery. Layers L0–L17 are the execution layer from code
 
   acquisition to cost; Pipeline steps are scenario A''s deploy.sh sub-commands in deploy order (check-env … invoker → dry gate → run →
 
@@ -56,6 +58,7 @@ surfaces:
   A: 'A · Cloud Run function (deploy.sh → gcloud run deploy --function, Scheduler OIDC, Secret Manager, BigQuery MERGE) — operator surfaces: Cloud Shell runbook docs/RUNBOOK_CLOUD_SHELL.md and the Vertex AI Workbench notebook notebooks/cloudbq_deploy_and_witness.ipynb (same deploy.sh)'
   B: 'B · n8n on Cloud Run (B1 delivery tail NEW_DEALS_DELIVERY.json; B2 — n8n owning the pipeline, NEW_DEALS_FULL.json — retired in pass 3 phase 3, decision D6; its cells record the design as built)'
   C: C · BigQuery compute (synced deals, hot_score_v1 UDF, scheduled script) + Node 22 write-back job; Breeze reads, Claude iterates
+  R: 'R · The raw root + the one SQL implementation (deals_raw / labels_raw → deals_landed_v1 → new_deals_batch_rows → new_deals_batch), CALLed by A after its landing and by C after its landing — pass 3 (2026-10-21); not a scenario but what every scenario executes'
 motions:
 - motion: A · Cloud Run function + Cloud Scheduler
   acquire: 'git clone the branch; cloud_function_new_deals/deploy.sh is the execution surface (sub-commands check-env enable-apis iam tables secret
@@ -153,6 +156,7 @@ layers:
     (bq mk/update --transfer_config), the job via writeback/deploy_job.sh (gcloud run jobs deploy --source writeback, Dockerfile node:22-slim);
 
     the sync via sql/sync_transfer.sh (bq mk --transfer_config --data_source=hubspot).'
+  R: 'Four SQL objects in the dataset, created idempotently (CREATE OR REPLACE / IF NOT EXISTS) by `deploy.sh tables` + `deploy.sh routines` (lane A; no SYNC_* needed) and by `sql/apply.sh` (lane C; the same files again): cloud_function_new_deals/bigquery_schema.sql (deals_raw, labels_raw, new_deals_runs.data_gaps), scoring/hot_score_v1.sql, sql/deals_landed_v1.sql, sql/new_deals_batch.sql. No runtime of its own — the deploy unit is the dataset.'
   parity: Divergent
   diverges: 'Three deploy units, three versioning stories: a Python directory built by Cloud Build, a container image + workflow JSON stored in
 
@@ -185,6 +189,7 @@ layers:
     DCL GRANT) and new-deals-writeback@ is the job''s ADC (writeback/deploy_job.sh grants the same pair). The DTS connector writes
 
     $SYNC_DATASET under a Google-managed identity. Claude''s user ADC: dataViewer on hubspot, dataEditor on hubspot_dev (proposed).'
+  R: 'The caller''s identity: the function SA (new-deals-fn@) and the scheduled-query SA (new-deals-sql@) each hold roles/bigquery.dataEditor on the dataset (routines.get/create included) + jobUser; the procedure and the table function read deals_raw / labels_raw only, so lane A needs no grant on the sync dataset (tests/test_pass3_sql.py::test_procedure_and_function_read_the_root_only).'
   parity: Divergent
   diverges: 'A and C are keyless (ADC); B2 needs a long-lived SA key inside n8n''s database (B-G10) — a different mechanism and a different
 
@@ -208,6 +213,7 @@ layers:
     (--set-secrets HUBSPOT_TOKEN=hubspot-token-write:<n>); the DTS transfer config keeps its own read-token copy
 
     (connector.authentication.oauth.accessToken); the schema-write token is used once by writeback/bootstrap_property.sh and not stored.'
+  R: 'None. The root is landed by the callers (A with HUBSPOT_TOKEN, C from the sync); the SQL objects hold no secret and call no API.'
   parity: Divergent
   diverges: 'A and C hold one pinned Secret Manager version each; B keeps copies inside n8n (Cloud SQL) and the transfer config keeps a third
     copy.
@@ -232,6 +238,7 @@ layers:
     writeback/deploy_job.sh: Cloud Scheduler new-deals-writeback "30 5 * * 1" Europe/Zurich POST jobs.run with --oauth-service-account-email
 
     new-deals-scheduler@, 3 retries (start failures only). Not paused on create; harmless while WRITEBACK_APPROVE=0.'
+  R: 'None of its own — one CALL per caller run: the function after its landing (Scheduler Mon 07:00 / 07:20 Zurich, or a webhook event), the scheduled query after its landing (Mon 03:53 / 04:23 UTC). Callers never share a minute: conflicting transactions are cancelled by the engine, and an advance_state caller is refused while A holds the entity''s lease.'
   parity: Conditional
   diverges: 'Same result when A and B2 read the same SCHEDULE_* values from .env (they do) and C''s chain keeps its slack (sync 02:00 UTC < query
 
@@ -278,6 +285,7 @@ layers:
     lands it once per entity with orchestrator = backfill at cut-over. Phase 2: the landing precedes the CALL of new_deals_batch (the
 
     script has no transaction of its own any more).'
+  R: 'The landing contract: one slice per (run_ts, entity, orchestrator) in deals_raw (properties JSON as delivered, in_scope, createdate, pipeline_id, mode, source, fetched_at) and labels_raw (kind, id, label) — load first, delete-older second, scoped by mode; written by land_raw()/land_labels() (A, the API) and sql/land_raw.sql (C, the sync table); sql/backfill_raw.sh fills the 90-day horizon once (orchestrator = backfill). The implementation never extracts: a failed landing with no slice → RAISE.'
   parity: Divergent
   diverges: 'A and B2 share the mechanism (watermark row + live createdate search); C reads a scheduled snapshot with a fixed lookback — a deal
 
@@ -308,6 +316,7 @@ layers:
     and sql/hot_deals_v1.sql (hot_score_v1 / hot_flag_v1). tests/hot_score_vectors.sql is the bq check generated from the same vectors;
 
     tests/pass3_batch_vectors.sql runs the same 15 vectors through the root → view → table function in a dev dataset.'
+  R: 'scoring/hot_score_v1.sql, the persistent UDF, applied inside new_deals_batch_rows with run_ts as "now" — the one scoring in the pipeline; tests/hot_score_vectors.sql and tests/pass3_batch_vectors.sql (through the root) are its checks; main.hot_score() is the Python oracle that builds the vectors.'
   parity: Parallel
   diverges: 'Nothing by design: one constants file, one vector file, one UDF since pass 3 (Python is the test oracle; the JS port retired with B2). The only tolerated difference is a 0.1 step at an exact
 
@@ -337,7 +346,8 @@ layers:
     observation per deal_id), STRING_AGG ordered by createdate, deal_id; labels from the slice''s labels_raw rows (id as fallback).
 
     Before phase 2 the weekly script did the same over the synced views.'
-  parity: Conditional
+  R: 'deals_landed_v1 (one typed column per property, name_key once) → new_deals_batch_rows(run_ts, entity, orchestrator, window_start): the window (one row per deal, [window_start, run_ts) when given, the whole slice for an event), labels from the slice''s labels_raw (id fallback), duplicates = every deal the root knows as of run_ts (any entity, any orchestrator, in scope or not, 90-day horizon, latest observation per deal_id), STRING_AGG by createdate, deal_id — decision D3, the same rule for every caller.'
+  parity: Parallel
   diverges: 'None since pass 3 phase 3: one rule over the root for every lane (sql/deals_landed_v1.sql, decision D3); the only residue is the horizon until the root is 90 days old (dedup_horizon_partial on the runs row).'
   remediation: 'For strict parity restrict C''s `recent` CTE to deal_id IN (SELECT deal_id FROM new_deals); otherwise document C as stricter and
 
@@ -363,6 +373,7 @@ layers:
     day1_hot_flag> WHEN NOT MATCHED THEN INSERT ROW — inside BEGIN/COMMIT TRANSACTION with the audit and state statements; mode dry
 
     writes one runs row and nothing else; any error → ROLLBACK, FAILED runs row, RAISE.'
+  R: 'new_deals_batch: CREATE OR REPLACE TEMP TABLE batch AS SELECT * FROM new_deals_batch_rows(…); BEGIN TRANSACTION; MERGE new_deals (the frozen four untouched; WHEN MATCHED AND s.last_seen_run >= t.last_seen_run, so an older slice never overwrites a newer observation; INSERT ROW); rows_written = @@row_count. mode = dry: no MERGE.'
   parity: Parallel
   diverges: 'Same target, same key, same update list, same insert — since pass 3 one source too: the procedure''s TEMP table for A and C (B2 retired). Before: (per-run staging table / inline JSON / TEMP
 
@@ -392,6 +403,7 @@ layers:
     the engine enforces "advance only after a successful MERGE"; before the transaction the procedure RAISEs if A''s lock_until for the
 
     entity is live (a fallback run never collides with a live lane-A run).'
+  R: 'When advance_state = TRUE (lane C, report_id NEW_DEALS_<entity>_C): MERGE report_state with watermark = GREATEST(old, run_ts) in the same transaction as the new_deals MERGE, after RAISEing if A''s lock_until for the entity is live. When FALSE (lane A, events, dry): the procedure touches no state and the caller advances its own row after the CALL and the read-back.'
   parity: Parallel
   diverges: 'Same row semantics on every surface: hubspot.report_state.watermark = run_ts of the last successful MERGE, never advanced by a dry
     run,
@@ -420,6 +432,7 @@ layers:
   C: 'None owned: BigQuery sends no mail. Breeze/BI read new_deals_last_7d and hot_deals_v1_top5_by_region; the job could POST the identical
 
     payload contract to the B1 webhook (not implemented); HubSpot workflows on hot_flag_v1 replace Breeze "scheduled prompts" for alerts.'
+  R: 'None: the implementation writes tables; the caller renders the payload from new_deals_history + new_deals_runs (A) and delivers it (the B1 tail); C delivers nothing.'
   parity: Divergent
   diverges: 'Three delivery mechanisms (webhook tail, in-workflow tail, none) and an email is never idempotent: a re-trigger re-sends. A''s
 
@@ -449,6 +462,7 @@ layers:
     exit 1 if any ERROR (Cloud Run retries only the rest). Gate WRITEBACK_APPROVE=1 (deploy_job.sh live). Properties created once by
 
     writeback/bootstrap_property.sh.'
+  R: 'None: writeback/index.mjs reads the views (lane C).'
   parity: Divergent
   diverges: 'Only C writes to HubSpot. Blocked by scopes until a second private app with crm.objects.deals.write exists (C-G10) and the properties
 
@@ -476,6 +490,7 @@ layers:
     needs a hubspot_dev dataset (a scheduled query has no compute-only switch). Job — WRITEBACK_APPROVE unset → status DRY rows in
 
     writeback_log, no HubSpot call (`writeback/deploy_job.sh execute`).'
+  R: 'mode = ''dry'': the batch is computed, ONE new_deals_runs row (dry_run TRUE, rows_written 0, counts and data_gaps filled) and nothing else — no MERGE, no history, no state. tests/pass3_batch_vectors.sql is the executed check of the read path in a dev dataset; `bq --dry_run` cannot execute a CALL, so `deploy.sh dry` (a real CALL with mode dry) is the gate.'
   parity: Conditional
   diverges: 'A and B2 rehearse exactly Monday''s window with zero writes; C''s SQL half can only be rehearsed syntactically or against a dev dataset,
 
@@ -501,6 +516,7 @@ layers:
     (14-day lookback), DELETEs and re-INSERTs its history and run-log slices, MERGE converges; HubSpot side: DELETE FROM writeback_log WHERE
 
     run_ts = … then `gcloud run jobs execute`; sync backfill = DTS backfill run.'
+  R: 'A CALL with the same (run_ts, entity, orchestrator) recomputes from the same slice and rewrites the same history and runs rows (events excepted: never replayed, never replaced); a re-landing replaces the slice (raw_slice_replaced — the predecessor is recoverable by time travel only); a replayed older run_time never rewinds C''s watermark (GREATEST) and never overwrites a newer observation (the MERGE guard).'
   parity: Conditional
   diverges: 'Same rows after the replay when the replayed window is covered: A/B2 rewind one state row and re-run a watermark window; C re-executes
 
@@ -536,6 +552,7 @@ layers:
     the procedure writes the runs row (OK, FAILED with @@error.message, or dry_run = TRUE) and the history slice; the script adds
 
     raw_landing_failed / raw_slice_replaced / labels_missing from its landing, the procedure labels_missing / dedup_horizon_partial.'
+  R: 'The procedure writes the history slice and the runs row (OK with rows_written, duplicate_suspects, day1_hot, data_gaps; FAILED with @@error.message after a ROLLBACK, then RAISE; dry_run TRUE for a dry run); the gaps it decides: labels_missing, dedup_horizon_partial. The raw slices are the audit''s inputs: `SELECT * FROM new_deals_batch_rows(X, …)` recomputes any past run without writing.'
   parity: Parallel
   diverges: 'Same two tables, same columns, one orchestrator value per surface, so one query answers "what ran, what landed" for all three;
 
@@ -563,6 +580,7 @@ layers:
     for Claude''s ADC (proposed); roles/run.invoker on the job for new-deals-scheduler@; secretAccessor on hubspot-token-write for the job SA;
 
     two HubSpot private apps (read for DTS/A, crm.objects.deals.write for the job) + a one-off crm.schemas.deals.write token.'
+  R: 'bigquery.routines.get + jobs.create to CALL; dataEditor on the dataset covers every table the procedure writes; nothing outside the dataset — no sync dataset, no HubSpot.'
   parity: Divergent
   diverges: 'A and C are IAM-only (OIDC/OAuth, private surfaces); B exposes a public URL guarded by an application secret and holds a key and
     a token
@@ -594,6 +612,7 @@ layers:
     interleave. Job half: jobs.run returns immediately (Scheduler''s retries cover start failures only), --max-retries 2 per task,
 
     overlapping executions allowed — safe because the PATCH is value-idempotent and the delta view consults writeback_log first (C-G9).'
+  R: 'One transaction per CALL over new_deals / new_deals_history / new_deals_runs / report_state: conflicting transactions are cancelled by the engine, so callers never share a minute (A''s lease per entity, C''s per-entity off-the-hour schedules); the lease check RAISEs for an advance_state caller while A holds the entity; CREATE OR REPLACE TEMP TABLE lets one script CALL twice; the handler''s ROLLBACK is wrapped so a cancelled transaction still leaves its FAILED row.'
   parity: Divergent
   diverges: 'Three guards (lease + instance cap / n8n concurrency limit / transaction + idempotent PATCH). A''s instance cap alone does not serialise
 
@@ -623,6 +642,7 @@ layers:
   C: 'Scheduled-query run history (`bq ls --transfer_run`, failure notifications), DTS run history, Cloud Run job execution status and the
 
     job''s JSON summary line ({run_ts, patched, errors, dry}); SQL probes: new_deals_runs by entity/orchestrator and writeback_log by status.'
+  R: 'new_deals_runs (status, error, duration_ms up to the transaction''s opening, data_gaps), new_deals_history, deals_raw / labels_raw; the caller''s log line; the job history (one query job per CALL, the procedure''s statements as its child jobs in INFORMATION_SCHEMA.JOBS).'
   parity: Divergent
   diverges: 'Different consoles and log shapes; the ABORTED run row (stale sync) exists only in C, the delivery status only in A/B1, the n8n
 
@@ -644,6 +664,7 @@ layers:
   C: 'DTS HubSpot transfers free in Preview; scheduled queries a few MB/week inside the 1 TiB free tier; storage < 10 GiB; Cloud Run job minutes
 
     inside the free tier; third Scheduler job free (a fourth $0.10/month). HubSpot''s native sync would need Data Hub Enterprise (not chosen).'
+  R: 'One query job per CALL over kilobytes (the slice) plus the 90-day horizon scan of deals_raw (clustered by entity, deal_id, createdate; partitioned by run_ts, 730-day expiry); no runtime, no instance, no scale-to-zero question.'
   parity: Divergent
   diverges: 'A and C scale to zero and stay inside free tiers; B carries an always-on database and either a sleeping instance (webhook variant)
     or an
@@ -662,6 +683,7 @@ steps:
   B: same .env; deploy/n8n/deploy_n8n.sh refuses an unset PROJECT and N8N_IMAGE=:latest; secrets.sh / cloudsql.sh require PROJECT (scheduler.sh retired with B2)
   C: same .env; sql/apply.sh refuses placeholders in PROJECT SYNC_DATASET SYNC_DEALS_TABLE SYNC_OWNERS_TABLE; writeback/deploy_job.sh requires
     HUBSPOT_WRITE_TOKEN_VERSION
+  R: 'n/a — no settings of its own; the callers'' .env (PROJECT, DATASET, PORTAL_ID) renders the four files'
   parity: Conditional
   artefact: 'the echo line "project=… region=… dataset=… fn=… sa=… schedules: …" (A); rendered files without "${" (B, C)'
   notes: Same result when all three read the one .env copied from .env.example (they do). SYNC_* values exist only after C's first transfer run
@@ -672,6 +694,7 @@ steps:
   A: deploy.sh enable-apis — run, cloudbuild, artifactregistry, secretmanager, cloudscheduler, bigquery
   B: deploy/n8n/deploy_n8n.sh enables run, sqladmin, secretmanager, cloudscheduler inline; cloudsql.sh enables sqladmin
   C: n/a in scripts — bigquerydatatransfer.googleapis.com (scheduled queries, DTS) is not enabled by any script (R45)
+  R: 'bigquery.googleapis.com, already enabled by every lane'
   parity: Divergent
   artefact: gcloud services list --enabled shows the APIs
   notes: Idempotent on every surface. C relies on the BigQuery Data Transfer API being already on.
@@ -682,6 +705,7 @@ steps:
   B: deploy/n8n/secrets.sh — SAs n8n-run (cloudsql.client, secretAccessor ×3) and n8n-bq (jobUser + DCL GRANT + JSON key → deploy/n8n/.secrets/)
   C: sql/scheduled_query.sh — SA new-deals-sql (jobUser + DCL GRANT); writeback/deploy_job.sh deploy — SAs new-deals-writeback (jobUser + GRANT
     + secretAccessor) and new-deals-scheduler
+  R: 'the callers'' SAs: dataEditor on the dataset (routines included) + jobUser — granted by deploy.sh iam / tables and by scheduled_query.sh'
   parity: Divergent
   artefact: gcloud iam service-accounts list shows the SAs; gcloud projects get-iam-policy shows the bindings
   notes: Five identities in all; only B needs a key (B-G10). Each script is describe-then-create.
@@ -693,6 +717,7 @@ steps:
     new_deals_batch (the objects the function CALLs since pass 3; no SYNC_* needed)
   B: n/a — n8n writes no table (B1 only; B2 retired in pass 3 phase 3, D6)
   C: sql/apply.sh — bigquery_schema.sql → audit_tables.sql (new_deals_history, writeback_log) → hot_score_v1.sql → deals_synced_v1.sql → hot_deals_v1.sql
+  R: 'deploy.sh tables + deploy.sh routines (or sql/apply.sh): deals_raw, labels_raw, new_deals_runs.data_gaps; hot_score_v1; deals_landed_v1 + new_deals_batch_rows; new_deals_batch — OR REPLACE, re-runnable'
   parity: Divergent
   artefact: bq ls $PROJECT:hubspot lists report_state, new_deals, new_deals_runs, new_deals_history, writeback_log, hot_score_v1, the views
   notes: All DDL is IF NOT EXISTS / OR REPLACE. Until R44 is folded in, run sql/apply.sh (or audit_tables.sql) before the first live run of A
@@ -705,6 +730,7 @@ steps:
     an n8n credential
   C: printf '%s' "$WRITE_TOKEN" | gcloud secrets create hubspot-token-write --data-file=- (manual; not scripted) then HUBSPOT_SCHEMA_TOKEN=… writeback/bootstrap_property.sh
     (one-off)
+  R: 'n/a — no secret'
   parity: Divergent
   artefact: gcloud secrets versions list <name> shows an enabled version; HubSpot GET /crm/v3/properties/deals/hot_score_v1 → 200 (C)
   notes: Tokens never pass through .env or git. C needs a second private app with crm.objects.deals.write (R35).
@@ -717,6 +743,7 @@ steps:
     → N8N_URL=… N8N_API_KEY=… deploy/n8n/import_workflows.sh
   C: sql/sync_transfer.sh (first transfer) → fill SYNC_* in .env → sql/apply.sh → HUBSPOT_TOKEN=… sql/refresh_pipeline_labels.sh → DISABLE_SCHEDULE=1
     sql/scheduled_query.sh → writeback/deploy_job.sh (WRITEBACK_APPROVE=0)
+  R: 'deploy.sh routines IS the deploy (DDL only, no runtime); nothing executes until a caller CALLs'
   parity: Divergent
   artefact: 'A: revision Ready, URL printed; B: n8n URL printed, 3 workflows listed in the editor; C: 2 transfer configs new-deals-<entity>-C
     (no auto scheduling), job new-deals-writeback'
@@ -730,6 +757,7 @@ steps:
   B: 'n/a — B1 has no trigger of its own: the function POSTs to NEW_DEALS_DELIVERY (B2 and deploy/n8n/scheduler.sh retired in pass 3 phase 3, D6)'
   C: writeback/deploy_job.sh deploy also binds roles/run.invoker for new-deals-scheduler@ on the job and creates Scheduler job new-deals-writeback
     (30 5 * * 1 Zurich, OAuth) — enabled, but the job stays DRY
+  R: 'n/a — no trigger of its own; the callers'' triggers'
   parity: Divergent
   artefact: gcloud scheduler jobs list --location $REGION shows the jobs (A/B PAUSED, C ENABLED); gcloud run services get-iam-policy $FN shows
     run.invoker for the SA
@@ -741,6 +769,7 @@ steps:
   B: 'n/a — B1 has no dry run of its own; a dry run of the function POSTs nothing (B2 retired in pass 3 phase 3, D6)'
   C: DRYRUN=1 sql/scheduled_query.sh (bq query --dry_run of both rendered scripts); writeback/deploy_job.sh execute with WRITEBACK_APPROVE=0 →
     writeback_log rows status DRY; optional full rehearsal in a hubspot_dev dataset
+  R: 'tests/pass3_batch_vectors.sql in a dev dataset (15 vectors through root → view → table function, every row ok = TRUE, slice dropped); then deploy.sh dry exercises the procedure''s dry branch end to end (one runs row per entity, rows_written 0)'
   parity: Conditional
   artefact: 'payload {report_id, run_timestamp, orchestrator, dry_run: true, window{watermark_in, query_start, query_end}, row_count, rows_written:
     0, duplicate_suspects, day1_hot[], data_gaps[], rows[]} (A; since pass 3 also one new_deals_runs row with dry_run TRUE); bytes processed + DRY rows (C)'
@@ -753,6 +782,7 @@ steps:
   B: 'n/a — B1 runs when the function delivers: the live run POSTs the payload to NEW_DEALS_DELIVERY (B2 retired, D6)'
   C: bq mk --transfer_run --run_time=$(date -u +%FT%TZ) <transfer config new-deals-SEALSQ-C> (and ICALPS); then writeback/deploy_job.sh execute
     (still DRY until step 10)
+  R: 'the callers'' first live runs: deploy.sh run SEALSQ (CALL with advance_state FALSE) and bq mk --transfer_run (CALL with advance_state TRUE on NEW_DEALS_<entity>_C); then the acceptance SQL of docs/PASS3_RAW_ROOT.md (every history row has its raw row; the JSON carries the property names; data_gaps per run)'
   parity: Conditional
   artefact: rows_written == row_count; hubspot.new_deals holds the rows; report_state NEW_DEALS_<entity> (A) / NEW_DEALS_<entity>_C (C) watermark
     == run_timestamp; one new_deals_runs row per run (written by the procedure)
@@ -765,6 +795,7 @@ steps:
   B: 'activate NEW_DEALS_DELIVERY (UI or POST /api/v1/workflows/<id>/activate); nothing to schedule (B2 and scheduler.sh retired, D6)'
   C: sql/scheduled_query.sh without DISABLE_SCHEDULE (bq update --transfer_config re-enables auto scheduling); writeback/deploy_job.sh live (WRITEBACK_APPROVE=1
     on the job)
+  R: 'n/a — the callers'' schedules'
   parity: Conditional
   artefact: 'jobs ENABLED; gcloud scheduler jobs run new-deals-SEALSQ → HTTP 200 in the job log; C: transfer configs scheduled, job env WRITEBACK_APPROVE=1'
   notes: Only after step 8 passed on both entities and step 9 was probed. C's chain must keep its slack (per-entity, off-the-hour schedules);
@@ -776,6 +807,7 @@ steps:
     FROM new_deals GROUP BY entity; last 10 new_deals_runs
   B: same two bq queries (any shell with bq); n8n Executions list is additive
   C: same two bq queries; plus SELECT status, COUNT(*) FROM writeback_log WHERE DATE(run_ts) = CURRENT_DATE() GROUP BY status
+  R: 'SELECT * FROM new_deals_batch_rows(<run_ts>, ''<entity>'', ''<orchestrator>'', NULL) — what the rules make of a run''s inputs now, without writing; SELECT run_ts, entity, orchestrator, status, rows_written, data_gaps FROM new_deals_runs ORDER BY run_ts DESC'
   parity: Parallel
   artefact: the two result tables — identical from every scenario because every scenario writes the same dataset
   notes: Paste the dated output verbatim into the Overview verdict and docs/EXECUTION_SURFACES.md after the first live run.
@@ -786,6 +818,7 @@ steps:
     (state, schedule, lastAttemptTime)
   B: same bq query (rows NEW_DEALS_<entity>); gcloud scheduler jobs describe n8n-new-deals-<entity>
   C: same bq query (rows NEW_DEALS_<entity>_C); bq ls --transfer_run <config>; gcloud run jobs executions list --job new-deals-writeback
+  R: 'SELECT orchestrator, entity, COUNT(*), MIN(createdate) FROM deals_raw WHERE run_ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY) GROUP BY 1, 2 — the horizon the duplicate rule reads; dedup_horizon_partial on the latest runs row says whether it is full'
   parity: Parallel
   artefact: 'one report_state row per entity per lane (A: NEW_DEALS_<entity>; C: _C); watermark == last successful run_timestamp;
     lock_until NULL between runs'
@@ -797,6 +830,7 @@ steps:
   B: the same UPDATE with bq query, then POST the webhook for that entity (step 9, B column)
   C: 'bq mk --transfer_run --start_time=2026-09-28T04:00:00Z --end_time=2026-10-05T04:00:00Z <config>; HubSpot side: DELETE FROM writeback_log
     WHERE run_ts = … then gcloud run jobs execute new-deals-writeback'
+  R: 'CALL new_deals_batch with the same run_ts over the same slice (idempotent rewrite); a transfer run with a past run_time re-lands the slice (raw_backfilled_from_current_sync); deploy.sh replay opens a NEW run_ts — it adds a slice, never replaces one'
   parity: Conditional
   artefact: row count unchanged for an already-loaded window; last_seen_run advanced; day1_hot_score unchanged; a new new_deals_history slice
     per run_ts
