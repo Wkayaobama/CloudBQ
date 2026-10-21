@@ -28,6 +28,9 @@ Shared by every lane: `scoring/` (one hot score — Python, JS, SQL — pinned b
    project, plus the SQL (schema, `hot_score_v1`, vectors, audit tables) executed and witnessed from Python; `notebooks/README.md`.
 7. **Pass 2 (L2 likelihood tiers)** — `docs/PASS2_L2_TIERS.md` (evidence from the CRM, binning spec, lanes N/Q/W, dynamic storage),
    `docs/EXECUTION_SURFACES_L2.xlsx`, `scoring/deal_tiers_v1.constants.json`, `sql/deal_tiers_v1.sql` + `sql/deal_tiers_apply.sql`, `notebooks/l2_deal_tiers.ipynb`.
+8. **Pass 3 (the raw root)** — `docs/PASS3_RAW_ROOT.md`: why a past run could not be recomputed from BigQuery and why the fix is a
+   run_ts-keyed landing table rather than an orchestrator; the operator's decisions; phase 1 (shipped): `deals_raw` / `labels_raw`,
+   `new_deals_runs.data_gaps`, `sql/land_raw.sql`, `sql/backfill_raw.sh`; phases 2–3 (single SQL implementation, hand-off) pending.
 
 ## Tooling (reusable, project-agnostic — also installed in IC-DBT-BQ)
 
@@ -61,6 +64,7 @@ gitignored folder.
 - [Execution surfaces — how the three lanes were brought to one idempotent outcome (record)](docs/EXECUTION_SURFACES.md)
 - [Pass 1 — the sequence, on any lane (scenario A shown)](docs/PASS1_SEQUENCE.md)
 - [Pass 2 — L2 likelihood tiers: design, evidence, execution surfaces](docs/PASS2_L2_TIERS.md)
+- [Pass 3 — the raw root: a run_ts-keyed landing table that makes every run reconstructible](docs/PASS3_RAW_ROOT.md)
 - [Cloud Shell runbook — CloudBQ lane A on `wisekeybq`](docs/RUNBOOK_CLOUD_SHELL.md)
 - [The three lanes, condensed](docs/SCENARIOS.md)
 - [Porting `pass-sequence` from mir-load to CloudBQ (and IC-DBT-BQ)](docs/discovery/pass_sequence_port.md)

@@ -21,6 +21,10 @@ Modes
   • Lease: report_state.lock_until is taken by one atomic UPDATE per entity; an overlapping run gets 409 and nothing moves.
   • day1_hot_score / day1_hot_flag are written once (first observation) and never overwritten by a re-observation or a replay.
   • Audit: one row per run in new_deals_runs (also on failure) and the run's rows in new_deals_history (layer L13).
+  • Root (pass 3): the extraction as delivered — every deal the search returned, in-scope or not, with its properties as JSON — is
+    landed in deals_raw, and the pipeline/stage/owner labels in labels_raw, keyed by (run_ts, entity, orchestrator) like the history
+    slice. Phase 1 lands in shadow: a landing failure is logged, named in new_deals_runs.data_gaps, and never fails the run; dry runs
+    do not land (decision D1 takes effect in phase 3, when the SQL lane computes from the root).
 
 Environment
   HUBSPOT_TOKEN (Secret Manager)  BQ_PROJECT  BQ_DATASET (default hubspot)  DELIVERY_WEBHOOK_URL (optional, n8n)
@@ -56,7 +60,7 @@ PROPS = ["dealname", "createdate", "final_customer", "sales_region", "pipeline",
          "amount_in_home_currency", "deal_currency_code", "closedate", "asp_in_usd_q2_2022_calculation", "tpm__k_y", "services_value_2026",
          "calculation___pipeline_2026__k__", "product_hierarchy", "prod___product_name_new_", "application", "hubspot_owner_id",
          "hs_object_source_label", "hs_object_source_detail_1", "icalps_dealtype", "icalps_stage", "icalps_dealstatus", "num_contacted_notes",
-         "notes_last_updated", "revenue_state", "hs_created_by_user_id"]
+         "notes_last_updated", "revenue_state", "hs_created_by_user_id", "hs_lastmodifieddate"]   # 29: the last one orders re-observations
 
 # ------------------------------------------------------------------ hot-deal score v1 (same constants as hot_deals_score.js, fitted 2026-10-01)
 W = {"stage_prob": 2.0712, "proximity_2026": 1.2399, "missing_2026_field": -0.4136, "pipeline_conversion": 1.0918, "arr_points": 4.9843,
@@ -182,18 +186,49 @@ def write_history(client, rows, entity, run_ts):
     client.load_table_from_json(hist, table("new_deals_history"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
                                 schema=client.get_table(table("new_deals_history")).schema)).result()
 
-def write_run(client, entity, run_ts, window, rows, written, dry, status, error, started):
-    """One row per run, also on failure — the probe every scenario shares."""
+def land_raw(client, found, in_scope_ids, entity, run_ts, mode, source="hubspot_api"):
+    """Pass 3 root (layer L4): the extraction as delivered, keyed by (run_ts, entity, orchestrator) like the history slice.
+    Load first, then drop older rows of the same key, so a failure between the two jobs never leaves an empty slice.
+    `properties` is the dict itself — never json.dumps() — so the JSON column receives an inline object; never a streaming insert
+    (a streaming buffer would block the slice DELETE, see write_run)."""
+    from google.cloud import bigquery
+    fetched = datetime.now(timezone.utc)                               # microseconds: "older than" must be strict between two landings of one key
+    rows = [{"run_ts": run_ts.isoformat(), "entity": entity, "orchestrator": ORCHESTRATOR, "mode": mode, "source": source,
+             "deal_id": str(d["id"]), "in_scope": str(d["id"]) in in_scope_ids,
+             "createdate": (d.get("properties") or {}).get("createdate"), "pipeline_id": (d.get("properties") or {}).get("pipeline"),
+             "properties": d.get("properties") or {}, "fetched_at": fetched.isoformat()} for d in found]
+    if rows:
+        client.load_table_from_json(rows, table("deals_raw"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
+                                    schema=client.get_table(table("deals_raw")).schema)).result()
+    client.query(f"DELETE FROM `{table('deals_raw')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o AND fetched_at < @f",
+                 job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR, f=fetched)).result()
+    return len(rows)
+
+def land_labels(client, pl, st, owners, entity, run_ts):
+    """The labels the run resolved with (pipeline, stage, owner), same key and same load-then-delete-older pattern as land_raw."""
+    from google.cloud import bigquery
+    fetched = datetime.now(timezone.utc)                               # microseconds: "older than" must be strict between two landings of one key
+    rows = [{"run_ts": run_ts.isoformat(), "entity": entity, "orchestrator": ORCHESTRATOR, "kind": kind, "id": str(k), "label": v, "fetched_at": fetched.isoformat()}
+            for kind, m in (("pipeline", pl), ("stage", st), ("owner", owners)) for k, v in (m or {}).items()]
+    if rows:
+        client.load_table_from_json(rows, table("labels_raw"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
+                                    schema=client.get_table(table("labels_raw")).schema)).result()
+    client.query(f"DELETE FROM `{table('labels_raw')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o AND fetched_at < @f",
+                 job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR, f=fetched)).result()
+    return len(rows)
+
+def write_run(client, entity, run_ts, window, rows, written, dry, status, error, started, gaps=None):
+    """One row per run, also on failure — the probe every scenario shares. data_gaps names what the run could not read or compute."""
     rec = {"run_ts": run_ts.isoformat(), "entity": entity, "mode": window.get("mode"), "dry_run": dry, "orchestrator": ORCHESTRATOR,
            "watermark_in": window.get("watermark_in"), "query_start": window.get("query_start"), "query_end": window.get("query_end"),
            "row_count": len(rows), "rows_written": written, "duplicate_suspects": sum(1 for r in rows if r.get("duplicate_suspect")),
            "day1_hot": sum(1 for r in rows if r.get("day1_hot_flag")), "status": status, "error": (error or None) and str(error)[:1000],
-           "duration_ms": int((time.monotonic() - started) * 1000)}
+           "duration_ms": int((time.monotonic() - started) * 1000), "data_gaps": list(gaps or [])}
     try:   # a query INSERT, not a streaming insert: C's scheduled script DELETEs its own rows in this table and a streaming buffer would block it
         cols = list(rec); from google.cloud import bigquery
         types = {"run_ts": "TIMESTAMP", "watermark_in": "TIMESTAMP", "query_start": "TIMESTAMP", "query_end": "TIMESTAMP", "dry_run": "BOOL",
                  "row_count": "INT64", "rows_written": "INT64", "duplicate_suspects": "INT64", "day1_hot": "INT64", "duration_ms": "INT64"}
-        params = [bigquery.ScalarQueryParameter(c, types.get(c, "STRING"), rec[c]) for c in cols]
+        params = [bigquery.ArrayQueryParameter(c, "STRING", rec[c]) if c == "data_gaps" else bigquery.ScalarQueryParameter(c, types.get(c, "STRING"), rec[c]) for c in cols]
         client.query(f"INSERT INTO `{table('new_deals_runs')}` ({', '.join(cols)}) VALUES ({', '.join('@' + c for c in cols)})",
                      job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
     except Exception as e: jlog(logging.WARNING, "run log insert failed", error=str(e))
@@ -261,13 +296,13 @@ def new_deals_report(request):
     if entity not in ENTITIES: return ({"error": f"unknown entity {entity}"}, 400)
     event = bool(body.get("mode") == "event" and body.get("objectId"))
     client = bq()                                                       # dry mode reads like a live run (G05)
-    rows, written, window, leased = [], 0, {"mode": "event" if event else "window"}, False
+    rows, written, window, leased, gaps = [], 0, {"mode": "event" if event else "window"}, False, []
     try:
         hs = HubSpot(os.environ["HUBSPOT_TOKEN"]); pl, st = hs.pipelines(); owners = hs.owners()
         known = recent_names(client)
         if event:                                                       # HubSpot workflow webhook: one deal, no watermark change
-            d = hs.deal(body["objectId"]); deals = [d] if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"] else []; others = []
-            window["objectId"] = body["objectId"]
+            d = hs.deal(body["objectId"]); found = [d]; deals = [d] if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"] else []; others = []
+            window["objectId"] = body["objectId"]; gaps.append("event_no_window")
         else:
             start = read_watermark(client, entity, now)
             if not dry:
@@ -280,6 +315,13 @@ def new_deals_report(request):
             deals = [d for d in found if d.get("properties", {}).get("pipeline") in ENTITIES[entity]["pipelines"]]
             ids = {str(d["id"]) for d in deals}; others = [d for d in found if str(d["id"]) not in ids]
             window.update({"watermark_in": start.isoformat(), "query_start": qstart.isoformat(), "query_end": run_ts.isoformat()})
+        if not dry:                                                     # pass 3 root, in shadow: the inputs land before anything is computed from them
+            try:
+                land_raw(client, found, {str(d["id"]) for d in deals}, entity, run_ts, window["mode"])
+                land_labels(client, pl, st, owners, entity, run_ts)
+            except Exception as e:
+                jlog(logging.ERROR, "raw landing failed; the run continues (phase-1 shadow)", entity=entity, error=str(e)); gaps.append("raw_landing_failed")
+        if not known: gaps.append("dedup_scope_batch_only")
         rows = shape(deals, others, entity, pl, st, owners, run_ts, known)
         rows.sort(key=lambda r: (-(r["amount_kusd"] or 0), r["deal_id"]))
         if not dry:
@@ -294,11 +336,11 @@ def new_deals_report(request):
         if not dry:
             err = _deliver(payload)
             if err: payload["delivery_error"] = err
-            write_run(client, entity, run_ts, window, rows, written, dry, "OK" if not err else "OK_DELIVERY_FAILED", err, started)
+            write_run(client, entity, run_ts, window, rows, written, dry, "OK" if not err else "OK_DELIVERY_FAILED", err, started, gaps)
         jlog(logging.INFO, "run complete", entity=entity, dry_run=dry, rows=len(rows), written=written, window=window, duration_ms=int((time.monotonic() - started) * 1000))
         return (payload, 200)
     except Exception as e:
         jlog(logging.ERROR, "run failed", entity=entity, dry_run=dry, error=str(e), window=window)
-        if not dry: write_run(client, entity, run_ts, window, rows, written, dry, "FAILED", e, started)
+        if not dry: write_run(client, entity, run_ts, window, rows, written, dry, "FAILED", e, started, gaps)
         if leased: release_lease(client, entity)
         raise

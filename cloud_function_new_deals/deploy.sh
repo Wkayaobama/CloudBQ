@@ -61,7 +61,7 @@ iam() {
 }
 
 tables() {
-  say "tables — dataset, report_state, new_deals, new_deals_runs, view; dataEditor grant"
+  say "tables — dataset, report_state, new_deals, new_deals_runs, new_deals_history, deals_raw, labels_raw, view; dataEditor grant"
   local rendered
   if command -v envsubst >/dev/null; then
     rendered=$(PROJECT="$PROJECT" DATASET="$DATASET" BQ_LOCATION="$BQ_LOCATION" envsubst '${PROJECT} ${DATASET} ${BQ_LOCATION}' < "$HERE/bigquery_schema.sql")

@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "6C596755 5069:2285",
+ "serial": "EA9567F4 A007:0620",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -44,19 +44,19 @@
  ],
  "counts": {
   "dirs": 38,
-  "files": 128,
-  "annotated": 95,
+  "files": 132,
+  "annotated": 98,
   "proposed": 3,
   "by_status": {
    "existing": 3,
    "modify": 6,
-   "new": 86,
+   "new": 89,
    "proposed": 0
   },
   "by_scenario": {
-   "A": 58,
-   "B": 63,
-   "C": 65
+   "A": 59,
+   "B": 64,
+   "C": 68
   }
  },
  "lanes": {
@@ -179,13 +179,17 @@
   },
   "L4": {
    "A": [
-    "cloud_function_new_deals/main.py"
+    "cloud_function_new_deals/main.py",
+    "docs/PASS3_RAW_ROOT.md"
    ],
    "B": [
+    "docs/PASS3_RAW_ROOT.md",
     "workflows/NEW_DEALS_FULL.json"
    ],
    "C": [
+    "docs/PASS3_RAW_ROOT.md",
     "sql/deals_synced_v1.sql",
+    "sql/land_raw.sql",
     "sql/new_deals_weekly.sql",
     "sql/sync_transfer.sh"
    ]
@@ -326,10 +330,16 @@
   },
   "L12": {
    "A": [
-    "cloud_function_new_deals/deploy.sh"
+    "cloud_function_new_deals/deploy.sh",
+    "docs/PASS3_RAW_ROOT.md"
    ],
-   "B": [],
-   "C": []
+   "B": [
+    "docs/PASS3_RAW_ROOT.md"
+   ],
+   "C": [
+    "docs/PASS3_RAW_ROOT.md",
+    "sql/backfill_raw.sh"
+   ]
   },
   "L13": {
    "A": [
@@ -342,6 +352,7 @@
     "docs/execution_surfaces.yaml",
     "docs/EXECUTION_SURFACES_L2.xlsx",
     "docs/execution_surfaces_l2.yaml",
+    "docs/PASS3_RAW_ROOT.md",
     "notebooks/cloudbq_deploy_and_witness.ipynb",
     "sql/audit_tables.sql",
     "tests/test_docs_consistency.py"
@@ -356,6 +367,7 @@
     "docs/execution_surfaces.yaml",
     "docs/EXECUTION_SURFACES_L2.xlsx",
     "docs/execution_surfaces_l2.yaml",
+    "docs/PASS3_RAW_ROOT.md",
     "sql/audit_tables.sql",
     "tests/test_docs_consistency.py"
    ],
@@ -368,9 +380,11 @@
     "docs/execution_surfaces.yaml",
     "docs/EXECUTION_SURFACES_L2.xlsx",
     "docs/execution_surfaces_l2.yaml",
+    "docs/PASS3_RAW_ROOT.md",
     "sql/audit_tables.sql",
     "sql/deal_tiers_apply.sql",
     "sql/deal_tiers_v1.sql",
+    "sql/land_raw.sql",
     "sql/new_deals_weekly.sql",
     "tests/test_docs_consistency.py",
     "writeback/index.mjs"
@@ -625,7 +639,8 @@
    "layer": "L7",
    "status": "modify",
    "parity": "Parallel",
-   "role": "report_state (+lock_until), new_deals, new_deals_runs, new_deals_last_7d — the shared truth every lane reads and writes",
+   "role": "report_state (+lock_until), new_deals, new_deals_runs (+data_gaps), new_deals_history, deals_raw, labels_raw, new_deals_last_7d — the shared truth every lane reads and writes",
+   "notes": "pass 3 phase 1 (deals_raw, labels_raw, data_gaps) by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_deploy_canonical.md",
    "kind": "file",
    "exists": true
@@ -659,8 +674,8 @@
    "layer": "L7",
    "status": "modify",
    "parity": "Parallel",
-   "role": "HTTP function: watermark window → HubSpot search → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit; JSON logs",
-   "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16",
+   "role": "HTTP function: watermark window → HubSpot search → land the search in deals_raw / labels_raw (pass 3 root, shadow) → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit with data_gaps; JSON logs",
+   "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
    "layers_list": [
     "L7",
@@ -1014,6 +1029,25 @@
    "kind": "file",
    "exists": true
   },
+  "docs/PASS3_RAW_ROOT.md": {
+   "scenarios": [
+    "A",
+    "B",
+    "C"
+   ],
+   "layer": "L13",
+   "status": "new",
+   "parity": "Parallel",
+   "role": "Pass 3 design + decisions (2026-10-21): why the missing node is a run_ts-keyed root and not an orchestrator, the shape of deals_raw / labels_raw, who lands (both lanes), S1–S9 over the root, the three phases, the acceptance SQL; phase 1 implemented",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "layers_list": [
+    "L13",
+    "L4",
+    "L12"
+   ],
+   "kind": "file",
+   "exists": true
+  },
   "docs/RUNBOOK_CLOUD_SHELL.md": {
    "scenarios": [
     "A"
@@ -1220,6 +1254,18 @@
    "kind": "file",
    "exists": true
   },
+  "sql/backfill_raw.sh": {
+   "scenarios": [
+    "C"
+   ],
+   "layer": "L12",
+   "status": "new",
+   "parity": "Conditional",
+   "role": "One-time landing of the 90-day set per entity with orchestrator = backfill at the cut-over run_ts (RUN_TS env), so the duplicate horizon is full from day one; DRYRUN=1 renders + bq --dry_run",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "kind": "file",
+   "exists": true
+  },
   "sql/deals_synced_v1.sql": {
    "scenarios": [
     "C"
@@ -1284,6 +1330,23 @@
    "kind": "file",
    "exists": true
   },
+  "sql/land_raw.sql": {
+   "scenarios": [
+    "C"
+   ],
+   "layer": "L4",
+   "status": "new",
+   "parity": "Divergent",
+   "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of the 29 PROPS, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
+   "notes": "spliced into new_deals_weekly.sql by scheduled_query.sh and reused by backfill_raw.sh",
+   "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+   "layers_list": [
+    "L4",
+    "L13"
+   ],
+   "kind": "file",
+   "exists": true
+  },
   "sql/new_deals_weekly.sql": {
    "scenarios": [
     "C"
@@ -1291,8 +1354,8 @@
    "layer": "L7",
    "status": "new",
    "parity": "Parallel",
-   "role": "Scheduled script per entity: ONE transaction window → shape → duplicates → MERGE → history → run log → report_state NEW_DEALS_<entity>_C",
-   "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched",
+   "role": "Scheduled script per entity: freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, outside the transaction) → ONE transaction window → shape → duplicates → MERGE → history → run log (+data_gaps) → report_state NEW_DEALS_<entity>_C",
+   "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "layers_list": [
     "L7",
@@ -1323,7 +1386,7 @@
    "layer": "L3",
    "status": "new",
    "parity": "Conditional",
-   "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate)",
+   "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
    "notes": "scheduled queries run on UTC only; 04:00 UTC is always before the 05:30-Zurich write-back and A's 07:00",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "layers_list": [
@@ -1861,6 +1924,12 @@
               "name": "a_notebook_witness.md",
               "kind": "file",
               "path": ".claude/skills/aider-scaffold/assets/recipes/a_notebook_witness.md",
+              "exists": true
+             },
+             {
+              "name": "a_raw_root.md",
+              "kind": "file",
+              "path": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
               "exists": true
              },
              {
@@ -2402,7 +2471,8 @@
        "layer": "L7",
        "status": "modify",
        "parity": "Parallel",
-       "role": "report_state (+lock_until), new_deals, new_deals_runs, new_deals_last_7d — the shared truth every lane reads and writes",
+       "role": "report_state (+lock_until), new_deals, new_deals_runs (+data_gaps), new_deals_history, deals_raw, labels_raw, new_deals_last_7d — the shared truth every lane reads and writes",
+       "notes": "pass 3 phase 1 (deals_raw, labels_raw, data_gaps) by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_deploy_canonical.md"
       }
      },
@@ -2444,8 +2514,8 @@
        "layer": "L7",
        "status": "modify",
        "parity": "Parallel",
-       "role": "HTTP function: watermark window → HubSpot search → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit; JSON logs",
-       "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16",
+       "role": "HTTP function: watermark window → HubSpot search → land the search in deals_raw / labels_raw (pass 3 root, shadow) → shape + hot score → per-run staging → MERGE → history → watermark; dry mode reads, writes nothing; lease; run audit with data_gaps; JSON logs",
+       "notes": "also layers L4 L5 L6 L8 L11 L13 L15 L16; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
        "layers_list": [
         "L7",
@@ -2979,6 +3049,29 @@
       }
      },
      {
+      "name": "PASS3_RAW_ROOT.md",
+      "kind": "file",
+      "path": "docs/PASS3_RAW_ROOT.md",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "A",
+        "B",
+        "C"
+       ],
+       "layer": "L13",
+       "status": "new",
+       "parity": "Parallel",
+       "role": "Pass 3 design + decisions (2026-10-21): why the missing node is a run_ts-keyed root and not an orchestrator, the shape of deals_raw / labels_raw, who lands (both lanes), S1–S9 over the root, the three phases, the acceptance SQL; phase 1 implemented",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+       "layers_list": [
+        "L13",
+        "L4",
+        "L12"
+       ]
+      }
+     },
+     {
       "name": "RUNBOOK_CLOUD_SHELL.md",
       "kind": "file",
       "path": "docs/RUNBOOK_CLOUD_SHELL.md",
@@ -3241,6 +3334,22 @@
       }
      },
      {
+      "name": "backfill_raw.sh",
+      "kind": "file",
+      "path": "sql/backfill_raw.sh",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "C"
+       ],
+       "layer": "L12",
+       "status": "new",
+       "parity": "Conditional",
+       "role": "One-time landing of the 90-day set per entity with orchestrator = backfill at the cut-over run_ts (RUN_TS env), so the duplicate horizon is full from day one; DRYRUN=1 renders + bq --dry_run",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md"
+      }
+     },
+     {
       "name": "deals_synced_v1.sql",
       "kind": "file",
       "path": "sql/deals_synced_v1.sql",
@@ -3321,6 +3430,27 @@
       }
      },
      {
+      "name": "land_raw.sql",
+      "kind": "file",
+      "path": "sql/land_raw.sql",
+      "exists": true,
+      "ann": {
+       "scenarios": [
+        "C"
+       ],
+       "layer": "L4",
+       "status": "new",
+       "parity": "Divergent",
+       "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of the 29 PROPS, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
+       "notes": "spliced into new_deals_weekly.sql by scheduled_query.sh and reused by backfill_raw.sh",
+       "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
+       "layers_list": [
+        "L4",
+        "L13"
+       ]
+      }
+     },
+     {
       "name": "new_deals_weekly.sql",
       "kind": "file",
       "path": "sql/new_deals_weekly.sql",
@@ -3332,8 +3462,8 @@
        "layer": "L7",
        "status": "new",
        "parity": "Parallel",
-       "role": "Scheduled script per entity: ONE transaction window → shape → duplicates → MERGE → history → run log → report_state NEW_DEALS_<entity>_C",
-       "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched",
+       "role": "Scheduled script per entity: freshness guard → land the 90-day set (sql/land_raw.sql spliced at -- @include, outside the transaction) → ONE transaction window → shape → duplicates → MERGE → history → run log (+data_gaps) → report_state NEW_DEALS_<entity>_C",
+       "notes": "same target table and frozen columns as A; distinct report_id so A's watermark is never touched; pass 3 phase 1 by .claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
        "layers_list": [
         "L7",
@@ -3372,7 +3502,7 @@
        "layer": "L3",
        "status": "new",
        "parity": "Conditional",
-       "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate)",
+       "role": "Register/update one scheduled query per entity (every monday 04:00 UTC; DISABLE_SCHEDULE=1 is the gate); render() splices sql/land_raw.sql at its marker and needs SYNC_DEALS_TABLE",
        "notes": "scheduled queries run on UTC only; 04:00 UTC is always before the 05:30-Zurich write-back and A's 07:00",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
        "layers_list": [

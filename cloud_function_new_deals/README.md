@@ -44,6 +44,12 @@ the same key was created in the same window in any pipeline, or exists in `new_d
 **How it composes.** `new_deals_last_7d` sits next to `sealsq_hot_deals_v1` and `sealsq_top5_weekly_v1` in BigQuery: same dataset, same cadence,
 same idempotency rules; Breeze and BI read the views, n8n delivers, Claude iterates.
 
+**Pass 3 phase 1 (the raw root).** A live run first lands the whole search result in `deals_raw` (one row per deal returned, `in_scope`
+per deal, the 29 properties as JSON) and the pipeline/stage/owner maps in `labels_raw`, keyed by (run_ts, entity, orchestrator) like
+`new_deals_history`; a landing failure is logged, named in `new_deals_runs.data_gaps`, and never fails the run. Run `deploy.sh tables`
+before `deploy.sh deploy` on an existing project: it adds the two tables and the `data_gaps` column (every statement is `IF NOT EXISTS`).
+Design and acceptance SQL: `../docs/PASS3_RAW_ROOT.md`.
+
 **Test before scheduling.** `deploy.sh dry` runs `curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?entity=…&dry_run=1"`
 for both entities and asserts `rows_written == 0`; `deploy.sh enable` resumes the schedulers only after that. Offline, before any deploy:
 `python3 ../tests/test_hot_score.py && python3 ../tests/test_main_offline.py`.

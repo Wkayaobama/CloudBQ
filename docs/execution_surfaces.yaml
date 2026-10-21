@@ -251,7 +251,11 @@ layers:
 
     HubSpot POST /crm/v3/objects/deals/search createdate GTE watermark − OVERLAP_MINUTES(5) AND LT run_ts, PROPS (29 properties), sort
 
-    createdate ASC, 200/page; deals filtered by ENTITIES[entity].pipelines, the rest kept as duplicate candidates ("others").'
+    createdate ASC, 200/page; deals filtered by ENTITIES[entity].pipelines, the rest kept as duplicate candidates ("others"). Pass 3
+
+    phase 1: the whole search result (in_scope per deal) and the pipeline/stage/owner maps land in deals_raw / labels_raw keyed by
+
+    (run_ts, entity, orchestrator) before shape() — load first, delete-older second; non-fatal (data_gaps raw_landing_failed); dry does not land.'
   B: 'B1: in the function. B2: node "Read watermark" (same SELECT, same report_id) → Code node "Window" computes watermark_in / query_start /
 
     query_end once → HTTP Request "HubSpot search" with the identical filterGroups, PROPS list, sort and limit 200, paginated on
@@ -261,7 +265,13 @@ layers:
 
     ${PIPELINES} after a freshness guard (RAISE + ABORTED run row when MAX(lastmodified) < run_ts − 36 h). Source = scheduled full-refresh
 
-    sync (DTS, Preview) into $SYNC_DATASET.$SYNC_DEALS_TABLE read through the adapter view. No event mode.'
+    sync (DTS, Preview) into $SYNC_DATASET.$SYNC_DEALS_TABLE read through the adapter view. No event mode. Pass 3 phase 1: after the guard
+
+    and before the transaction, sql/land_raw.sql (spliced by scheduled_query.sh) lands the 90-day set from the sync TABLE with HubSpot
+
+    property names (TO_JSON of the 29 PROPS) and the labels, same key and same INSERT-then-DELETE-older order as A; sql/backfill_raw.sh
+
+    lands it once per entity with orchestrator = backfill at cut-over.'
   parity: Divergent
   diverges: 'A and B2 share the mechanism (watermark row + live createdate search); C reads a scheduled snapshot with a fixed lookback — a deal
 
@@ -509,7 +519,9 @@ layers:
 
     the exception path; write_history(): the run''s rows appended to hubspot.new_deals_history (slice replaced by run_ts/entity/orchestrator);
 
-    JSON log line "run complete".'
+    JSON log line "run complete". Pass 3 phase 1: new_deals_runs.data_gaps ARRAY<STRING> names what the run could not read or compute
+
+    (raw_landing_failed, dedup_scope_batch_only, event_no_window); deals_raw / labels_raw hold the run''s inputs as delivered (JSON).'
   B: 'B2 nodes "History slice" (DELETE + INSERT new_deals_history … orchestrator = ''n8n'') and "Run log" (INSERT new_deals_runs … ''n8n'',
 
     status ''OK''); n8n execution records in Cloud SQL (90 days, EXECUTIONS_DATA_MAX_AGE=2160) and NEW_DEALS_ERRORS.json e-mails failures.
@@ -521,7 +533,11 @@ layers:
 
     OK | ERROR | DRY, http_status, error, dry_run); plus `bq ls --transfer_run` history. DDL: cloud_function_new_deals/bigquery_schema.sql
 
-    (new_deals_runs) + sql/audit_tables.sql (new_deals_history, writeback_log).'
+    (new_deals_runs) + sql/audit_tables.sql (new_deals_history, writeback_log). Pass 3 phase 1: data_gaps on the runs row (sync_stale on
+
+    the ABORTED row; source_detail_unavailable; raw_backfilled_from_current_sync when run_time is older than an hour) and the deals_raw /
+
+    labels_raw slices from sql/land_raw.sql, kept even when the transaction fails. DDL for both raw tables: bigquery_schema.sql.'
   parity: Parallel
   diverges: 'Same two tables, same columns, one orchestrator value per surface, so one query answers "what ran, what landed" for all three;
 
@@ -1220,6 +1236,13 @@ remediation:
   cause: main.py imports functions_framework at import time; the tests import main.
   fix: 'a virtualenv in $HOME (persists in Cloud Shell): python3 -m venv ~/.venvs/cloudbq && pip install -r cloud_function_new_deals/requirements.txt pyyaml pytest; the Workbench notebook installs the same into its kernel.'
   verified: this commit (docs); the CI job installs the same requirements before pytest (green)
+- id: R54
+  symptom: 'Pass 3 finding: both lanes reconstruct their OUTPUTS per run (new_deals_runs, new_deals_history) but never persist their INPUTS — the HubSpot search result is consumed by shape() and discarded, six of the ten hot-score inputs are columns of no table, lane C computes a TEMP table from a view over a full-refresh sync — so day1_hot_score, duplicate_of, the label strings and the delivered report of a past run cannot be recomputed from BigQuery'
+  layer: L4
+  surfaces: A C
+  cause: No run_ts-keyed landing of what each run computed from; an orchestrator would sequence nodes without persisting the missing one.
+  fix: 'Phase 1 (this commit, docs/PASS3_RAW_ROOT.md): deals_raw (properties JSON as delivered, in_scope, createdate, pipeline_id) and labels_raw keyed by (run_ts, entity, orchestrator) like new_deals_history; lane A lands the whole search before shape() (non-fatal, named in new_deals_runs.data_gaps), lane C lands its 90-day set from the sync table before its transaction (sql/land_raw.sql); sql/backfill_raw.sh fills the duplicate horizon at cut-over. Phase 2: one SQL implementation over the root (adapter view, table function, procedure). Phase 3: the function calls the procedure; shape()/hot_score() become test oracles; n8n B2 retired.'
+  verified: 'tests/test_main_offline.py (7 root tests: order, slice replacement, JSON dict, dry, failure named, clean gaps, event); rendered scripts (DRYRUN=1 sql/scheduled_query.sh, DRYRUN=1 sql/backfill_raw.sh); acceptance SQL in docs/PASS3_RAW_ROOT.md after the first live run'
 equality_checks:
 - stage: after dry runs (same window, nothing written)
   compare: payload row_count, duplicate_suspects, day1_hot[] and window per entity — A vs B2 on the same watermark row
@@ -1276,6 +1299,11 @@ equality_checks:
   A: deploy.sh probe — SELECT entity, COUNT(*) n, COUNTIF(day1_hot_flag) hot, COUNTIF(duplicate_suspect) dup, MIN(createdate), MAX(createdate) FROM new_deals GROUP BY entity; last 10 new_deals_runs
   BC: 'n/a — same lane, two surfaces: notebooks/cloudbq_deploy_and_witness.ipynb cell 4.5 runs the identical SQL through bigquery.Client and prints job id, bytes processed, slot ms'
   expected: identical rows and counts from both surfaces (job ids differ); the notebook additionally shows hot_score_v1 reproducing the 15 golden vectors and main.hot_score agreeing with it
+- stage: after first live run (pass 3 phase 1 — the root)
+  compare: every (run_ts, entity, orchestrator, deal_id) of new_deals_history has its row in deals_raw; the JSON carries the property names; data_gaps per run
+  A: bq query 'SELECT COUNT(*) FROM `$PROJECT.hubspot.new_deals_history` h LEFT JOIN `$PROJECT.hubspot.deals_raw` r USING (run_ts, entity, orchestrator, deal_id) WHERE r.deal_id IS NULL AND h.orchestrator = ''cloud-run-function'' AND h.run_ts >= TIMESTAMP ''<cut-over>'''
+  BC: 'C: same query with orchestrator = ''bigquery-scheduled-query'' (and ''backfill'' for the one-time landing); both: SELECT orchestrator, COUNTIF(JSON_VALUE(properties, ''$.pipeline'') IS NULL) FROM `$PROJECT.hubspot.deals_raw` GROUP BY 1; SELECT run_ts, entity, orchestrator, status, data_gaps FROM `$PROJECT.hubspot.new_deals_runs` ORDER BY run_ts DESC'
+  expected: 0 missing rows for both orchestrators; 0 NULL pipelines in the JSON; data_gaps [] on a clean lane-A run, [source_detail_unavailable] on a clean lane-C run; raw slices with no OK runs row list only failed runs (kept by design)
 parity_meanings:
   Parallel: 'same artefact and same result on every lane whatever runtime produces it — pinned by a committed test or an equality check (outcome
     parity: the columns are scenarios, not terminals)'

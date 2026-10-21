@@ -32,10 +32,10 @@ DRYRUN=1 $D all                   # rehearsal: prints every gcloud/bq command, r
 $D check-env                      # .env complete, no placeholders
 $D enable-apis                    # run, cloudbuild, artifactregistry, secretmanager, cloudscheduler, bigquery
 $D iam                            # SA new-deals-fn, bigquery.jobUser, run.builder for the Cloud Build SA
-$D tables                         # CREATE SCHEMA IF NOT EXISTS; report_state (+lock_until), new_deals, new_deals_runs, view; dataEditor GRANT
+$D tables                         # CREATE SCHEMA IF NOT EXISTS; report_state (+lock_until), new_deals, new_deals_runs (+data_gaps), new_deals_history, deals_raw, labels_raw, view; dataEditor GRANT
 
 # ── look ──────────────────────────────────────────────────────────────────────────────────────────
-bq ls --project_id=$PROJECT $DATASET                                     # four tables, one view
+bq ls --project_id=$PROJECT $DATASET                                     # six tables, one view (deals_raw, labels_raw since pass 3)
 bq show --schema --format=prettyjson $PROJECT:$DATASET.new_deals | python3 -m json.tool | head -40
 
 IFS= read -rsp 'HUBSPOT_TOKEN: ' HUBSPOT_TOKEN; echo
@@ -94,7 +94,7 @@ on the data side; it only doubles the compute. Pick one orchestrator per entity 
 
 | Stage | Produces | Look with |
 |---|---|---|
-| `tables` | dataset, `report_state`, `new_deals`, `new_deals_runs`, `new_deals_last_7d` | `bq ls`, `bq show --schema` |
+| `tables` | dataset, `report_state`, `new_deals`, `new_deals_runs` (+`data_gaps`), `new_deals_history`, `deals_raw`, `labels_raw` (pass 3), `new_deals_last_7d` | `bq ls`, `bq show --schema` |
 | `secret` | Secret Manager `hubspot-token` version | `gcloud secrets versions list hubspot-token` |
 | `deploy` | Cloud Run service revision at `https://<fn>-<hash>-<region>.run.app` | `gcloud run services describe`, `gcloud run revisions list` |
 | `invoker` | IAM binding, two paused Scheduler jobs | `gcloud scheduler jobs list` |

@@ -4,16 +4,19 @@
 #                                          04:00 UTC is 05:00/06:00 Europe/Zurich, always before the 05:30-Zurich write-back and A's 07:00)
 #   DISABLE_SCHEDULE=1 sql/scheduled_query.sh   register without auto-scheduling (the gate: run one backfill by hand first)
 #   DRYRUN=1 sql/scheduled_query.sh        render the two scripts, run `bq query --dry_run` on each (syntax + bytes), register nothing
-# Settings from ../.env: PROJECT DATASET BQ_LOCATION PORTAL_ID SQL_SA_NAME (default new-deals-sql)
+# Settings from ../.env: PROJECT DATASET BQ_LOCATION PORTAL_ID SQL_SA_NAME (default new-deals-sql) SYNC_DATASET SYNC_DEALS_TABLE
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 [[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
-: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}" "${SYNC_DATASET:?}"
+: "${PROJECT:?}" "${DATASET:=hubspot}" "${BQ_LOCATION:=EU}" "${PORTAL_ID:=9201667}" "${SQL_SA_NAME:=new-deals-sql}" "${SCHEDULE_UTC:=every monday 04:00}" "${SYNC_DATASET:?}" "${SYNC_DEALS_TABLE:?set SYNC_DEALS_TABLE in .env (the landing reads the sync table directly)}"
 [[ "$PROJECT" != your-* ]] || { echo "PROJECT holds a placeholder" >&2; exit 2; }
 DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
 
-render() { sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" -e "s/\${ENTITY}/$1/g" -e "s/\${PIPELINES}/${PIPES[$1]}/g" "$HERE/new_deals_weekly.sql"; }
+# render: splice sql/land_raw.sql at its marker (sed `r` appends the file after the marker line), then substitute the placeholders
+render() { sed -e "/^-- @include land_raw.sql$/r $HERE/land_raw.sql" "$HERE/new_deals_weekly.sql" \
+           | sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" -e "s/\${ENTITY}/$1/g" -e "s/\${PIPELINES}/${PIPES[$1]}/g" \
+                 -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g"; }
 
 if [[ "$DRYRUN" != 1 ]]; then
   gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1 || gcloud iam service-accounts create "$SQL_SA_NAME" --project "$PROJECT" --display-name "new deals scheduled queries"

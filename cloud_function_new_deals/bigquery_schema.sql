@@ -36,6 +36,33 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_history` (
 PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id
 OPTIONS (partition_expiration_days = 730);
 
+-- Pass 3 — the raw root (layers L4 + L13): what each run computed from, landed as delivered and keyed like new_deals_history
+-- (run_ts, entity, orchestrator). Lane A lands the HubSpot search result (in-scope deals and the out-of-scope duplicate candidates),
+-- lane C lands its 90-day set from the sync table with the same HubSpot property names. The adapter view (pass 3 phase 2) types the
+-- JSON once; nothing here is typed. Re-landing the same key replaces the slice (load first, then delete older rows of the key).
+CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.deals_raw` (
+  run_ts TIMESTAMP NOT NULL, entity STRING NOT NULL, orchestrator STRING NOT NULL,
+  mode STRING NOT NULL,                 -- window | event | dry
+  source STRING NOT NULL,               -- hubspot_api | dts_sync
+  deal_id STRING NOT NULL,
+  in_scope BOOL NOT NULL,               -- TRUE: the entity's pipelines; FALSE: duplicate candidate from another pipeline ("others")
+  createdate TIMESTAMP, pipeline_id STRING,   -- promoted so the window and duplicate predicates are typed columns (no pruning: partitioned by run_ts)
+  properties JSON NOT NULL,             -- the PROPS as the source delivered them (HubSpot strings for the API, the sync's typed values for DTS)
+  fetched_at TIMESTAMP NOT NULL)
+PARTITION BY DATE(run_ts) CLUSTER BY entity, deal_id, createdate
+OPTIONS (partition_expiration_days = 730);
+
+CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.labels_raw` (
+  run_ts TIMESTAMP NOT NULL, entity STRING NOT NULL, orchestrator STRING NOT NULL,
+  kind STRING NOT NULL,                 -- pipeline | stage | owner
+  id STRING NOT NULL, label STRING, fetched_at TIMESTAMP NOT NULL)
+PARTITION BY DATE(run_ts) CLUSTER BY kind, id
+OPTIONS (partition_expiration_days = 730);
+
+-- data_gaps: what a run could not read or compute (sync_stale, labels_missing, dedup_horizon_partial, dedup_scope_batch_only,
+-- raw_landing_failed, raw_slice_replaced, raw_backfilled_from_current_sync, source_detail_unavailable, event_no_window)
+ALTER TABLE `${PROJECT}.${DATASET}.new_deals_runs` ADD COLUMN IF NOT EXISTS data_gaps ARRAY<STRING>;
+
 -- Per-run staging tables are created by the function as `${DATASET}.new_deals_staging_<entity>_<run_ts>` and dropped after the MERGE;
 -- the service account needs bigquery.dataEditor on the dataset (deploy.sh grants it).
 

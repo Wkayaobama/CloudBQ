@@ -99,7 +99,7 @@ $D tables
 
 # look
 gcloud iam service-accounts list --project "$MY_PROJECT"                         # check: new-deals-fn
-bq ls --project_id="$MY_PROJECT" "$MY_DATASET"                                   # check: report_state, new_deals, new_deals_runs, new_deals_history, new_deals_last_7d (view)
+bq ls --project_id="$MY_PROJECT" "$MY_DATASET"                                   # check: report_state, new_deals, new_deals_runs, new_deals_history, deals_raw, labels_raw, new_deals_last_7d (view)
 ```
 
 ## Phase 5: the HubSpot token

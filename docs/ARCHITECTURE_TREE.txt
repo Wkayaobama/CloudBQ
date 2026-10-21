@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is 6C596755 5069:2285
+Volume serial number is EA9567F4 A007:0620
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -27,6 +27,7 @@ CloudBQ
 │       │   │           a_deploy_canonical.md
 │       │   │           a_main_idempotency.md
 │       │   │           a_notebook_witness.md
+│       │   │           a_raw_root.md
 │       │   │           b_n8n_cloud_run.md
 │       │   │           b_workflows_generated.md
 │       │   │           c_bigquery_compute.md
@@ -131,6 +132,7 @@ CloudBQ
 │   │   execution_surfaces_tooling.yaml
 │   │   PASS1_SEQUENCE.md
 │   │   PASS2_L2_TIERS.md
+│   │   PASS3_RAW_ROOT.md
 │   │   RUNBOOK_CLOUD_SHELL.md
 │   │   SCENARIOS.md
 │   │
@@ -161,10 +163,12 @@ CloudBQ
 ├───sql
 │       apply.sh
 │       audit_tables.sql
+│       backfill_raw.sh
 │       deals_synced_v1.sql
 │       deal_tiers_apply.sql
 │       deal_tiers_v1.sql
 │       hot_deals_v1.sql
+│       land_raw.sql
 │       new_deals_weekly.sql
 │       refresh_pipeline_labels.sh
 │       scheduled_query.sh

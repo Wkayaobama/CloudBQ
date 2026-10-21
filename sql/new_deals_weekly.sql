@@ -1,20 +1,34 @@
 -- Scenario C scheduled script: window → shape → duplicates → MERGE → history → run log → state, in ONE transaction.
 -- Registered per entity by sql/scheduled_query.sh (${ENTITY}, ${PIPELINES} substituted); @run_time is BigQuery's parameter.
 -- Idempotent: the batch is a pure function of (synced state, @run_time); replaying a run_time rewrites the same slices.
+-- Pass 3 phase 1: the 90-day set and the labels are landed in deals_raw / labels_raw (sql/land_raw.sql) after the freshness guard
+-- and BEFORE the transaction — the raw root this batch computes from, kept even when the batch fails.
 DECLARE v_entity STRING DEFAULT '${ENTITY}';          -- v_ prefix: a column with the same name would shadow the variable
 DECLARE v_pipelines ARRAY<STRING> DEFAULT ${PIPELINES};
 DECLARE v_lookback_days INT64 DEFAULT 14;                        -- replaces the watermark search; MERGE absorbs the overlap
 DECLARE v_run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(@run_time, SECOND);
+DECLARE v_orchestrator STRING DEFAULT 'bigquery-scheduled-query';
+DECLARE v_mode STRING DEFAULT 'window';
 DECLARE v_freshest TIMESTAMP;
 DECLARE v_t0 TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+DECLARE v_landed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+DECLARE v_gaps ARRAY<STRING> DEFAULT ['source_detail_unavailable'];
 
 -- freshness guard: never MERGE a stale sync (the sync is scheduled, never real-time)
 SET v_freshest = (SELECT MAX(lastmodified) FROM `${PROJECT}.${DATASET}.deals_synced_v1`);
 IF v_freshest IS NULL OR v_freshest < TIMESTAMP_SUB(v_run_ts, INTERVAL 36 HOUR) THEN
-  INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, status, error, duration_ms)
-  VALUES (v_run_ts, v_entity, 'window', FALSE, 'bigquery-scheduled-query', 'ABORTED', 'deals sync older than 36h', 0);
+  INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs` (run_ts, entity, mode, dry_run, orchestrator, status, error, duration_ms, data_gaps)
+  VALUES (v_run_ts, v_entity, v_mode, FALSE, v_orchestrator, 'ABORTED', 'deals sync older than 36h', 0, ['sync_stale']);
   RAISE USING MESSAGE = 'deals sync is older than 36h; aborting run';
 END IF;
+
+-- a transfer run started with a past run_time reads the sync as of now (full refresh): name it
+IF v_run_ts < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR) THEN
+  SET v_gaps = ARRAY_CONCAT(v_gaps, ['raw_backfilled_from_current_sync']);
+END IF;
+
+-- pass 3 root: land the inputs (plain DML, outside the transaction) — sql/land_raw.sql is spliced here by scheduled_query.sh
+-- @include land_raw.sql
 
 BEGIN TRANSACTION;
 
@@ -69,12 +83,12 @@ SELECT v_run_ts, entity, 'bigquery-scheduled-query', * EXCEPT(entity) FROM batch
 
 DELETE FROM `${PROJECT}.${DATASET}.new_deals_runs` WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = 'bigquery-scheduled-query';
 INSERT INTO `${PROJECT}.${DATASET}.new_deals_runs`
-  (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms)
-SELECT v_run_ts, v_entity, 'window', FALSE, 'bigquery-scheduled-query',
+  (run_ts, entity, mode, dry_run, orchestrator, watermark_in, query_start, query_end, row_count, rows_written, duplicate_suspects, day1_hot, status, error, duration_ms, data_gaps)
+SELECT v_run_ts, v_entity, v_mode, FALSE, v_orchestrator,
        (SELECT watermark FROM `${PROJECT}.${DATASET}.report_state` WHERE report_id = CONCAT('NEW_DEALS_', v_entity, '_C')),
        TIMESTAMP_SUB(v_run_ts, INTERVAL v_lookback_days DAY), v_run_ts,
        COUNT(*), COUNT(*), COUNTIF(duplicate_suspect), COUNTIF(day1_hot_flag), 'OK', NULL,
-       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), v_t0, MILLISECOND)
+       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), v_t0, MILLISECOND), v_gaps
 FROM batch;
 
 -- L8: state advances inside the same transaction as the MERGE (engine-enforced "only after"); C keeps its own report_id
