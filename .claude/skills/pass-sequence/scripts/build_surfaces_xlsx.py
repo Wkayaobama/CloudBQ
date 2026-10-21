@@ -5,6 +5,8 @@
     python3 build_surfaces_xlsx.py --spec … --out … --compare docs/EXECUTION_SURFACES.xlsx   # value diff vs an existing workbook
 
 Sheets: Overview (motions, live parity formulas, legend) · Layers · Pipeline steps · Remediation · Equality checks.
+Surfaces: one column per id under `surfaces:` (two to six; A/B/C, N/Q/W, D/C/B, A/B/C/R …); the Overview's COUNTIF formulas and
+--verify locate the Parity column from the header, so the count of surfaces never changes the parity arithmetic.
 Conventions: Arial 10, navy header row (white bold), wrapped/top-aligned body, thin borders, parity colours
 (green Parallel, yellow Conditional, orange Divergent), frozen header rows, fullCalcOnLoad so the COUNTIF /
 SUM / COUNTA cells compute when the file is opened in Excel or LibreOffice.
@@ -43,11 +45,14 @@ WRAP = Alignment(wrap_text=True, vertical="top")
 
 WIDTHS = {
     "Overview": [40, 40, 34, 44, 34, 48],
-    "Layers": [5, 24, 46, 40, 34, 12, 44, 52, 34],
-    "Pipeline steps": [5, 22, 20, 40, 40, 40, 12, 50, 50],
     "Remediation": [6, 48, 8, 16, 46, 60, 24],
     "Equality checks": [18, 26, 70, 60, 44],
 }
+MIN_SURFACES, MAX_SURFACES = 2, 6     # one column per surface on Layers and Pipeline steps; three is the mr-load convention, four from CloudBQ pass 3
+
+
+def _layer_widths(n): return [5, 24] + [40] * n + [12, 44, 52, 34]          # #, Layer, <surfaces>, Parity, diverges, remediation, verified
+def _step_widths(n): return [5, 22, 20] + [40] * n + [12, 50, 50]           # #, Step, Gate, <surfaces>, Parity, artefact, notes
 
 
 def _row_height(text: str) -> int:
@@ -78,10 +83,13 @@ def _body(ws, row, values, parity_col=None):
 def build(spec: dict) -> openpyxl.Workbook:
     s = {k: v for k, v in spec.items()}
     surf = s["surfaces"]
-    keys = list(surf.keys())                      # the three surface ids: A/B/C in the mr-load convention, N/Q/W or any other triple elsewhere
-    if len(keys) != 3:
-        raise SystemExit(f"build_surfaces_xlsx: exactly three surfaces are expected (the sheets have three surface columns), got {keys}")
-    k1, k2, k3 = keys; rest = "".join(keys[1:])     # equality checks: first surface vs the other two ("BC", "QW", …)
+    keys = list(surf.keys())                      # the surface ids: A/B/C in the mr-load convention, N/Q/W, D/C/B, A/B/C/R … one column each
+    if not MIN_SURFACES <= len(keys) <= MAX_SURFACES:
+        raise SystemExit(f"build_surfaces_xlsx: between {MIN_SURFACES} and {MAX_SURFACES} surfaces are expected, got {keys}")
+    k1, rest = keys[0], "".join(keys[1:])         # equality checks: first surface vs all the others ("BC", "BCR", "QW", …; "BC" accepted as the legacy key)
+    n = len(keys)
+    layer_parity_col, step_parity_col = 2 + n + 1, 3 + n + 1
+    lp, sp = get_column_letter(layer_parity_col), get_column_letter(step_parity_col)
     wb = openpyxl.Workbook()
 
     # ---- Overview
@@ -98,7 +106,7 @@ def build(spec: dict) -> openpyxl.Workbook:
     _header(ov, r, ["Status", "Layers", "Pipeline steps", "Meaning"]); r += 1
     first = r
     for status in ("Parallel", "Conditional", "Divergent"):
-        _body(ov, r, [status, f'=COUNTIF(Layers!$F:$F,"{status}")', f"=COUNTIF('Pipeline steps'!$G:$G,\"{status}\")",
+        _body(ov, r, [status, f'=COUNTIF(Layers!${lp}:${lp},"{status}")', f"=COUNTIF('Pipeline steps'!${sp}:${sp},\"{status}\")",
                       s.get("parity_meanings", PARITY_MEANING)[status]], parity_col=1)
         r += 1
     _body(ov, r, ["Total", f"=SUM(B{first}:B{r-1})", f"=SUM(C{first}:C{r-1})", ""]); ov.cell(row=r, column=1).font = FONT_B; r += 1
@@ -108,19 +116,19 @@ def build(spec: dict) -> openpyxl.Workbook:
     ov.freeze_panes = "A5"
 
     # ---- Layers
-    ly = wb.create_sheet("Layers"); _widths(ly, WIDTHS["Layers"])
-    _header(ly, 1, ["#", "Layer", surf[k1], surf[k2], surf[k3], "Parity", "Where it diverges", "Remediation", "Verified how"])
+    ly = wb.create_sheet("Layers"); _widths(ly, _layer_widths(n))
+    _header(ly, 1, ["#", "Layer", *[surf[k] for k in keys], "Parity", "Where it diverges", "Remediation", "Verified how"])
     for i, L in enumerate(s["layers"], start=2):
-        _body(ly, i, [L["id"], L["layer"], L[k1], L[k2], L[k3], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=6)
+        _body(ly, i, [L["id"], L["layer"], *[L[k] for k in keys], L["parity"], L["diverges"], L["remediation"], L["verified"]], parity_col=layer_parity_col)
     ly.freeze_panes = "A2"
 
     # ---- Pipeline steps
-    ps = wb.create_sheet("Pipeline steps"); _widths(ps, WIDTHS["Pipeline steps"])
-    _header(ps, 1, ["#", "Step", "Gate", f"{surf[k1]} — cell", f"{surf[k2]} — command", f"{surf[k3]} — command",
+    ps = wb.create_sheet("Pipeline steps"); _widths(ps, _step_widths(n))
+    _header(ps, 1, ["#", "Step", "Gate", f"{surf[k1]} — cell", *[f"{surf[k]} — command" for k in keys[1:]],
                     "Parity", "Identical artefact to compare", "Notes"])
     for i, st in enumerate(s["steps"], start=2):
-        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), st[k1], st[k2], st[k3], st["parity"],
-                      st.get("artefact", ""), st.get("notes", "")], parity_col=7)
+        _body(ps, i, [st["n"], st["step"], st.get("gate", ""), *[st[k] for k in keys], st["parity"],
+                      st.get("artefact", ""), st.get("notes", "")], parity_col=step_parity_col)
     ps.freeze_panes = "A2"
 
     # ---- Remediation
@@ -132,7 +140,7 @@ def build(spec: dict) -> openpyxl.Workbook:
 
     # ---- Equality checks
     eq = wb.create_sheet("Equality checks"); _widths(eq, WIDTHS["Equality checks"])
-    _header(eq, 1, ["Stage", "What to compare", f"{surf[k1]} — cell", f"{surf[k2]} / {surf[k3]} — command", "Expected"])
+    _header(eq, 1, ["Stage", "What to compare", f"{surf[k1]} — cell", " / ".join(surf[k] for k in keys[1:]) + " — command", "Expected"])
     for i, E in enumerate(s["equality_checks"], start=2):
         _body(eq, i, [E["stage"], E["compare"], E[k1], E.get(rest, E.get("BC", "")), E["expected"]])
     eq.freeze_panes = "A2"
@@ -145,8 +153,9 @@ def verify(path: Path) -> list[str]:
     """What a recalculation would show, checked without LibreOffice. Returns problems (empty = OK)."""
     wb = openpyxl.load_workbook(path)
     problems: list[str] = []
-    for name, col in (("Layers", 6), ("Pipeline steps", 7)):
+    for name in ("Layers", "Pipeline steps"):
         ws = wb[name]
+        col = next(c for c in range(1, ws.max_column + 1) if ws.cell(1, c).value == "Parity")   # one column per surface precedes it
         counts = {k: 0 for k in PARITY_FILL}
         for r in range(2, ws.max_row + 1):
             v = ws.cell(r, col).value

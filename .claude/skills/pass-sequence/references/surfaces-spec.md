@@ -5,13 +5,13 @@ One YAML file is the source of the workbook; `scripts/build_surfaces_xlsx.py` re
 written as block scalars (`|`) so diffs stay readable.
 
 ```yaml
-title: "<project> — three execution surfaces, one pipeline"        # Overview A1
+title: "<project> — three execution surfaces, one pipeline"        # Overview A1 (any count from two to six: one column per surface)
 verdict: |                                                          # Overview A2 (merged, wrapped)
   Verdict: … one paragraph; add a sentence per pass naming the commits and the probe.
 legend: |                                                           # Overview last row
   Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers L0–L15 …
   Remediation … (R01–R25) … Source: the repository on branch <branch> at <date> (<commit>), …
-surfaces:                                                           # column headers reused by every sheet
+surfaces:                                                           # column headers reused by every sheet — two to six ids, one column each
   A: "A · Zip / clone → VS Code → Polyglot notebook (PowerShell cells)"
   B: "B · WezTerm → Ubuntu terminal (WSL or Docker)"
   C: "C · Cloud Shell terminal"
@@ -54,7 +54,7 @@ equality_checks:                                                    # sheet "Equ
   - stage: after ledger-export
     compare: the import tables (the wizard's input)
     A: "Invoke-Ubuntu 'bq query …'"
-    BC: "bq query --use_legacy_sql=false '…'"
+    BC: "bq query --use_legacy_sql=false '…'"                    # the first surface vs all the others: key = the remaining ids joined ("BC", "BCR", "QW"); "BC" always accepted
     expected: "one row per inferred anchor; … identical from every surface"
 parity_meanings:                                                    # optional override of the Overview meaning column
   Parallel: same mechanism, same result on every surface
