@@ -33,6 +33,14 @@ the root every later stage is SQL over — without changing what any run compute
 6. docs/PASS3_RAW_ROOT.md: the plan with the operator's decisions and the phase-1 acceptance SQL; architecture nodes; R54 and the L4/L13
    cells of docs/execution_surfaces.yaml; README; the timeline.
 
+Review follow-ups (same block): time-box the four landing jobs (LAND_TIMEOUT_S, default 90 s — a slow landing must become
+raw_landing_failed, not a killed request with the lease set); scope an event landing's delete-older to its own deal; name a replaced
+slice (raw_slice_replaced) from the delete's row count in both lanes; write_run() retries without data_gaps at ERROR when the runs
+table predates `deploy.sh tables`; `deploy.sh deploy` applies tables first; pin the ArrayQueryParameter object in the tests. Lane C: wrap the spliced landing in
+BEGIN … EXCEPTION WHEN ERROR THEN SET v_gaps += raw_landing_failed END (the shadow contract holds for both lanes); IFNULL the IN UNNEST
+for in_scope (NOT NULL); TO_JSON with stringify_wide_numbers => TRUE; skip NULL owner ids; name labels_missing on an empty labels landing;
+scheduled_query.sh asserts the splice and the tables, and DRYRUN=1 fails on a real bq error.
+
 Behaviour change of a live run: two more tables are written and new_deals_runs gains an array column. Nothing else. Rollback: remove
 the two calls in main.py and the `-- @include` line. Run `python3 tests/test_main_offline.py`, `bash -n` on every script,
 `DRYRUN=1 PROJECT=ci-project ./cloud_function_new_deals/deploy.sh all` and the weekly/backfill renders.

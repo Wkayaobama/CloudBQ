@@ -96,7 +96,7 @@ secret_version() {
 }
 
 deploy() {
-  say "deploy — canonical Cloud Run function deploy (source build), private, one instance, one request at a time"
+  say "deploy — canonical Cloud Run function deploy (source build), private, one instance, one request at a time (tables applied first)"
   local ver; ver=$(secret_version)
   local env="^|^BQ_PROJECT=${PROJECT}|BQ_DATASET=${DATASET}|OVERLAP_MINUTES=5|FIRST_RUN_DAYS=7|PORTAL_ID=${PORTAL_ID}|DELIVERY_WEBHOOK_URL=${DELIVERY_WEBHOOK_URL}|ORCHESTRATOR=cloud-run-function"
   local secrets="HUBSPOT_TOKEN=hubspot-token:${ver}"
@@ -199,7 +199,7 @@ case "${1:-}" in
   iam) check_env; iam ;;
   tables) check_env; tables ;;
   secret) check_env; secret ;;
-  deploy) check_env; deploy ;;
+  deploy) check_env; tables; deploy ;;    # tables first: the function writes deals_raw / labels_raw and new_deals_runs.data_gaps from this deploy on
   invoker) check_env; invoker ;;
   all) check_env; enable_apis; iam; tables; secret; deploy; invoker ;;
   dry) check_env; dry ;;

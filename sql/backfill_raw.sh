@@ -20,8 +20,13 @@ DECLARE v_run_ts TIMESTAMP DEFAULT TIMESTAMP_TRUNC(TIMESTAMP '$RUN_TS', SECOND);
 DECLARE v_orchestrator STRING DEFAULT 'backfill';
 DECLARE v_mode STRING DEFAULT 'window';
 DECLARE v_landed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+DECLARE v_gaps ARRAY<STRING> DEFAULT [];
 SQL
-    cat "$HERE/land_raw.sql"; } | sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g"
+    cat "$HERE/land_raw.sql"
+    cat <<'SQL'
+SELECT 'backfill' AS step, v_entity AS entity, v_run_ts AS run_ts, v_gaps AS data_gaps;
+SQL
+  } | sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g"
 }
 for E in ${1:-SEALSQ ICALPS}; do
   [[ -n "${PIPES[$E]:-}" ]] || { echo "unknown entity $E" >&2; exit 2; }
@@ -29,7 +34,10 @@ for E in ${1:-SEALSQ ICALPS}; do
   grep -q '\${' <<<"$Q" && { echo "unrendered placeholder for $E" >&2; exit 2; }
   if [[ "$DRYRUN" == 1 ]]; then
     echo "── backfill $E at $RUN_TS: $(wc -l <<<"$Q") lines; bq query --dry_run:"
-    bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false --dry_run <<<"$Q" || echo "   (dry_run needs credentials; rendered script saved to /tmp/backfill_raw_$E.sql)"
+    if ! out=$(bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false --dry_run <<<"$Q" 2>&1); then
+      if grep -qiE "credential|authoriz|auth |login|active account" <<<"$out"; then echo "   (dry_run needs credentials; rendered script saved to /tmp/backfill_raw_$E.sql)"
+      else echo "$out" >&2; echo "   bq --dry_run rejected the rendered script for $E" >&2; exit 1; fi
+    else echo "$out"; fi
     printf '%s\n' "$Q" > "/tmp/backfill_raw_$E.sql"; continue
   fi
   echo "── backfill $E at $RUN_TS (orchestrator = backfill)"

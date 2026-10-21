@@ -14,7 +14,7 @@ section explains a defect, and at the current files where it describes the imple
 | D2 | **as recommended** — the API extractor (lane A) is the root writer and stays: HubSpot's API is what the write-back needs; lane C (BigQuery) becomes the executor of the main transformation (the single SQL implementation of phase 2) and remains a fallback caller with `advance_state = TRUE` on `NEW_DEALS_<entity>_C` | the two state rows remain by design; the procedure's lease check keeps a fallback run from colliding with a live lane-A run |
 | D3 | **as recommended** — lane C's duplicate rule over the root for both lanes; one-time 90-day backfill at cut-over (`sql/backfill_raw.sh`, orchestrator `backfill`) | `duplicate_*` are not frozen; the string changes on the next re-observation |
 | D4 | **as recommended** — the procedure writes the runs row; the function amends it only on delivery failure; the payload is rendered from the tables (phase 3) | `docs/execution_surfaces.yaml` L13 updated in phase 3 |
-| D5 | **as recommended** — `data_gaps ARRAY<STRING>` on `new_deals_runs`, column in phase 1, filled from phase 1 where the function or the script already knows the gap | vocabulary: sync_stale, labels_missing, dedup_horizon_partial, dedup_scope_batch_only, raw_landing_failed, raw_slice_replaced, raw_backfilled_from_current_sync, source_detail_unavailable, event_no_window |
+| D5 | **as recommended** — `data_gaps ARRAY<STRING>` on `new_deals_runs`, column in phase 1, filled from phase 1 where the function or the script already knows the gap | vocabulary: sync_stale, labels_missing, dedup_horizon_partial, dedup_scope_batch_only, raw_landing_failed, raw_slice_replaced, raw_backfilled_from_current_sync, source_detail_unavailable, event_no_window — emitted in phase 1: event_no_window, dedup_scope_batch_only, raw_landing_failed, raw_slice_replaced (A); sync_stale, source_detail_unavailable, raw_backfilled_from_current_sync, raw_slice_replaced, labels_missing, raw_landing_failed (C); dedup_horizon_partial is decided by the phase-2 procedure |
 | D6 | **n8n B2 retired** (with D4, phase 3); B1 (delivery tail) unchanged | footprint listed in §4 D6 |
 
 ## Phase 1 as implemented (what differs from the plan text below, and why)
@@ -30,7 +30,22 @@ section explains a defect, and at the current files where it describes the imple
   row names `sync_stale`.
 - Lane A names `event_no_window` on event runs and `dedup_scope_batch_only` when the warehouse twin map is empty (recent_names failed
   or the warehouse is empty); `raw_landing_failed` when either landing raised — the run continues (phase-1 shadow).
-- Offline proofs: `tests/test_main_offline.py` (14 tests, 7 for the root).
+- Lane A names `raw_slice_replaced` when its delete-older removed rows of the same key (the predecessor is then recoverable by time
+  travel only); lane C does the same through `@@row_count` in `sql/land_raw.sql`, and names `labels_missing` when it landed no label.
+- Review follow-ups (semantics critic, 2026-10-21): the four landing jobs are time-boxed (`LAND_TIMEOUT_S`, default 90 s) so a slow
+  landing becomes `raw_landing_failed` inside the 540 s request instead of a killed request with the lease left set; an event
+  landing scopes its delete-older to its own deal (two events of one entity in the same second share the slice key); `write_run()`
+  retries without `data_gaps` and logs at ERROR when the table predates `deploy.sh tables`, so the audit row is never lost;
+  `deploy.sh deploy` applies `tables` first.
+- Review follow-ups (platform critic, 2026-10-21): lane C's landing is wrapped in a plain `BEGIN … EXCEPTION WHEN ERROR` block so a
+  landing error names `raw_landing_failed` instead of killing the run before its transaction (the shadow contract now holds for both
+  lanes); `in_scope` is `IFNULL(… IN UNNEST(…), FALSE)` (IN is NULL for a NULL pipeline, the column is NOT NULL); `TO_JSON(…,
+  stringify_wide_numbers => TRUE)` so a NUMERIC the JSON cannot hold losslessly lands as a string instead of throwing; owners with a
+  NULL id are skipped; an empty labels landing names `labels_missing`; `scheduled_query.sh` refuses to register a script in which the
+  landing was not spliced and, on the live path, a dataset where `deploy.sh tables` has not run; `DRYRUN=1` on both scripts fails on
+  a real `bq --dry_run` error and only tolerates missing credentials.
+- Offline proofs: `tests/test_main_offline.py` (18 tests, 11 for the root; the clean run's `data_gaps = []` holds once the warehouse
+  has name_key rows — on an empty warehouse the first run names `dedup_scope_batch_only`).
 
 Acceptance after the first live run (SQL, lane A and lane C):
 
@@ -41,9 +56,11 @@ LEFT JOIN `${PROJECT}.${DATASET}.deals_raw` r USING (run_ts, entity, orchestrato
 WHERE r.deal_id IS NULL AND h.run_ts >= TIMESTAMP '<cut-over run_ts>';
 -- the JSON carries the property names (expected: 0 for every orchestrator)
 SELECT orchestrator, COUNTIF(JSON_VALUE(properties, '$.pipeline') IS NULL) FROM `${PROJECT}.${DATASET}.deals_raw` GROUP BY 1;
--- raw slices with no OK runs row list only failed runs (orphan slices are kept by design)
+-- raw slices with no OK runs row: expected = failed or undelivered runs only (orphan slices are kept by design); the backfill slices
+-- have no runs row by design, hence the orchestrator filter
 SELECT r.run_ts, r.entity, r.orchestrator, COUNT(*) n, ANY_VALUE(u.status) status
 FROM `${PROJECT}.${DATASET}.deals_raw` r LEFT JOIN `${PROJECT}.${DATASET}.new_deals_runs` u USING (run_ts, entity, orchestrator)
+WHERE r.orchestrator != 'backfill'
 GROUP BY 1, 2, 3 HAVING status IS NULL OR status != 'OK';
 -- what each run could not read or compute
 SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASET}.new_deals_runs` ORDER BY run_ts DESC LIMIT 20;
@@ -51,7 +68,7 @@ SELECT run_ts, entity, orchestrator, status, data_gaps FROM `${PROJECT}.${DATASE
 
 Operator sequence for the cut-over: `cloud_function_new_deals/deploy.sh tables` (adds the two tables and the column; safe to re-run),
 `deploy.sh deploy` (the function now lands), `sql/scheduled_query.sh` (re-registers the two scripts with the landing block),
-`RUN_TS=<cut-over> sql/backfill_raw.sh` (once per entity), then the acceptance SQL after the first live run of each lane.
+`RUN_TS=<cut-over> sql/backfill_raw.sh` (one invocation lands both entities; append ICALPS for one), then the acceptance SQL after the first live run of each lane.
 
 ## 0 · The claim being fixed, and why the fix is one table (plus its small companion)
 
@@ -59,7 +76,7 @@ Both lanes reconstruct their OUTPUTS per run: new_deals_runs has one row per run
 new_deals_history holds one slice per (run_ts, entity, orchestrator), replaced on replay (main.py:176-183; new_deals_weekly.sql:66-68).
 Neither persists its INPUTS:
 
-- lane A: `found = hs.search_created(qstart, run_ts)` (main.py:279) is consumed by shape() (:283) and discarded. Six of the ten
+- lane A: `found = hs.search_created(qstart, run_ts)` (main.py:279) is consumed by shape() (:283) and discarded. Six of the eleven
   hot-score inputs are columns of no table (tpm__k_y, services_value_2026, calculation___pipeline_2026__k__, num_contacted_notes,
   notes_last_updated, revenue_state — read at main.py:73-87, absent from bigquery_schema.sql:11-17 and :29-35);
 - lane C: deals_synced_v1 is a VIEW (sql/deals_synced_v1.sql:6) over a DTS table that is a full refresh on every run
@@ -73,7 +90,7 @@ each run computed from. With it:
 
 1. every downstream stage is SQL over the root (lane C already is that over the sync, new_deals_weekly.sql:21-52);
 2. the function stops shaping and scoring; one SQL implementation remains, the other live copies are retired (today four:
-   main.py:70-89 + :212-238; scoring/hot_score_v1.sql + the script; workflows/src/shape_score.js injected by build_workflow.py:65;
+   main.py:70-89 + :212-238; scoring/hot_score_v1.sql + the script; workflows/src/shape_score.js injected by workflows/src/build_workflow.py:65;
    scoring/hot_score_v1.mjs); "same arithmetic everywhere" (CONVENTIONS.md) is then one implementation plus the vectors;
 3. debugging is `SELECT … FROM deals_raw WHERE run_ts = X`, then a read-only re-run of the pure part with the same run_ts (§3).
 
@@ -119,7 +136,7 @@ stated plainly: (1) the replaced landing is recoverable with `FOR SYSTEM_TIME AS
 ADDS a slice; only a manual CALL or a transfer run with a past run_time (sql/scheduled_query.sh:43-45) re-lands an existing key.
 
 Why JSON for the properties rather than typed columns: lane A's values arrive as HubSpot strings, lane C's as the sync's typed values
-(numbers, ISO timestamps); the PROPS set changes (28 in code today, 29 in two docs — drift resolved in §3 S2); with JSON a new property
+(numbers, ISO timestamps); the PROPS set changes (28 in code before phase 1, 29 in two docs — PROPS is 29 since phase 1, §3 S2); with JSON a new property
 needs no DDL and old slices stay readable; typing happens once, in the adapter view, where deals_synced_v1.sql:7-39 already SAFE_CASTs.
 The JSON keys are the HubSpot property names for BOTH sources (§2 lane C lands from the sync TABLE, not from the renamed view).
 Rejected: 28 typed columns (every PROPS change is a migration plus a view change; "as delivered" is lost at the first cast).
@@ -168,9 +185,9 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY hs_object_id ORDER BY SAFE_CAST(hs_lastm
 DELETE FROM `${PROJECT}.${DATASET}.deals_raw` WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = v_orchestrator AND fetched_at < v_landed_at;
 
 INSERT INTO `${PROJECT}.${DATASET}.labels_raw` (run_ts, entity, orchestrator, kind, id, label, fetched_at)
-SELECT v_run_ts, v_entity, v_orchestrator, 'pipeline', pipeline_id, label, v_landed_at FROM pipelines_synced_v1
-UNION ALL SELECT v_run_ts, v_entity, v_orchestrator, 'stage', stage_id, label, v_landed_at FROM pipeline_stages_synced_v1
-UNION ALL SELECT v_run_ts, v_entity, v_orchestrator, 'owner', owner_id, owner_name, v_landed_at FROM owners_synced_v1;
+SELECT v_run_ts, v_entity, v_orchestrator, 'pipeline', pipeline_id, label, v_landed_at FROM `${PROJECT}.${DATASET}.pipelines_synced_v1`
+UNION ALL SELECT v_run_ts, v_entity, v_orchestrator, 'stage', stage_id, label, v_landed_at FROM `${PROJECT}.${DATASET}.pipeline_stages_synced_v1`
+UNION ALL SELECT v_run_ts, v_entity, v_orchestrator, 'owner', owner_id, owner_name, v_landed_at FROM `${PROJECT}.${DATASET}.owners_synced_v1`;
 DELETE FROM `${PROJECT}.${DATASET}.labels_raw` WHERE run_ts = v_run_ts AND entity = v_entity AND orchestrator = v_orchestrator AND fetched_at < v_landed_at;
 ```
 - hs_object_source_detail_1 is landed only once the first transfer confirms the column exists; until then it is NULL for lane C and
@@ -270,13 +287,14 @@ D4 · Payload from tables and the runs-row ownership above (the procedure writes
     RECOMMENDED: yes, phase 3; docs/execution_surfaces.yaml L13 updated.
 D5 · data_gaps vocabulary: sync_stale, labels_missing, dedup_horizon_partial, dedup_scope_batch_only, raw_landing_failed,
     raw_slice_replaced, raw_backfilled_from_current_sync, source_detail_unavailable, event_no_window. RECOMMENDED: column in phase 1,
-    filled from phase 2 (ArrayQueryParameter in the function's writes).
+    filled from phase 1 where the function or the script already knows the gap (done: write_run() passes it as an ArrayQueryParameter,
+    the lane-C script carries v_gaps); labels_missing and dedup_horizon_partial from the phase-2 procedure.
 D6 · n8n B2 retirement (NEW — it was hidden in phase 3). Footprint: workflows/NEW_DEALS_FULL.json, workflows/src/shape_score.js +
     node_code.template.js, build_workflow.py build_full(), tests/test_n8n_code.py::test_code_node_matches_python_shape,
     docs/SCENARIOS.md §B and its recommendation, docs/PASS1_SEQUENCE.md "why no second loader", README.md:9, docs/EXECUTION_SURFACES.md,
     the B cells of docs/execution_surfaces.yaml, docs/architecture.yaml nodes. B1 (NEW_DEALS_DELIVERY.json: webhook → rows → XLSX →
     email) is unchanged and needs no BigQuery credential: the function renders the payload from the tables and POSTs it as today.
-    scoring/hot_score_v1.mjs: retire with B2 (the write-back job reads the SQL view, not the .mjs — scoring/README.md:5 is drift);
+    scoring/hot_score_v1.mjs: retire with B2 (the write-back job reads the SQL view, not the .mjs — scoring/README.md:6 is drift);
     hot_score_vectors.json stays as the UDF's oracle. RECOMMENDED: yes, with D4.
 
 ## 5 · Phases (one recipe, one commit each; the loop of UNIVERSAL_WORKFLOW.md applies; rollback named per phase)
@@ -287,7 +305,8 @@ Phase 1 — the root, in shadow. IMPLEMENTED (recipe a_raw_root.md; see "Phase 1
   lane-C landing per entity with orchestrator = 'backfill'); deploy.sh tables renders the same file.
   Behaviour change: a live run now writes two more tables; nothing else. Rollback: remove the two calls and the `-- @include` line.
   Tests (offline, tests/test_main_offline.py): landing precedes shaping and lands the whole search; load first then delete-older;
-  properties is the dict; dry does not land; landing failure non-fatal and named; clean run's data_gaps = []; event mode lands one deal.
+  properties is the dict; dry does not land; landing failure non-fatal and named; clean run's data_gaps = [] (warehouse twins read);
+  event mode lands one deal; plus the review follow-ups (strict replacement, labels-only failure, time-box, un-migrated runs table).
   Acceptance (SQL, after the first live run): the four probes above.
 Phase 2 — the single implementation (lane C changes here).
   deals_landed_v1 (S2); new_deals_batch_rows (S7); new_deals_batch (S8) with the contract above; scheduled_query.sh registers the
@@ -323,7 +342,7 @@ Phase 3 — the hand-off (lane A changes here).
 - The DuckDB harness (tests/test_hot_score_sql_duckdb.py:31-36) renders only the UDF body; it does not render views, table functions
   or the procedure. If it is extended to the adapter, BigQuery JSON_VALUE maps to DuckDB json_extract_string (DuckDB's json_value
   keeps the outer quotes).
-- main.py's write helper is scalar-only (main.py:196); data_gaps needs bigquery.ArrayQueryParameter.
+- main.py's write helper was scalar-only (main.py:196 at fb9ee7d); phase 1 builds an ArrayQueryParameter for data_gaps in write_run().
 
 ## 7 · What stays exactly as it is
 

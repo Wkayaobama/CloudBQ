@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals` (
   first_seen_run TIMESTAMP, last_seen_run TIMESTAMP)
 PARTITION BY DATE(createdate) CLUSTER BY entity, deal_id;
 
--- One row per run (window or event, dry or live), written last; the audit trail every scenario shares (layer L13).
+-- One row per run (window or event; live runs only — a dry run writes no row until decision D1 takes effect in pass 3 phase 3), written
+-- last; the audit trail every scenario shares (layer L13).
 CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.new_deals_runs` (
   run_ts TIMESTAMP NOT NULL, entity STRING, mode STRING, dry_run BOOL, orchestrator STRING,
   watermark_in TIMESTAMP, query_start TIMESTAMP, query_end TIMESTAMP,
@@ -39,7 +40,8 @@ OPTIONS (partition_expiration_days = 730);
 -- Pass 3 — the raw root (layers L4 + L13): what each run computed from, landed as delivered and keyed like new_deals_history
 -- (run_ts, entity, orchestrator). Lane A lands the HubSpot search result (in-scope deals and the out-of-scope duplicate candidates),
 -- lane C lands its 90-day set from the sync table with the same HubSpot property names. The adapter view (pass 3 phase 2) types the
--- JSON once; nothing here is typed. Re-landing the same key replaces the slice (load first, then delete older rows of the key).
+-- JSON once; nothing in `properties` is typed (createdate and pipeline_id are promoted copies). Re-landing the same key replaces the
+-- slice (load first, then delete older rows of the key; an event landing deletes only its own deal's older rows).
 CREATE TABLE IF NOT EXISTS `${PROJECT}.${DATASET}.deals_raw` (
   run_ts TIMESTAMP NOT NULL, entity STRING NOT NULL, orchestrator STRING NOT NULL,
   mode STRING NOT NULL,                 -- window | event | dry

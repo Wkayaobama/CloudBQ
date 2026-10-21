@@ -16,7 +16,7 @@ Modes
   • ?dry_run=1                                 compute everything, write nothing, return the payload
 
   • Dry mode builds the BigQuery client and reads watermark + warehouse twins like a live run (so the gate rehearses Monday's
-    window exactly); only the MERGE, the watermark advance, the audit rows and the delivery POST are skipped.
+    window exactly); only the raw landing, the MERGE, the watermark advance, the audit rows and the delivery POST are skipped.
   • Per-run staging table (new_deals_staging_<entity>_<run_ts>) so two entities or a retry can never truncate each other.
   • Lease: report_state.lock_until is taken by one atomic UPDATE per entity; an overlapping run gets 409 and nothing moves.
   • day1_hot_score / day1_hot_flag are written once (first observation) and never overwritten by a re-observation or a replay.
@@ -60,7 +60,7 @@ PROPS = ["dealname", "createdate", "final_customer", "sales_region", "pipeline",
          "amount_in_home_currency", "deal_currency_code", "closedate", "asp_in_usd_q2_2022_calculation", "tpm__k_y", "services_value_2026",
          "calculation___pipeline_2026__k__", "product_hierarchy", "prod___product_name_new_", "application", "hubspot_owner_id",
          "hs_object_source_label", "hs_object_source_detail_1", "icalps_dealtype", "icalps_stage", "icalps_dealstatus", "num_contacted_notes",
-         "notes_last_updated", "revenue_state", "hs_created_by_user_id", "hs_lastmodifieddate"]   # 29: the last one orders re-observations
+         "notes_last_updated", "revenue_state", "hs_created_by_user_id", "hs_lastmodifieddate"]   # 29; the last one is landed for the SQL lane (land_raw.sql orders re-observations by it)
 
 # ------------------------------------------------------------------ hot-deal score v1 (same constants as hot_deals_score.js, fitted 2026-10-01)
 W = {"stage_prob": 2.0712, "proximity_2026": 1.2399, "missing_2026_field": -0.4136, "pipeline_conversion": 1.0918, "arr_points": 4.9843,
@@ -197,12 +197,19 @@ def land_raw(client, found, in_scope_ids, entity, run_ts, mode, source="hubspot_
              "deal_id": str(d["id"]), "in_scope": str(d["id"]) in in_scope_ids,
              "createdate": (d.get("properties") or {}).get("createdate"), "pipeline_id": (d.get("properties") or {}).get("pipeline"),
              "properties": d.get("properties") or {}, "fetched_at": fetched.isoformat()} for d in found]
+    t = _land_timeout()
     if rows:
         client.load_table_from_json(rows, table("deals_raw"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
-                                    schema=client.get_table(table("deals_raw")).schema)).result()
-    client.query(f"DELETE FROM `{table('deals_raw')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o AND fetched_at < @f",
-                 job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR, f=fetched)).result()
-    return len(rows)
+                                    schema=client.get_table(table("deals_raw")).schema)).result(timeout=t)
+    # a window re-landing replaces the whole older slice; an event slice is one deal, so only its own older rows go (two events of one
+    # entity in the same second share the key and must never delete each other)
+    params = [bigquery.ScalarQueryParameter("ts", "TIMESTAMP", run_ts), bigquery.ScalarQueryParameter("e", "STRING", entity),
+              bigquery.ScalarQueryParameter("o", "STRING", ORCHESTRATOR), bigquery.ScalarQueryParameter("f", "TIMESTAMP", fetched)]
+    scope = ""
+    if mode == "event": scope = " AND deal_id IN UNNEST(@ids)"; params.append(bigquery.ArrayQueryParameter("ids", "STRING", [r["deal_id"] for r in rows]))
+    job = client.query(f"DELETE FROM `{table('deals_raw')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o AND fetched_at < @f{scope}",
+                       job_config=bigquery.QueryJobConfig(query_parameters=params)); job.result(timeout=t)
+    return len(rows), (job.num_dml_affected_rows or 0) > 0      # (rows landed, an older slice of the same key was replaced)
 
 def land_labels(client, pl, st, owners, entity, run_ts):
     """The labels the run resolved with (pipeline, stage, owner), same key and same load-then-delete-older pattern as land_raw."""
@@ -210,12 +217,18 @@ def land_labels(client, pl, st, owners, entity, run_ts):
     fetched = datetime.now(timezone.utc)                               # microseconds: "older than" must be strict between two landings of one key
     rows = [{"run_ts": run_ts.isoformat(), "entity": entity, "orchestrator": ORCHESTRATOR, "kind": kind, "id": str(k), "label": v, "fetched_at": fetched.isoformat()}
             for kind, m in (("pipeline", pl), ("stage", st), ("owner", owners)) for k, v in (m or {}).items()]
+    t = _land_timeout()
     if rows:
         client.load_table_from_json(rows, table("labels_raw"), job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=False,
-                                    schema=client.get_table(table("labels_raw")).schema)).result()
+                                    schema=client.get_table(table("labels_raw")).schema)).result(timeout=t)
     client.query(f"DELETE FROM `{table('labels_raw')}` WHERE run_ts = @ts AND entity = @e AND orchestrator = @o AND fetched_at < @f",
-                 job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR, f=fetched)).result()
+                 job_config=_qp(ts=run_ts, e=entity, o=ORCHESTRATOR, f=fetched)).result(timeout=t)
     return len(rows)
+
+def _land_timeout():
+    """Seconds a landing job may take (LAND_TIMEOUT_S, default 90): a slow landing must surface as raw_landing_failed inside the
+    540 s request, never as a request killed by Cloud Run with the lease left set — the job itself may finish later, harmlessly."""
+    return int(os.environ.get("LAND_TIMEOUT_S", "90"))
 
 def write_run(client, entity, run_ts, window, rows, written, dry, status, error, started, gaps=None):
     """One row per run, also on failure — the probe every scenario shares. data_gaps names what the run could not read or compute."""
@@ -231,7 +244,13 @@ def write_run(client, entity, run_ts, window, rows, written, dry, status, error,
         params = [bigquery.ArrayQueryParameter(c, "STRING", rec[c]) if c == "data_gaps" else bigquery.ScalarQueryParameter(c, types.get(c, "STRING"), rec[c]) for c in cols]
         client.query(f"INSERT INTO `{table('new_deals_runs')}` ({', '.join(cols)}) VALUES ({', '.join('@' + c for c in cols)})",
                      job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
-    except Exception as e: jlog(logging.WARNING, "run log insert failed", error=str(e))
+    except Exception as e:
+        try:   # new_deals_runs without data_gaps yet (deployed before `deploy.sh tables`): keep the audit row, lose only the gaps, say so
+            cols2 = [c for c in cols if c != "data_gaps"]
+            client.query(f"INSERT INTO `{table('new_deals_runs')}` ({', '.join(cols2)}) VALUES ({', '.join('@' + c for c in cols2)})",
+                         job_config=bigquery.QueryJobConfig(query_parameters=[q for q in params if q.name != "data_gaps"])).result()
+            jlog(logging.ERROR, "run log written WITHOUT data_gaps — run deploy.sh tables to add the column", error=str(e), data_gaps=rec["data_gaps"])
+        except Exception as e2: jlog(logging.WARNING, "run log insert failed", error=str(e2))
 
 def recent_names(client, days=90):
     """name_key → [deal_id, …] over every entity (twins live in other pipelines). Errors are logged as ERROR and the run continues
@@ -317,8 +336,9 @@ def new_deals_report(request):
             window.update({"watermark_in": start.isoformat(), "query_start": qstart.isoformat(), "query_end": run_ts.isoformat()})
         if not dry:                                                     # pass 3 root, in shadow: the inputs land before anything is computed from them
             try:
-                land_raw(client, found, {str(d["id"]) for d in deals}, entity, run_ts, window["mode"])
+                _, replaced = land_raw(client, found, {str(d["id"]) for d in deals}, entity, run_ts, window["mode"])
                 land_labels(client, pl, st, owners, entity, run_ts)
+                if replaced: gaps.append("raw_slice_replaced")        # the predecessor is recoverable by time travel only
             except Exception as e:
                 jlog(logging.ERROR, "raw landing failed; the run continues (phase-1 shadow)", entity=entity, error=str(e)); gaps.append("raw_landing_failed")
         if not known: gaps.append("dedup_scope_batch_only")

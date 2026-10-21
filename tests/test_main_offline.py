@@ -8,7 +8,9 @@ per-run staging table and drops it; the MERGE update list excludes the frozen co
 and releases the lease; an overlapping run gets 409; the row contract equals the BigQuery schema; duplicate flags across pipelines.
 Pass 3 phase 1 (the raw root, in shadow): the extraction lands in deals_raw / labels_raw before anything is shaped from it; a re-landing
 of the same key loads first and then deletes the older rows; `properties` lands as the dict; dry does not land; a landing failure never
-fails the run and is named in new_deals_runs.data_gaps; event mode lands its one deal with mode = 'event'.
+fails the run and is named in new_deals_runs.data_gaps (as an ArrayQueryParameter); event mode lands its one deal with mode = 'event'
+and scopes its delete-older to that deal; a window re-landing replaces the whole older slice strictly; landing jobs are time-boxed;
+the runs row survives a table deployed before `deploy.sh tables`.
 """
 from __future__ import annotations
 
@@ -44,26 +46,35 @@ def _Field(name): return bigquery.SchemaField(name, "JSON" if name == "propertie
 
 
 class _Job:
-    def __init__(self, rows=None, affected=None): self._rows = rows or []; self.num_dml_affected_rows = affected
-    def result(self): return self._rows
+    def __init__(self, rows=None, affected=None, sink=None): self._rows = rows or []; self.num_dml_affected_rows = affected; self._sink = sink
+    def result(self, timeout=None):
+        if self._sink is not None: self._sink.append(timeout)
+        return self._rows
 
 
 class FakeBQ:
-    """Records every SQL/load call (self.calls keeps the order across kinds); emulates report_state and the lease.
-    fail_landing=True makes the deals_raw load raise, as a BigQuery error would."""
-    def __init__(self, watermark=None, locked=False, known=None, fail_landing=False):
-        self.sql, self.params, self.loads, self.deleted, self.inserted, self.calls = [], [], [], [], [], []
-        self.watermark, self.locked, self.known, self.fail_landing = watermark, locked, known or [], fail_landing
+    """Records every SQL/load call (self.calls keeps the order across kinds; self.param_objs the parameter objects themselves);
+    emulates report_state and the lease. fail_landing = True | "deals" | "labels" makes that raw load raise, as a BigQuery error
+    would; replaced=True makes the deals_raw delete-older report affected rows; no_gaps_column=True rejects any INSERT naming
+    data_gaps (a new_deals_runs table deployed before `deploy.sh tables`). raw_timeouts collects the timeout of every raw-table job."""
+    def __init__(self, watermark=None, locked=False, known=None, fail_landing=False, replaced=False, no_gaps_column=False):
+        self.sql, self.params, self.param_objs, self.loads, self.deleted, self.inserted, self.calls, self.raw_timeouts = [], [], [], [], [], [], [], []
+        self.watermark, self.locked, self.known = watermark, locked, known or []
+        self.fail_landing, self.replaced, self.no_gaps_column = fail_landing, replaced, no_gaps_column
         self.project = "p"
     def query(self, q, job_config=None):
-        params = {p.name: getattr(p, "value", getattr(p, "values", None)) for p in (job_config.query_parameters if job_config else [])}
-        self.sql.append(q); self.params.append(params); self.calls.append(("query", q))
+        objs = list(job_config.query_parameters) if job_config else []
+        params = {p.name: getattr(p, "value", getattr(p, "values", None)) for p in objs}
+        self.sql.append(q); self.params.append(params); self.param_objs.append(objs); self.calls.append(("query", q))
+        if self.no_gaps_column and "data_gaps" in q: raise RuntimeError("400 Unrecognized name: data_gaps")
         if "SELECT watermark FROM" in q: return _Job([{"watermark": self.watermark}] if self.watermark else [])
         if "SET lock_until = TIMESTAMP_ADD" in q:
             if self.locked: return _Job(affected=0)
             self.locked = True; return _Job(affected=1)
         if "SELECT deal_id, name_key FROM" in q: return _Job([{"deal_id": d, "name_key": k} for k, d in self.known])
         if "SET watermark = @ts" in q: self.watermark = params["ts"]; self.locked = False
+        if q.startswith("DELETE FROM `p.hubspot.deals_raw`"): return _Job(affected=2 if self.replaced else 0, sink=self.raw_timeouts)
+        if q.startswith("DELETE FROM `p.hubspot.labels_raw`"): return _Job(sink=self.raw_timeouts)
         return _Job()
     def get_table(self, name):
         short = name.rsplit(".", 1)[-1]
@@ -71,15 +82,17 @@ class FakeBQ:
         class T: schema = [_Field(c) for c in cols]
         return T()
     def load_table_from_json(self, rows, dest, job_config=None):
-        if self.fail_landing and dest.endswith("deals_raw"): raise RuntimeError("403 Access Denied: Table deals_raw")
-        self.loads.append((dest, list(rows), job_config.write_disposition)); self.calls.append(("load", dest)); return _Job()
+        if self.fail_landing in (True, "deals") and dest.endswith("deals_raw"): raise RuntimeError("403 Access Denied: Table deals_raw")
+        if self.fail_landing == "labels" and dest.endswith("labels_raw"): raise RuntimeError("403 Access Denied: Table labels_raw")
+        self.loads.append((dest, list(rows), job_config.write_disposition)); self.calls.append(("load", dest))
+        return _Job(sink=self.raw_timeouts if dest.endswith(("deals_raw", "labels_raw")) else None)
     def delete_table(self, name, not_found_ok=False): self.deleted.append(name); self.calls.append(("drop", name))
     def insert_rows_json(self, dest, rows): self.inserted.append((dest, rows)); return []
     # helpers for the assertions
     def loaded(self, table): return [rows for d, rows, _ in self.loads if d.endswith(table)]
     def first(self, kind, needle): return next(i for i, (k, t) in enumerate(self.calls) if k == kind and needle in t)
-    def runs_row(self):
-        i = next(i for i, q in enumerate(self.sql) if q.lstrip().startswith("INSERT INTO `p.hubspot.new_deals_runs`")); return self.sql[i], self.params[i]
+    def runs_rows(self): return [(self.sql[i], self.params[i], self.param_objs[i]) for i, q in enumerate(self.sql) if q.lstrip().startswith("INSERT INTO `p.hubspot.new_deals_runs`")]
+    def runs_row(self): q, p, _ = self.runs_rows()[0]; return q, p
 
 
 class FakeHubSpot:
@@ -215,9 +228,11 @@ def test_landing_failure_is_non_fatal_and_named_in_data_gaps():
 
 def test_runs_row_carries_data_gaps_array_on_a_clean_run():
     bqc = FakeBQ(watermark=NOW - timedelta(days=7), known=[("lattice", "999")]); _invoke(bqc, "entity=SEALSQ")
-    q, p = bqc.runs_row()
-    assert p["data_gaps"] == [], p   # nothing to name: landing OK, warehouse twins read
-    assert "@data_gaps" in q and "ArrayQueryParameter" not in q
+    q, p, objs = bqc.runs_rows()[0]
+    assert p["data_gaps"] == [], p   # nothing to name: landing OK, warehouse twins read, no slice replaced
+    pp = next(o for o in objs if o.name == "data_gaps")
+    assert isinstance(pp, bigquery.ArrayQueryParameter) and pp.array_type == "STRING" and pp.values == [], "a STRING scalar carrying a list is rejected by BigQuery and the audit row would be lost"
+    assert "@data_gaps" in q and len(bqc.runs_rows()) == 1
 
 
 def test_event_mode_lands_its_one_deal_with_mode_event():
@@ -226,6 +241,50 @@ def test_event_mode_lands_its_one_deal_with_mode_event():
     (raw,) = bqc.loaded("deals_raw")
     assert len(raw) == 1 and raw[0]["deal_id"] == "2" and raw[0]["mode"] == "event" and raw[0]["in_scope"] is True
     q, p = bqc.runs_row(); assert "event_no_window" in p["data_gaps"] and "@mode" in q
+    i = next(i for i, q in enumerate(bqc.sql) if q.startswith("DELETE FROM `p.hubspot.deals_raw`"))
+    assert bqc.sql[i].endswith("AND deal_id IN UNNEST(@ids)") and bqc.params[i]["ids"] == ["2"], "two events of one entity in the same second share the slice key and must not delete each other"
+    assert isinstance(next(o for o in bqc.param_objs[i] if o.name == "ids"), bigquery.ArrayQueryParameter)
+
+
+def test_window_relanding_replaces_the_whole_older_slice_strictly():
+    """Two landings of one key: the second's fetched_at is strictly later than every row of the first, its DELETE compares against
+    exactly that value, and the whole older slice (no id scope) goes; the handler names the replacement."""
+    import os
+    os.environ.update({"BQ_PROJECT": "p", "BQ_DATASET": "hubspot"})
+    bqc = FakeBQ(); run_ts = NOW
+    main.land_raw(bqc, FakeHubSpot.DEALS[:2], {"1"}, "SEALSQ", run_ts, "window")
+    main.land_raw(bqc, FakeHubSpot.DEALS[:1], {"1"}, "SEALSQ", run_ts, "window")
+    first, second = bqc.loaded("deals_raw")
+    f1 = max(datetime.fromisoformat(r["fetched_at"]) for r in first); f2 = datetime.fromisoformat(second[0]["fetched_at"])
+    deletes = [(q, p) for q, p in zip(bqc.sql, bqc.params) if q.startswith("DELETE FROM `p.hubspot.deals_raw`")]
+    assert len(deletes) == 2 and f2 > f1 and deletes[1][1]["f"] == f2 and f1 < deletes[1][1]["f"], "the first slice's rows are strictly older than the second delete's bound"
+    assert not deletes[0][0].endswith("UNNEST(@ids)") and "ids" not in deletes[0][1], "a window re-landing replaces the whole older slice"
+    bqc = FakeBQ(watermark=NOW - timedelta(days=7), replaced=True); _invoke(bqc, "entity=SEALSQ")
+    q, p = bqc.runs_row(); assert "raw_slice_replaced" in p["data_gaps"], p
+
+
+def test_labels_only_failure_keeps_the_deals_slice_and_is_named():
+    bqc = FakeBQ(watermark=NOW - timedelta(days=7), fail_landing="labels"); payload, code = _invoke(bqc, "entity=SEALSQ")
+    assert code == 200 and payload["rows_written"] == 2 and bqc.loaded("deals_raw") and not bqc.loaded("labels_raw")
+    assert any(q.startswith("DELETE FROM `p.hubspot.deals_raw`") for q in bqc.sql), "the deals slice was completed (load + delete-older) before the labels load raised"
+    q, p = bqc.runs_row(); assert "raw_landing_failed" in p["data_gaps"] and bqc.watermark is not None
+
+
+def test_landing_jobs_are_time_boxed():
+    import os
+    os.environ["LAND_TIMEOUT_S"] = "7"
+    try:
+        bqc = FakeBQ(watermark=NOW - timedelta(days=7)); _invoke(bqc, "entity=SEALSQ")
+    finally: os.environ.pop("LAND_TIMEOUT_S")
+    assert bqc.raw_timeouts and all(t == 7 for t in bqc.raw_timeouts) and len(bqc.raw_timeouts) == 4, bqc.raw_timeouts   # 2 loads + 2 deletes
+
+
+def test_runs_row_survives_a_table_without_data_gaps():
+    bqc = FakeBQ(watermark=NOW - timedelta(days=7), no_gaps_column=True); payload, code = _invoke(bqc, "entity=SEALSQ")
+    assert code == 200
+    rows = bqc.runs_rows()
+    assert len(rows) == 2 and "data_gaps" in rows[0][0] and "data_gaps" not in rows[1][0] and "@status" in rows[1][0], "second INSERT without the column keeps the audit row"
+    assert not any(o.name == "data_gaps" for o in rows[1][2])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
  "root": ".",
  "root_label": "CloudBQ",
  "volume": "CloudBQ",
- "serial": "EA9567F4 A007:0620",
+ "serial": "EDF3F3EB 4A54:A713",
  "scenario_filter": null,
  "scenarios": {
   "A": "Cloud Run function (gcloud run deploy --function, Scheduler OIDC, Secret Manager → BigQuery MERGE)",
@@ -1249,7 +1249,7 @@
    "layer": "L13",
    "status": "new",
    "parity": "Parallel",
-   "role": "new_deals_history (per deal per run, partitioned) and writeback_log — written by every lane",
+   "role": "writeback_log (written by the write-back job); new_deals_history moved to bigquery_schema.sql so deploy.sh tables creates it",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md",
    "kind": "file",
    "exists": true
@@ -1337,7 +1337,7 @@
    "layer": "L4",
    "status": "new",
    "parity": "Divergent",
-   "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of the 29 PROPS, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
+   "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of 28 of the 29 PROPS — hs_object_source_detail_1 waits for the first transfer, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
    "notes": "spliced into new_deals_weekly.sql by scheduled_query.sh and reused by backfill_raw.sh",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
    "layers_list": [
@@ -1495,7 +1495,7 @@
    ],
    "layer": "L11",
    "status": "new",
-   "role": "Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
+   "role": "Pass 3 root: landing order, slice replacement (strict, whole slice for a window, own deal for an event), JSON dict, dry does not land, failure named, data_gaps as an ArrayQueryParameter, time-boxed jobs, runs row kept on an un-migrated table; Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
    "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
    "parity": "Conditional",
    "kind": "file",
@@ -3329,7 +3329,7 @@
        "layer": "L13",
        "status": "new",
        "parity": "Parallel",
-       "role": "new_deals_history (per deal per run, partitioned) and writeback_log — written by every lane",
+       "role": "writeback_log (written by the write-back job); new_deals_history moved to bigquery_schema.sql so deploy.sh tables creates it",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/c_bigquery_compute.md"
       }
      },
@@ -3441,7 +3441,7 @@
        "layer": "L4",
        "status": "new",
        "parity": "Divergent",
-       "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of the 29 PROPS, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
+       "role": "Pass 3 root for lane C: the 90-day set landed from the SYNC TABLE with HubSpot property names (TO_JSON of 28 of the 29 PROPS — hs_object_source_detail_1 waits for the first transfer, one row per deal) into deals_raw, the labels from the synced views into labels_raw; INSERT first, DELETE-older second; plain DML outside the transaction",
        "notes": "spliced into new_deals_weekly.sql by scheduled_query.sh and reused by backfill_raw.sh",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_raw_root.md",
        "layers_list": [
@@ -3661,7 +3661,7 @@
        ],
        "layer": "L11",
        "status": "new",
-       "role": "Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
+       "role": "Pass 3 root: landing order, slice replacement (strict, whole slice for a window, own deal for an event), JSON dict, dry does not land, failure named, data_gaps as an ArrayQueryParameter, time-boxed jobs, runs row kept on an un-migrated table; Fake HubSpot + recording fake BigQuery: dry reads but writes nothing, per-run staging, frozen columns, lease 409, event mode",
        "recipe": ".claude/skills/aider-scaffold/assets/recipes/a_main_idempotency.md",
        "parity": "Conditional"
       }

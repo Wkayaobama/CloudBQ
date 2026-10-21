@@ -45,9 +45,10 @@ the same key was created in the same window in any pipeline, or exists in `new_d
 same idempotency rules; Breeze and BI read the views, n8n delivers, Claude iterates.
 
 **Pass 3 phase 1 (the raw root).** A live run first lands the whole search result in `deals_raw` (one row per deal returned, `in_scope`
-per deal, the 29 properties as JSON) and the pipeline/stage/owner maps in `labels_raw`, keyed by (run_ts, entity, orchestrator) like
-`new_deals_history`; a landing failure is logged, named in `new_deals_runs.data_gaps`, and never fails the run. Run `deploy.sh tables`
-before `deploy.sh deploy` on an existing project: it adds the two tables and the `data_gaps` column (every statement is `IF NOT EXISTS`).
+per deal, the properties as HubSpot delivered them — 29 requested — as JSON) and the pipeline/stage/owner maps in `labels_raw`, keyed by (run_ts, entity, orchestrator) like
+`new_deals_history`; a landing failure (or a landing slower than `LAND_TIMEOUT_S`, default 90 s) is logged, named in `new_deals_runs.data_gaps`,
+and never fails the run. `deploy.sh deploy` applies `tables` first: it adds the two tables and the `data_gaps` column (every statement
+is `IF NOT EXISTS`); a runs table that still lacks the column gets its row without the gaps and an ERROR log.
 Design and acceptance SQL: `../docs/PASS3_RAW_ROOT.md`.
 
 **Test before scheduling.** `deploy.sh dry` runs `curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?entity=…&dry_run=1"`

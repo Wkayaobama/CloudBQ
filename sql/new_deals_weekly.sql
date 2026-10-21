@@ -27,8 +27,13 @@ IF v_run_ts < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR) THEN
   SET v_gaps = ARRAY_CONCAT(v_gaps, ['raw_backfilled_from_current_sync']);
 END IF;
 
--- pass 3 root: land the inputs (plain DML, outside the transaction) — sql/land_raw.sql is spliced here by scheduled_query.sh
+-- pass 3 root: land the inputs (plain DML, outside the transaction) — sql/land_raw.sql is spliced here by scheduled_query.sh.
+-- Phase-1 shadow: a landing error is named (raw_landing_failed) and never fails the run; a plain BEGIN…END is not a transaction.
+BEGIN
 -- @include land_raw.sql
+EXCEPTION WHEN ERROR THEN
+  SET v_gaps = ARRAY_CONCAT(v_gaps, ['raw_landing_failed']);
+END;
 
 BEGIN TRANSACTION;
 

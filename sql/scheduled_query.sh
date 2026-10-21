@@ -14,7 +14,7 @@ DRYRUN="${DRYRUN:-0}"; SA="${SQL_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 declare -A PIPES=([SEALSQ]="['12096408','13772279','705868909','934982230']" [ICALPS]="['766126206']")
 
 # render: splice sql/land_raw.sql at its marker (sed `r` appends the file after the marker line), then substitute the placeholders
-render() { sed -e "/^-- @include land_raw.sql$/r $HERE/land_raw.sql" "$HERE/new_deals_weekly.sql" \
+render() { sed -e "/^-- @include land_raw.sql[[:space:]]*$/r $HERE/land_raw.sql" "$HERE/new_deals_weekly.sql" \
            | sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" -e "s/\${ENTITY}/$1/g" -e "s/\${PIPELINES}/${PIPES[$1]}/g" \
                  -e "s/\${SYNC_DATASET}/$SYNC_DATASET/g" -e "s/\${SYNC_DEALS_TABLE}/$SYNC_DEALS_TABLE/g"; }
 
@@ -23,13 +23,21 @@ if [[ "$DRYRUN" != 1 ]]; then
   gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/bigquery.jobUser --condition=None >/dev/null
   bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:${SA}\""
   bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`${PROJECT}.${SYNC_DATASET}\` TO \"serviceAccount:${SA}\""   # the script reads the synced tables
+  # the script's runs row names data_gaps and the landing writes deals_raw: both come from `deploy.sh tables` — refuse to register ahead of it
+  bq --project_id="$PROJECT" show --schema "${PROJECT}:${DATASET}.new_deals_runs" | grep -q '"name": *"data_gaps"' || { echo "new_deals_runs has no data_gaps column — run cloud_function_new_deals/deploy.sh tables first" >&2; exit 2; }
+  bq --project_id="$PROJECT" show "${PROJECT}:${DATASET}.deals_raw" >/dev/null 2>&1 || { echo "deals_raw does not exist — run cloud_function_new_deals/deploy.sh tables first" >&2; exit 2; }
 fi
 for E in SEALSQ ICALPS; do
   Q=$(render "$E"); NAME="new-deals-$E-C"
   grep -q '\${' <<<"$Q" && { echo "unrendered placeholder for $E" >&2; exit 2; }
+  grep -q "INSERT INTO \`$PROJECT.$DATASET.deals_raw\`" <<<"$Q" || { echo "sql/land_raw.sql was not spliced for $E (marker or path drifted) — refusing to register a script without the landing" >&2; exit 2; }
   if [[ "$DRYRUN" == 1 ]]; then
     echo "── $NAME: $(wc -l <<<"$Q") lines; bq query --dry_run:"
-    bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false --dry_run --parameter="run_time:TIMESTAMP:$(date -u +%FT%TZ)" <<<"$Q" || echo "   (dry_run needs credentials; rendered script saved to /tmp/new_deals_weekly_$E.sql)"; printf '%s\n' "$Q" > "/tmp/new_deals_weekly_$E.sql"; continue
+    if ! out=$(bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false --dry_run --parameter="run_time:TIMESTAMP:$(date -u +%FT%TZ)" <<<"$Q" 2>&1); then
+      if grep -qiE "credential|authoriz|auth |login|active account" <<<"$out"; then echo "   (dry_run needs credentials; rendered script saved to /tmp/new_deals_weekly_$E.sql)"
+      else echo "$out" >&2; echo "   bq --dry_run rejected the rendered script for $E" >&2; exit 1; fi
+    else echo "$out"; fi
+    printf '%s\n' "$Q" > "/tmp/new_deals_weekly_$E.sql"; continue
   fi
   EXISTING=$(bq ls --transfer_config --transfer_location="$BQ_LOCATION" --project_id="$PROJECT" --format=json 2>/dev/null \
              | python3 -c 'import sys,json; d=json.load(sys.stdin) or []; print(next((c["name"] for c in d if c.get("displayName")==sys.argv[1]),""))' "$NAME")
