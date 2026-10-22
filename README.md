@@ -29,6 +29,9 @@ Shared by every lane: `scoring/` (one hot score — the BigQuery UDF, with Pytho
    project, plus the SQL (schema, `hot_score_v1`, vectors, audit tables) executed and witnessed from Python; `notebooks/README.md`.
 7. **Pass 2 (L2 likelihood tiers)** — `docs/PASS2_L2_TIERS.md` (evidence from the CRM, binning spec, lanes N/Q/W, dynamic storage),
    `docs/EXECUTION_SURFACES_L2.xlsx`, `scoring/deal_tiers_v1.constants.json`, `sql/deal_tiers_v1.sql` + `sql/deal_tiers_apply.sql`, `notebooks/l2_deal_tiers.ipynb`.
+   Pass 2b (the company object by foreign-key resolution, §7 of the same page): one SQL body `sql/company_tiers_body.sql` spliced into
+   `sql/company_tiers_v1.sql` (views, snapshot, history, refreshes) and into `notebooks/company_tiers.ipynb` (dry run over `@deals_payload`
+   → ship → equality → refresh registered paused → probe → enable); `sql/company_tiers_apply.sql` + `sql/company_tiers_schedule.sh`.
 8. **Pass 3 (the raw root)** — `docs/PASS3_RAW_ROOT.md`: why a past run could not be recomputed from BigQuery and why the fix is a
    run_ts-keyed landing table rather than an orchestrator; the operator's decisions; phase 1 (shipped): `deals_raw` / `labels_raw`,
    `new_deals_runs.data_gaps`, `sql/land_raw.sql`, `sql/backfill_raw.sh`; phase 2 (shipped): one SQL implementation over the root —

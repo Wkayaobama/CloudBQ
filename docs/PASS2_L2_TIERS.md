@@ -140,7 +140,7 @@ bq query --use_legacy_sql=false "SELECT pipeline_id, tier, COUNT(*) FROM \`$PROJ
 2. **The first transfer run** — the Deals table's columns are undocumented until then (the connector "transfers all available data"; whether
    custom properties arrive as columns is confirmed by `bq show --schema`). `deals_synced_v1` fails to create if a column is missing.
 3. **Scheduling** — `sql/scheduled_query.sh` registers the weekly script only; the daily tier MERGE needs its own registration (one more loop
-   or a flag; not written yet).
+   or a flag; not written yet). The company refresh of §7 has its own: `sql/company_tiers_schedule.sh`.
 4. **Lane W** — not written: a dedicated route for HubSpot's array payload (`deal.creation`, `deal.propertyChange` on the watched properties),
    signature validation, the same constants and MERGE. The function's current event path (`objectId`, entity-gated) is not it.
 5. **The property and StackSync** — a schema-write token for the one-off creation (extend `writeback/bootstrap_property.sh` for an enumeration, or POST
@@ -149,3 +149,58 @@ bq query --use_legacy_sql=false "SELECT pipeline_id, tier, COUNT(*) FROM \`$PROJ
 
 Pass 2 has not run against Google Cloud. Every SQL statement was rendered (`DRYRUN=1 sql/apply.sh`), every test passes, the notebook
 compiles; the CRM numbers above are live.
+
+## 7. Pass 2b — the company object by foreign-key resolution (notebook dry run → ship → scheduled refresh)
+
+The operator's notebook route had reached a cell that **altered the synced Deals table** (`ALTER … ADD COLUMN unified_probability, tier …`,
+then a `MERGE` of a CSV into it) and built `vw_company_tiers_v1` / `mv_company_tiers_v1` on top of those columns. Two facts stop that
+route: the transfer overwrites the sync table (derived columns do not survive the next run — remediation T13), and a rule that lives in a
+notebook cell is a third copy of the tiering (the lab, lane Q, the cell). Pass 2b keeps the second cell's discipline — the API snapshot
+passed as `@deals_payload`, nothing written until the result is read — and moves the rule into the repository, **once**:
+
+| Piece | What it is |
+|---|---|
+| `sql/company_tiers_body.sql` | the rule as a CTE chain over a `deal_source` the including statement defines (14 columns, documented in the header): labels → the ARR staging (`${ARR_PROJECT}.${ARR_DATASET}.stg_deals`: entity, `company_ids`, the 2026–2029 pipeline / weighted figures) → the `icalps_dealstatus` rule → three resolvers → `resolved` (one row per deal, its company) → `rollup` (`sales_region × entity_key × tier`, the deals nested) |
+| `sql/company_tiers_v1.sql` | `companies_synced_v1`, `company_deal_input_v1` (`deal_tiers_v1 ⋈ deals_synced_v1`), the views `company_deals_v1` / `company_tiers_v1` (the body spliced at `-- @include company_tiers_body.sql`), the snapshot `company_tiers`, `company_tiers_history` (730 d), `company_tiers_refreshes`, `company_tiers_summary_v1` |
+| `sql/company_tiers_apply.sql` | the refresh (a scheduled query, `@run_time`): 36 h freshness guard, a `TEMP` batch from the live view, a row-count guard, one transaction (snapshot replaced, history slice, refreshes row), `EXCEPTION` → `ROLLBACK` + a FAILED row + `RAISE` |
+| `sql/company_tiers_schedule.sh` | registers `company-tiers-refresh` (`SCHEDULE_UTC_COMPANY_TIERS`, default `every day 03:37`, refused on the hour; `DISABLE_SCHEDULE=1` → paused), grants `new-deals-sql@` on the dataset, the sync dataset and the ARR dataset, prechecks the view and the table |
+| `notebooks/company_tiers.ipynb` | the probe, on a standalone Vertex AI Workbench / Colab Enterprise kernel: §1 snapshot · §2 dry run (0 tables written) · §3 ship · §4 equality · §5 register paused + one manual refresh · §6 probe · §7 enable |
+| `tests/test_company_tiers.py` | the offline proof (columns in order on all three surfaces, resolver precedence, the status rule, the grain, no DDL/DML on a sync table, INSERT lists == DDL, one transaction, both guards, the script's refusals, the notebook's order and gates) |
+
+**The resolvers, in precedence** (`resolver` in every row says which one fired):
+
+1. `1_primary_assoc` — the deal's own primary company association: `SPLIT(stg_deals.company_ids, ';')[0]`, the foreign key HubSpot holds.
+2. `2_clinic_fc_map` — the ARR clinic's map `rec_three_layer` (final customer → portal company), when the deal has no association.
+3. `3_direct_company_name` — an exact match of the final customer on the company name (`companies_synced_v1`, one company per normalised name).
+4. `4_unresolved_fc` — a final customer nobody maps: `entity_key = 'fc:<final customer>'` (the row stays; it is the backlog).
+5. `5_no_fc_or_company` — neither: `entity_key = 'deal:<deal_id>'`.
+
+**The `icalps_dealstatus` rule**: an Icalps deal (pipeline 766126206) counts only while its status reads *In Progress* (`[_-]` → space,
+case-folded); every other pipeline carries no status or the same word. Closed deals are tiered `Closed_won` / `Closed_lost` by
+`deal_tiers_v1` and stay in the rollup under those tiers.
+
+**Where the rule runs** — the same body on three surfaces, which is the equality the notebook checks in §4:
+
+| Surface | `deal_source` | Writes |
+|---|---|---|
+| notebook §2 (lane N) | `UNNEST(@deals_payload)` — the API snapshot as an `ARRAY<STRUCT>` query parameter, tiered in Python as `deal_tiers_v1` tiers | none (`statement_type = SELECT`, asserted) |
+| `company_tiers_v1` (lane Q) | `company_deal_input_v1` — the sync, tiered by the view | none (a view) |
+| `company_tiers_apply.sql` (lane Q, scheduled) | the view | `company_tiers`, `company_tiers_history`, `company_tiers_refreshes` — one transaction |
+
+The sequence, each step gated by the one before it:
+
+```bash
+set -a; . .env; set +a                                  # SYNC_COMPANIES_TABLE (the Companies asset, after its first transfer), ARR_DATASET
+python3 tests/test_company_tiers.py                     # 13 offline
+DRYRUN=1 sql/apply.sh                                   # renders company_tiers_v1.sql (8 statements) when SYNC_COMPANIES_TABLE is set
+# 14 notebooks/company_tiers.ipynb §1–§2 on the Workbench / Colab Enterprise kernel: snapshot, dry run, two CSVs, "0 BigQuery tables written"
+# 14 §3 ship (the same file, the same render) · §4 equality: dry-run rollup vs company_tiers_v1 per sales_region × entity_key × tier
+DRYRUN=1 sql/company_tiers_schedule.sh                  # 15 the refresh rendered + bq --dry_run; then, from the notebook §5 or the shell:
+DISABLE_SCHEDULE=1 sql/company_tiers_schedule.sh        #    registered, paused
+RT=$(date -u +%FT%TZ); sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" sql/company_tiers_apply.sql | bq query --use_legacy_sql=false --parameter="run_time:TIMESTAMP:$RT"   # one manual refresh
+bq query --use_legacy_sql=false "SELECT refresh_ts, status, error, n_rows, n_companies, n_unresolved, n_deals FROM \`$PROJECT.$DATASET.company_tiers_refreshes\` ORDER BY 1 DESC LIMIT 5"   # §6 probe
+sql/company_tiers_schedule.sh                           # §7 enable: the same config updated, auto-scheduling on
+```
+
+Nothing here is written into `HubspotSync.Deals` or any other sync table; the derived columns the operator's cell added live in
+`company_tiers` instead, and the StackSync write-back of step 11 keeps `deal_tiers` as its source.
