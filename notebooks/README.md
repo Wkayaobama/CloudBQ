@@ -68,3 +68,17 @@ stage-entry dates (`hs_v2_date_entered_<stage>`, with each stage's configured pr
 proves per deal that BigQuery's `RANGE_BUCKET` returns the same bin, compares the lab with the gold table when it exists, and prints the
 `deal_tier_v1` property definition and the StackSync mapping rows. It never writes the gold table `deal_tiers`; that is the scheduled
 MERGE `sql/deal_tiers_apply.sql` (lane Q). Same identity notes as above.
+
+## `company_tiers.ipynb` — pass 2b, the company object by foreign-key resolution (Vertex AI Workbench / Colab Enterprise)
+
+§7 of `docs/PASS2_L2_TIERS.md`. The kernel is the probe of a lane-Q object the repository defines once (`sql/company_tiers_body.sql`):
+§1 takes the snapshot through the function's `HubSpot` client and tiers it as `deal_tiers_v1` would (same constants, `numpy.digitize`);
+§2 runs the repository's body over `UNNEST(@deals_payload)` — the snapshot as an `ARRAY<STRUCT>` query parameter — and writes two CSVs
+(deal level with the resolver that fired, company level: `sales_region × company × tier` with the deals nested) and **no table**
+(`statement_type = SELECT` is asserted); §3 ships `sql/company_tiers_v1.sql` rendered exactly as `sql/apply.sh` renders it (the views,
+the snapshot tables, the refreshes log); §4 compares the dry run's rollup with the live view; §5 registers the refresh paused
+(`DISABLE_SCHEDULE=1 sql/company_tiers_schedule.sh`) and runs it once by hand; §6 probes `company_tiers_refreshes`, the summary view and
+the snapshot; §7 enables the daily schedule. The two write gates (§5, §7) are flags that ship `False`. On Colab Enterprise the first cell
+clones the branch into `/content` when no clone is present; `.env` must hold `SYNC_COMPANIES_TABLE` (the Companies asset of the sync) and
+`ARR_DATASET` (the ARR dashboard staging with `stg_deals` and `rec_three_layer`). Same identity notes as above; nothing is written into a
+sync table.

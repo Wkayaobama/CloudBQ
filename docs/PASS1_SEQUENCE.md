@@ -21,7 +21,7 @@ project, followed by the SQL witnessed from Python (`notebooks/README.md`).
   `--source` deploy need more than the Cloud Run and BigQuery roles).
 - The HubSpot private app has `crm.objects.deals.read`, `crm.schemas.deals.read`, `crm.objects.owners.read`; its token is in the
   shell as `HUBSPOT_TOKEN` for the `secret` step only (never in `.env`, never in git).
-- Offline checks are green: `python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py`.
+- Offline checks are green: `python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_pass3_sql.py`.
 
 ## The sequence
 
@@ -32,10 +32,11 @@ DRYRUN=1 $D all                   # rehearsal: prints every gcloud/bq command, r
 $D check-env                      # .env complete, no placeholders
 $D enable-apis                    # run, cloudbuild, artifactregistry, secretmanager, cloudscheduler, bigquery
 $D iam                            # SA new-deals-fn, bigquery.jobUser, run.builder for the Cloud Build SA
-$D tables                         # CREATE SCHEMA IF NOT EXISTS; report_state (+lock_until), new_deals, new_deals_runs, view; dataEditor GRANT
+$D tables                         # CREATE SCHEMA IF NOT EXISTS; report_state (+lock_until), new_deals, new_deals_runs (+data_gaps), new_deals_history, deals_raw, labels_raw, view; dataEditor GRANT
+$D routines                       # hot_score_v1 UDF, deals_landed_v1 + new_deals_batch_rows, new_deals_batch (OR REPLACE) — the function CALLs them (pass 3)
 
 # ── look ──────────────────────────────────────────────────────────────────────────────────────────
-bq ls --project_id=$PROJECT $DATASET                                     # four tables, one view
+bq ls --project_id=$PROJECT $DATASET                                     # six tables, one view (deals_raw, labels_raw since pass 3)
 bq show --schema --format=prettyjson $PROJECT:$DATASET.new_deals | python3 -m json.tool | head -40
 
 IFS= read -rsp 'HUBSPOT_TOKEN: ' HUBSPOT_TOKEN; echo
@@ -48,7 +49,7 @@ $D invoker                        # run.invoker for the SA; two Scheduler jobs c
 gcloud run services describe $FN --region $REGION --format 'value(status.url,spec.template.spec.containers[0].image)'
 gcloud scheduler jobs list --location $REGION                            # both jobs PAUSED
 
-$D dry                            # THE GATE: ?dry_run=1 for both entities — reads watermark + warehouse twins, writes nothing;
+$D dry                            # THE GATE: ?dry_run=1 for both entities — reads the watermark, lands the slice with mode = dry, CALLs with mode = dry; one runs row, nothing else;
                                   #           asserts rows_written == 0 and dry_run == true
 
 # ── look ──────────────────────────────────────────────────────────────────────────────────────────
@@ -56,7 +57,7 @@ URL=$($D url | tail -1)           # `url` prints the check-env lines first; the 
 curl -sSf -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?entity=SEALSQ&dry_run=1" | python3 -m json.tool | less
 $D logs                           # JSON lines: {"severity","message","entity","dry_run","rows","window"}
 
-$D run SEALSQ                     # first LIVE window run (one entity, by hand): per-run staging → MERGE → history → watermark;
+$D run SEALSQ                     # first LIVE window run (one entity, by hand): land deals_raw/labels_raw → CALL new_deals_batch (MERGE, history, runs row) → watermark;
 $D run ICALPS                     # an HTTP 403 (caller lacks run.invoker) or 409 (lease held) fails the step instead of printing a payload
 
 # ── look, from the warehouse ─────────────────────────────────────────────────────────────────────
@@ -85,16 +86,18 @@ prerequisite: `roles/bigquery.dataViewer` on the dataset for the readers.
 `sql/apply.sh`, `writeback/deploy_job.sh` (dry executions until `deploy_job.sh live`). Prerequisite: a second private app with
 `crm.objects.deals.write` stored as `hubspot-token-write`. The read-only token of scenario A cannot write.
 
-**Why no second loader.** Scenario B2 (`workflows/NEW_DEALS_FULL.json`) and scenario C (`sql/new_deals_weekly.sql`) MERGE into the
-*same* `hubspot.new_deals` on `deal_id` with the *same* frozen columns and the *same* arithmetic (`scoring/`), and keep their own
-`report_state` rows (`NEW_DEALS_<entity>` for A and B2, `NEW_DEALS_<entity>_C` for C). Running two lanes in the same week is safe
-on the data side; it only doubles the compute. Pick one orchestrator per entity and pause the others' schedulers.
+**Why no second loader.** Since pass 3 every lane CALLs the same procedure (`sql/new_deals_batch.sql`) over the raw root: lane A
+(the function) after landing its search, lane C (`sql/new_deals_weekly.sql`) after landing its 90-day set from the sync. Both MERGE
+into the *same* `hubspot.new_deals` on `deal_id` with the *same* frozen columns and the *same* arithmetic (the `hot_score_v1` UDF),
+and keep their own `report_state` rows (`NEW_DEALS_<entity>` for A, `NEW_DEALS_<entity>_C` for C); the procedure refuses to advance
+C's row while A holds the entity's lease. Running both in the same week is safe on the data side; it only doubles the compute. Pick
+one orchestrator per entity and pause the other's schedule. The n8n B2 lane was retired in pass 3 phase 3 (D6).
 
 ## What each stage produces, and where to look
 
 | Stage | Produces | Look with |
 |---|---|---|
-| `tables` | dataset, `report_state`, `new_deals`, `new_deals_runs`, `new_deals_last_7d` | `bq ls`, `bq show --schema` |
+| `tables` | dataset, `report_state`, `new_deals`, `new_deals_runs` (+`data_gaps`), `new_deals_history`, `deals_raw`, `labels_raw` (pass 3), `new_deals_last_7d` | `bq ls`, `bq show --schema` |
 | `secret` | Secret Manager `hubspot-token` version | `gcloud secrets versions list hubspot-token` |
 | `deploy` | Cloud Run service revision at `https://<fn>-<hash>-<region>.run.app` | `gcloud run services describe`, `gcloud run revisions list` |
 | `invoker` | IAM binding, two paused Scheduler jobs | `gcloud scheduler jobs list` |
@@ -113,10 +116,12 @@ The state the function keeps is `report_state`: a missing row means "never ran";
 
 ## Pitfalls
 
-- **Dry mode writes nothing — including the audit row.** `new_deals_runs` shows live runs only; dry runs are visible in `$D logs`.
+- **Dry mode writes nothing to the sink or the state.** It lands its slice with `mode = 'dry'` and leaves one `new_deals_runs` row with
+  `dry_run = TRUE`, `rows_written = 0` (D1); `$D status` shows it.
 - **Generated files are never edited.** `workflows/NEW_DEALS_*.json` come from `workflows/src/build_workflow.py`; `tests/hot_score_vectors.*`
   from `tests/test_hot_score.py`; the tree from `docs/architecture.yaml`; the workbook from `docs/execution_surfaces.yaml`.
 - **Event mode is not deployed in A.** The code path exists (`mode: event`), but a HubSpot workflow webhook cannot present a Google
   OIDC token to a private service; a relay belongs to scenario B if wanted.
 - **`amount_kusd` holds `amount_in_home_currency` as stored.** Confirm the unit from the first dry-run payload before the README promises kUSD.
-- **Both schedulers in the same minute was a bug** (shared staging + 429s); they are 20 minutes apart now and the staging table is per run.
+- **Both schedulers in the same minute was a bug** (shared staging + 429s); they are 20 minutes apart now and the staging table is gone
+  (the procedure MERGEs from a TEMP table of its own).

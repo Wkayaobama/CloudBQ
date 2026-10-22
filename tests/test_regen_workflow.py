@@ -38,6 +38,7 @@ def test_inline_workflow_shape():
     assert "ref" not in job["steps"][0]["with"], "the event's default ref: a local branch on push, the merge ref on pull_request (forks included)"
     assert job["steps"][0]["uses"] == "actions/checkout@v7" and job["steps"][0]["with"]["persist-credentials"] is True
     assert "Regenerated-by:" in job["if"] and "github.ref_type == 'branch'" in job["steps"][-1]["env"]["BRANCH"]
+    assert g["doc"]["concurrency"]["group"].startswith("regenerate-"), "an inline workflow serialises itself per ref"
     assert "git diff --staged --quiet" in job["steps"][-1]["run"] and "No changes to commit" in job["steps"][-1]["run"]
     assert job["steps"][-1]["env"]["PATHS"] == "README.md" and "pull_request" in job["steps"][-1]["env"]["MODE"]
 
@@ -48,6 +49,7 @@ def test_local_and_remote_callers():
     assert local["with"]["paths"] == "docs/*.txt" and local["with"]["mode"] == "check" and local["with"]["run"].strip() == "python3 tree.py"
     assert "Regenerated-by:" in local["if"]
     assert local["secrets"] == {"REGEN_TOKEN": "${{ secrets.REGEN_TOKEN }}"}, "one secret in both caller modes"
+    assert gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs/*.txt", "--mode", "local")["doc"]["concurrency"]["group"].startswith("regenerate-")
     g = gen("--name", "Trees", "--run", "python3 tree.py", "--paths", "docs", "--mode", "Owner/Repo@v1")
     remote = g["doc"]["jobs"]["regenerate"]
     assert remote["uses"] == "Owner/Repo/.github/workflows/regenerate.yml@v1"
@@ -94,6 +96,7 @@ def test_reusable_workflow_shape():
     job = g["doc"]["jobs"]["regenerate"]
     assert job["permissions"] == {"contents": "write"} and job["steps"][-1]["name"] == "Commit or check"
     assert COMMIT.read_text().splitlines()[-1].strip() in job["steps"][-1]["run"], "the shell is embedded verbatim"
+    assert "concurrency" not in g["doc"], "the caller owns the concurrency group; a called workflow claiming the same group deadlocks (cancelled by GitHub)"
 
 
 def _git(cwd: Path, *args: str) -> str:

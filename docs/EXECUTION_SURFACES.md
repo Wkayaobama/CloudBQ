@@ -15,7 +15,8 @@ pasted into §5 verbatim.
 |---|---|---|---|---|
 | **A** · Cloud Run function | `git clone`; `deploy.sh deploy` (source build) | Cloud Run gen2 service, python312, 1 instance × 1 request, scale to zero | Cloud Scheduler → `GET ?entity=…` with OIDC; `deploy.sh dry/run` by hand | `hubspot.report_state`, `hubspot.new_deals`, `new_deals_runs`, `new_deals_history` |
 | **B** · n8n on Cloud Run | pinned `n8nio/n8n` image; `deploy/n8n/*.sh`; workflow JSON imported by id | n8n on Cloud Run + Cloud SQL Postgres, minScale 0 | Cloud Scheduler → webhook with `X-Delivery-Token`; manual execution = rehearsal | the same BigQuery tables; n8n credentials + executions in Cloud SQL |
-| **C** · Hybrid | `sql/apply.sh`, `sql/scheduled_query.sh`, `writeback/deploy_job.sh` | BigQuery scheduled queries (UTC) + Node 22 Cloud Run job | DTS sync 02:00 UTC → scheduled query Mon 04:00 UTC → Scheduler → `jobs.run` 05:30 Zurich | the same BigQuery tables (`report_state` row `…_C`), `writeback_log`; HubSpot properties `hot_score_v1`/`hot_flag_v1` |
+| **C** · Hybrid | `sql/apply.sh`, `sql/scheduled_query.sh`, `writeback/deploy_job.sh` | BigQuery scheduled queries (UTC) + Node 22 Cloud Run job | DTS sync 02:00 UTC → scheduled query Mon 03:53 / 04:23 UTC → Scheduler → `jobs.run` 05:30 Zurich | the same BigQuery tables (`report_state` row `…_C`), `writeback_log`; HubSpot properties `hot_score_v1`/`hot_flag_v1` |
+| **R** · The raw root + the one SQL implementation (pass 3) | `deploy.sh tables` + `deploy.sh routines` (lane A) or `sql/apply.sh` (lane C) | BigQuery only: `deals_raw` / `labels_raw` → `deals_landed_v1` → `new_deals_batch_rows` → `new_deals_batch`; no runtime, no trigger, no secret — A and C CALL it after landing their inputs | the tables of the dataset (the same state as every lane) |
 
 Parity of a layer or a step is one of three words. **Parallel**: same artefact and same result on every lane whatever runtime
 produces it, pinned by a test or an equality check (outcome parity — the columns are scenarios, not terminals, so "same mechanism"
@@ -39,7 +40,7 @@ Pipeline steps: {'Parallel': 2, 'Conditional': 5, 'Divergent': 6}  rows=13  (wha
 
 The four **Parallel** layers — L5 scoring, L7 MERGE, L8 watermark, L13 audit — are the parallel lane: the idempotent outcome that
 holds whichever orchestrator runs. Parity here is *outcome* parity (stated in the workbook's legend and `parity_meanings`): three code
-paths that must produce the same tables, keys, constants and audit rows, pinned by `tests/` for Python == JS and by the equality checks
+paths that must produce the same tables, keys, constants and audit rows, pinned by `tests/` (Python oracle == SQL UDF; since pass 3 one SQL implementation for every lane) and by the equality checks
 for SQL once credentials exist. The four **Conditional** layers (L3 trigger clock, L6 duplicate horizon, L11 rehearsal, L12 replay window)
 name their condition; the ten **Divergent** layers name the file that makes the lanes equivalent. Remediation rows R01–R46 are the user's
 risk table plus every skeptic-confirmed gap of the three discovery reports, each with the commit or the open item that answers it.
@@ -64,6 +65,10 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 | 2026-10-14 | the committed `tree /f` renders listed an empty directory and named the root after the checkout folder, so CI's `tree_f --check` failed on every runner; the ledger check needed full history | the first PR run (`verify` job) | `8d14e0d` — walker drops empty dirs, root = project name, `fetch-depth: 0` |
 | 2026-10-16 | pre-run adversarial review (3 critics, 6 confirmed): `secret_version()` returned the Secret Manager resource path, not the number (R47); service-account ID tokens without the URL audience (R48); `enable` not idempotent (R49); `run` passed JSON error bodies as payloads (R50); bare NULLs in the vector SQL (R51) | reading `deploy.sh`, gcloud's formatter, google-auth source | `574e954` — `value(name.basename())`, `--audiences`, state-checked enable/pause, `curl -sSf`, typed NULLs |
 | 2026-10-16 | the operator runbook tied `BQ_LOCATION` to the Cloud Run region, used a second `run` as the idempotency check, blamed a `dry` 403 on `invoker`, carried portal 49610528; its offline tests would have failed on import in Cloud Shell (R52, R53) | review of the draft against `deploy.sh`, mir-load `run_pass1.sh` (mrload in EU), the connected HubSpot account (hub 9201667) | `docs/RUNBOOK_CLOUD_SHELL.md` (this commit), `e88c27a` (PASS1 corrections, notebook) |
+| 2026-10-21 | both lanes reconstruct their outputs per run but never persist their inputs: the search result is consumed by `shape()` and discarded, six hot-score inputs are columns of no table, lane C's batch is a TEMP table over a full-refresh sync — a past run's score, duplicates, labels and report cannot be recomputed from BigQuery (R54) | the operator's DAG proposal, answered by reading `main.py`, `new_deals_weekly.sql`, `deals_synced_v1.sql`, `sync_transfer.sh`; plan reviewed by three critics | `docs/PASS3_RAW_ROOT.md` — phase 1 (136c77e; review follow-ups in this commit): `deals_raw` / `labels_raw` keyed like `new_deals_history`, landed by both lanes before anything is computed, `data_gaps` on the runs row, `sql/backfill_raw.sh`; phases 2–3 pending |
+| 2026-10-21 | four live copies of the batch arithmetic (`main.py`, the weekly script, the n8n Code node, the `.mjs`) — "same arithmetic everywhere" held by tests, not by one implementation | `docs/PASS3_RAW_ROOT.md` §0 | phase 2 (this commit): `sql/deals_landed_v1.sql` (view + table function) and `sql/new_deals_batch.sql` (procedure) over the root; lane C lands and CALLs; the executed check `tests/pass3_batch_vectors.sql` awaits credentials; lane A hands off in phase 3 |
+| 2026-10-21 | lane A still shaped and scored in Python after phase 2, and the n8n B2 copy still existed — three implementations for one batch | `docs/PASS3_RAW_ROOT.md` §5 phase 3 | phase 3 (this commit): the function lands and CALLs `new_deals_batch`; dry per D1; payload from the tables; `merge_rows`/`write_history`/`recent_names` and the staging table gone; B2 and the `.mjs` retired (D6); `shape()`/`hot_score()` are test oracles |
+| 2026-10-21 | the lane matrix showed the shared SQL path as text inside the A and C cells, so the parallel lane read as "three code paths that must agree" after it had become one | the pass-3 finding (R54) | lane **R** added to `docs/execution_surfaces.yaml` (a fourth column: 18 layer cells, 13 step cells; L6 flips to Parallel, D3); `build_surfaces_xlsx.py` takes two to six surfaces; scenario R in `docs/architecture.yaml` |
 
 (Append-only. Never rewrite a past row; add a new one when the situation changes.)
 
@@ -71,13 +76,13 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 
 | Operation | A | B | C | Parity |
 |---|---|---|---|---|
-| Score a deal | `main.hot_score()` | generated Code node | `hubspot.hot_score_v1` UDF | **Parallel** (vectors: Python == JS; SQL check ready) |
-| Write the rows | per-run staging → MERGE | inline-JSON MERGE | TEMP table → MERGE in a transaction | **Parallel** in outcome (same table, key, frozen columns) |
+| Score a deal | the `hot_score_v1` UDF through `new_deals_batch_rows` (since pass 3; `main.hot_score()` is the oracle) | B2 retired (D6) | `hubspot.hot_score_v1` UDF | **Parallel** (one UDF; vectors: Python oracle == SQL) |
+| Write the rows | land → CALL `new_deals_batch` | B2 retired (D6) | land → CALL `new_deals_batch` | **Parallel** — one procedure: TEMP table → MERGE in a transaction (same table, key, frozen columns) |
 | Advance state | `report_state` after MERGE (lease) | `report_state` after MERGE node | `report_state …_C` in the same transaction | Conditional: distinct rows per lane |
 | Rehearse | `deploy.sh dry` | `?dry_run=1` on the webhook / manual execution | `DISABLE_SCHEDULE=1` + one `bq mk --transfer_run`; job with `WRITEBACK_APPROVE` unset | Conditional: C's SQL rehearsal writes to real tables (use a dev dataset) |
 | Probe | `deploy.sh probe` | same `bq query` | same `bq query` + `writeback_log` | **Parallel** |
 | Deliver | POST to `NEW_DEALS_DELIVERY` | native tail | Breeze/BI read the views; optional POST | Divergent |
-| Write back | — | optional HubSpot node | `writeback/index.mjs` | Divergent (only C and B2 can) |
+| Write back | — | — (B2 retired) | `writeback/index.mjs` | Divergent (only C can) |
 
 ## 5. The probe that closes the reconciliation ({date}, {project}, {lane})
 
@@ -91,7 +96,8 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 - **First authenticated run** of everything: `bq query < tests/hot_score_vectors.sql` (UDF parity), `deploy.sh dry`, the DTS transfer.
 - **`hubspot-token-write` private app** (`crm.objects.deals.write`) and a one-off `crm.schemas.deals.write` token for `bootstrap_property.sh` — **awaiting the operator**.
 - **Synced table and column names** for lane C (`SYNC_DATASET`, `SYNC_DEALS_TABLE`, `SYNC_OWNERS_TABLE`) — known after the first transfer run.
-- **n8n HTTP Request pagination parameters** in `NEW_DEALS_FULL.json` are best-effort: validate once in the editor on import.
+- ~~n8n HTTP Request pagination parameters in `NEW_DEALS_FULL.json`~~ — closed: B2 was retired in pass 3 phase 3 (D6); only the
+  B1 delivery workflow is imported now.
 - **Event mode** (HubSpot workflow → function) — code kept, not deployed; a relay through n8n is **not implemented, awaiting consent**.
 - **`amount_kusd` unit** — confirm from the first dry-run payload.
 - **LibreOffice recalculation** of the workbook is unavailable in the build sandbox; `--verify` prints the values the formulas show, and
@@ -100,6 +106,6 @@ risk table plus every skeptic-confirmed gap of the three discovery reports, each
 ## 7. Keeping the parity
 
 After each stage compare what the *Equality checks* sheet names: dry-run counts per entity across lanes, rows per entity in
-`hubspot.new_deals`, both state rows, unchanged counts after a second identical run, one deal's score across the three runtimes,
+`hubspot.new_deals`, both state rows, unchanged counts after a second identical run, one deal's score through the one UDF (Python oracle agreeing),
 and an empty `hot_deals_v1_writeback` after a write-back. Two lanes on the same constants, the same tables and the same window
 produce the same numbers; any difference points at one of the 18 layers.

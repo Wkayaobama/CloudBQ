@@ -80,7 +80,7 @@ does not ship them, so install them once into a virtualenv in `$HOME` (it persis
 ```bash
 python3 -m venv ~/.venvs/cloudbq && source ~/.venvs/cloudbq/bin/activate
 pip install -q -r cloud_function_new_deals/requirements.txt pyyaml pytest
-python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_n8n_code.py
+python3 tests/test_hot_score.py && python3 tests/test_main_offline.py && python3 tests/test_pass3_sql.py
 $D check-env                   # check: project=wisekeybq region=europe-west6 dataset=mrload fn=new-deals-report sa=new-deals-fn@wisekeybq.iam.gserviceaccount.com …
 DRYRUN=1 $D all                # prints every gcloud/bq command, runs nothing
 ```
@@ -96,10 +96,11 @@ Read the printed commands once: your project, region, dataset and `new-deals-fn@
 $D enable-apis
 $D iam
 $D tables
+$D routines                       # pass 3: the UDF, the view, the table function and the procedure the function CALLs (no SYNC_* needed)
 
 # look
 gcloud iam service-accounts list --project "$MY_PROJECT"                         # check: new-deals-fn
-bq ls --project_id="$MY_PROJECT" "$MY_DATASET"                                   # check: report_state, new_deals, new_deals_runs, new_deals_history, new_deals_last_7d (view)
+bq ls --project_id="$MY_PROJECT" "$MY_DATASET"                                   # check: report_state, new_deals, new_deals_runs, new_deals_history, deals_raw, labels_raw, new_deals_last_7d (view)
 ```
 
 ## Phase 5: the HubSpot token

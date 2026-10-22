@@ -1,5 +1,5 @@
 Folder PATH listing for volume CloudBQ
-Volume serial number is 6C596755 5069:2285
+Volume serial number is 74C3DF65 8067:5384
 CloudBQ
 │   .aider.conf.yml
 │   .aiderignore
@@ -25,18 +25,24 @@ CloudBQ
 │       │   │   │
 │       │   │   └───recipes
 │       │   │           a_deploy_canonical.md
+│       │   │           a_hand_off.md
 │       │   │           a_main_idempotency.md
 │       │   │           a_notebook_witness.md
+│       │   │           a_raw_root.md
 │       │   │           b_n8n_cloud_run.md
 │       │   │           b_workflows_generated.md
 │       │   │           c_bigquery_compute.md
+│       │   │           c_company_tiers.md
 │       │   │           c_l2_deal_tiers.md
+│       │   │           c_raw_batch.md
 │       │   │           c_writeback_job.md
+│       │   │           docs_lane_r.md
 │       │   │           docs_pass1_set.md
 │       │   │           docs_universal_workflow.md
 │       │   │           scoring_hot_score_ports.md
 │       │   │           tooling_regen_workflow.md
 │       │   │           tooling_reusable_skills.md
+│       │   │           tooling_surfaces_n_lanes.md
 │       │   │
 │       │   ├───references
 │       │   │       aider-0.86-commit-signature.md
@@ -113,7 +119,6 @@ CloudBQ
 │           cloudsql.sh
 │           deploy_n8n.sh
 │           import_workflows.sh
-│           scheduler.sh
 │           secrets.sh
 │           service.yaml
 │
@@ -131,6 +136,7 @@ CloudBQ
 │   │   execution_surfaces_tooling.yaml
 │   │   PASS1_SEQUENCE.md
 │   │   PASS2_L2_TIERS.md
+│   │   PASS3_RAW_ROOT.md
 │   │   RUNBOOK_CLOUD_SHELL.md
 │   │   SCENARIOS.md
 │   │
@@ -148,23 +154,31 @@ CloudBQ
 │
 ├───notebooks
 │       cloudbq_deploy_and_witness.ipynb
+│       company_tiers.ipynb
 │       l2_deal_tiers.ipynb
 │       README.md
 │
 ├───scoring
 │       deal_tiers_v1.constants.json
 │       hot_score_v1.constants.json
-│       hot_score_v1.mjs
 │       hot_score_v1.sql
 │       README.md
 │
 ├───sql
 │       apply.sh
 │       audit_tables.sql
+│       backfill_raw.sh
+│       company_tiers_apply.sql
+│       company_tiers_body.sql
+│       company_tiers_schedule.sh
+│       company_tiers_v1.sql
+│       deals_landed_v1.sql
 │       deals_synced_v1.sql
 │       deal_tiers_apply.sql
 │       deal_tiers_v1.sql
 │       hot_deals_v1.sql
+│       land_raw.sql
+│       new_deals_batch.sql
 │       new_deals_weekly.sql
 │       refresh_pipeline_labels.sh
 │       scheduled_query.sh
@@ -173,25 +187,24 @@ CloudBQ
 ├───tests
 │       hot_score_vectors.json
 │       hot_score_vectors.sql
+│       pass3_batch_vectors.sql
+│       test_company_tiers.py
 │       test_deal_tiers.py
 │       test_docs_consistency.py
 │       test_hot_score.py
 │       test_hot_score_sql_duckdb.py
 │       test_main_offline.py
-│       test_n8n_code.py
 │       test_notebook.py
+│       test_pass3_sql.py
 │       test_regen_workflow.py
 │
 ├───workflows
 │   │   credentials.map.json.example
 │   │   NEW_DEALS_DELIVERY.json
 │   │   NEW_DEALS_ERRORS.json
-│   │   NEW_DEALS_FULL.json
 │   │
 │   └───src
 │           build_workflow.py
-│           node_code.template.js
-│           shape_score.js
 │
 └───writeback
         bootstrap_property.sh

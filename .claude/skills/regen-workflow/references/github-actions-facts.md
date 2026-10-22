@@ -17,6 +17,9 @@
   be pushed to — the skill forces mode `check` on `pull_request`. On `push`, `workflow_dispatch` and `schedule` the default checkout is a
   local branch named after `github.ref_name`; `github.ref_type` tells a tag run apart (nothing to push to → exit 2).
 - `concurrency.group` at workflow level serialises runs per ref; `cancel-in-progress: false` lets a queued regeneration run after the current one.
+  The group is declared by the workflow that runs — an inline workflow or a thin caller — never by the reusable workflow: a called
+  workflow whose top-level group equals its caller's is cancelled at startup ("Canceling since a deadlock was detected for concurrency
+  group '…' between a top level workflow and '<job>'"; observed on CloudBQ main, run 38958479320, 2026-10-16).
 - Action majors in the generated files: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` (node24 runtime; the
   inputs used — `fetch-depth`, `token`, `persist-credentials`, `python-version`, `node-version` — are unchanged since the v4/v5 majors, checked
   against each action.yml on 2026-10-16). `persist-credentials: true` is the default but is set explicitly because the commit step pushes with it.

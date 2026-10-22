@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy.sh — one script is the execution surface for scenario A (Cloud Run function + Cloud Scheduler → BigQuery).
 #
-#   deploy.sh <step>      steps, in order:  check-env enable-apis iam tables secret deploy invoker  → dry →  enable
+#   deploy.sh <step>      steps, in order:  check-env enable-apis iam tables routines secret deploy invoker  → dry →  enable
 #   deploy.sh all         runs check-env … invoker (everything up to, not including, the gate)
 #   deploy.sh dry         GATE: ?dry_run=1 for both entities; asserts rows_written == 0; nothing is written
 #   deploy.sh enable      resumes the two Scheduler jobs (created paused) — only after `dry` passed
@@ -61,7 +61,7 @@ iam() {
 }
 
 tables() {
-  say "tables — dataset, report_state, new_deals, new_deals_runs, view; dataEditor grant"
+  say "tables — dataset, report_state, new_deals, new_deals_runs, new_deals_history, deals_raw, labels_raw, view; dataEditor grant"
   local rendered
   if command -v envsubst >/dev/null; then
     rendered=$(PROJECT="$PROJECT" DATASET="$DATASET" BQ_LOCATION="$BQ_LOCATION" envsubst '${PROJECT} ${DATASET} ${BQ_LOCATION}' < "$HERE/bigquery_schema.sql")
@@ -74,6 +74,20 @@ tables() {
   # DCL: principal double-quoted (single quotes are also legal GoogleSQL; the quoting was never the failure — the dataset not existing was)
   run bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false \
     "GRANT \`roles/bigquery.dataEditor\` ON SCHEMA \`${PROJECT}.${DATASET}\` TO \"serviceAccount:$(sa)\""
+}
+
+routines() {
+  # pass 3: the function CALLs new_deals_batch, which reads deals_landed_v1 / new_deals_batch_rows and the hot_score_v1 UDF. None of the
+  # four needs lane C's SYNC_* settings (sql/apply.sh does, and applies the same files again, idempotently) — so lane A creates them here.
+  say "routines — hot_score_v1 UDF, deals_landed_v1 view + new_deals_batch_rows table function, new_deals_batch procedure (OR REPLACE)"
+  local f rendered
+  for f in "$HERE/../scoring/hot_score_v1.sql" "$HERE/../sql/deals_landed_v1.sql" "$HERE/../sql/new_deals_batch.sql"; do
+    [[ -f "$f" ]] || die "missing $f (deploy from a full checkout)"
+    rendered=$(sed -e "s/\${PROJECT}/$PROJECT/g" -e "s/\${DATASET}/$DATASET/g" -e "s/\${PORTAL_ID}/$PORTAL_ID/g" "$f")
+    grep -q '\${' <<<"$rendered" && die "unrendered placeholder in $(basename "$f")"
+    if [[ "$DRYRUN" == 1 ]]; then echo "  $ bq --project_id=$PROJECT query --use_legacy_sql=false --location=$BQ_LOCATION < $(basename "$f") (rendered, $(wc -l <<<"$rendered") lines)"
+    else bq --project_id="$PROJECT" --location="$BQ_LOCATION" query --use_legacy_sql=false <<<"$rendered"; fi
+  done
 }
 
 secret() {
@@ -96,7 +110,7 @@ secret_version() {
 }
 
 deploy() {
-  say "deploy — canonical Cloud Run function deploy (source build), private, one instance, one request at a time"
+  say "deploy — canonical Cloud Run function deploy (source build), private, one instance, one request at a time (tables applied first)"
   local ver; ver=$(secret_version)
   local env="^|^BQ_PROJECT=${PROJECT}|BQ_DATASET=${DATASET}|OVERLAP_MINUTES=5|FIRST_RUN_DAYS=7|PORTAL_ID=${PORTAL_ID}|DELIVERY_WEBHOOK_URL=${DELIVERY_WEBHOOK_URL}|ORCHESTRATOR=cloud-run-function"
   local secrets="HUBSPOT_TOKEN=hubspot-token:${ver}"
@@ -198,10 +212,11 @@ case "${1:-}" in
   enable-apis) check_env; enable_apis ;;
   iam) check_env; iam ;;
   tables) check_env; tables ;;
+  routines) check_env; routines ;;
   secret) check_env; secret ;;
-  deploy) check_env; deploy ;;
+  deploy) check_env; tables; routines; deploy ;;    # tables and routines first: the function lands in deals_raw / labels_raw and CALLs new_deals_batch
   invoker) check_env; invoker ;;
-  all) check_env; enable_apis; iam; tables; secret; deploy; invoker ;;
+  all) check_env; enable_apis; iam; tables; routines; secret; deploy; invoker ;;
   dry) check_env; dry ;;
   enable) check_env; enable ;;
   pause) check_env; pause ;;

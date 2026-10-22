@@ -5,7 +5,7 @@
     python3 -m pytest tests -q                 # same as pytest
 
 Checks: (1) the constants in main.py equal scoring/hot_score_v1.constants.json (drift guard); (2) main.hot_score reproduces
-tests/hot_score_vectors.json; (3) node scoring/hot_score_v1.mjs gives the same raw score (|Δ| < 1e-9) and the same flag;
+tests/hot_score_vectors.json; (3) [retired with the n8n B2 lane and the .mjs port — pass 3 phase 3, decision D6];
 (4) writes tests/hot_score_vectors.sql, the bq query that proves the SQL UDF on the same vectors (run it once credentials exist).
 """
 from __future__ import annotations
@@ -91,23 +91,6 @@ def test_python_reproduces_vectors():
         assert (score, hot) == (c["expected"]["score"], c["expected"]["hot"]), c["id"]
 
 
-def test_js_port_matches():
-    node = shutil.which("node")
-    if not node:
-        import pytest; pytest.skip("node not installed")
-    vectors = json.loads(VEC.read_text())
-    out = subprocess.run([node, str(ROOT / "scoring" / "hot_score_v1.mjs"), str(VEC)], check=True, capture_output=True, text=True).stdout
-    got = {r["id"]: r for r in json.loads(out)}
-    for c in vectors["cases"]:
-        e, g = c["expected"], got[c["id"]]
-        if e["raw"] is None:
-            assert g["raw"] is None and g["hot"] is None, c["id"]
-        else:
-            assert abs(g["raw"] - e["raw"]) < 1e-9, (c["id"], g["raw"], e["raw"])
-            assert g["hot"] == e["hot"], c["id"]
-            assert abs(g["score"] - e["score"]) <= 0.1 + 1e-9, (c["id"], g["score"], e["score"])  # 0.1 only at an exact rounding tie
-
-
 def sql_literal(v, typ="STRING"):
     """Typed NULLs: with bare NULLs a column that is NULL in every row of the UNNEST would be typed INT64 and break the SAFE_CASTs
     and the STRING parameters of the UDF (it happens on live deals, not on the golden vectors). Backslashes are escaped too."""
@@ -139,5 +122,5 @@ if __name__ == "__main__":
     VEC.write_text(json.dumps(vectors, indent=1) + "\n")
     (ROOT / "tests" / "hot_score_vectors.sql").write_text(emit_sql(vectors))
     print(f"wrote {VEC.relative_to(ROOT)} ({len(vectors['cases'])} cases) and tests/hot_score_vectors.sql")
-    test_constants_match_json(); test_python_reproduces_vectors(); test_js_port_matches()
-    print("constants OK · python vectors OK · JS port OK (raw |Δ| < 1e-9, flags equal)")
+    test_constants_match_json(); test_python_reproduces_vectors()
+    print("constants OK · python vectors OK (the JS port was retired with B2)")

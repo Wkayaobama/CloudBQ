@@ -15,11 +15,12 @@ verdict: |
 legend: |
   Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers M0–M14 are the pass-2 layers (prefix M to
   keep them apart from pass 1's L0–L17); Pipeline steps are the pass-2 sequence in order (constants → adapter columns → sync → apply → lab
-  snapshot → bins → parity → gold MERGE → equality → property → StackSync → schedule); Remediation rows T01– record what the CRM evidence
-  of 2026-10-16 corrected. Source: branch claude/cloud-run-bigquery-pipeline-e94ziy at 2026-10-16; CRM hub 9201667 via the HubSpot connector.
+  snapshot → bins → parity → gold MERGE → equality → property → StackSync → schedule; 13–15 are pass 2b, 2026-10-22: the company object by
+  foreign-key resolution — one SQL body, the notebook dry run over @deals_payload, the shipped views and snapshot, the scheduled refresh);
+  Remediation rows T01– record what the CRM evidence of 2026-10-16 corrected (T13: what the operator's notebook cell corrected). Source: branch claude/cloud-run-bigquery-pipeline-e94ziy at 2026-10-16; CRM hub 9201667 via the HubSpot connector.
 surfaces:
-  N: N · Vertex AI Workbench notebook notebooks/l2_deal_tiers.ipynb (lab — HubSpot API snapshot, numpy.digitize, calibration, deal_tiers_lab)
-  Q: Q · BigQuery-native (sql/deal_tiers_v1.sql views + sql/deal_tiers_apply.sql scheduled MERGE over the daily HubSpot → BigQuery transfer)
+  N: 'N · Vertex AI Workbench / Colab Enterprise notebooks (l2_deal_tiers.ipynb — the lab: HubSpot API snapshot, numpy.digitize, calibration, deal_tiers_lab; company_tiers.ipynb — pass 2b: dry run over @deals_payload, ship, equality, refresh gates)'
+  Q: 'Q · BigQuery-native (sql/deal_tiers_v1.sql views + sql/deal_tiers_apply.sql scheduled MERGE over the daily HubSpot → BigQuery transfer; pass 2b: company_tiers_v1 views + sql/company_tiers_apply.sql scheduled refresh)'
   W: W · Webhook CDC (HubSpot deal.propertyChange on dealstage / icalps_oppocertainty → Cloud Run function event path → MERGE one deal)
 motions:
   - motion: N · Workbench notebook (lab)
@@ -285,6 +286,33 @@ steps:
     parity: Divergent
     artefact: bq ls --transfer_config shows the scheduled query; deal_tiers_history grows only on changes
     notes: ''
+  - n: 13
+    step: company body
+    gate: ''
+    N: 'notebooks/company_tiers.ipynb §0 renders sql/company_tiers_body.sql the way sql/apply.sh does (the include spliced, the placeholders substituted) — the notebook holds no copy of the rule'
+    Q: 'sql/company_tiers_body.sql — one CTE chain over a deal_source the including statement defines (14 columns, in order): labels → the ARR staging (stg_deals) → the icalps_dealstatus rule → three resolvers → resolved → rollup (sales_region × entity_key × tier, the deals nested)'
+    W: n/a
+    parity: Parallel
+    artefact: 'tests/test_company_tiers.py green: both assemblies render; the view''s input columns == the documented deal_source columns == the notebook''s payload fields, in order; resolver precedence 1_primary_assoc → 2_clinic_fc_map → 3_direct_company_name → 4_unresolved_fc → 5_no_fc_or_company; no DDL/DML on a sync table'
+    notes: 'The operator''s cell had added derived columns to the synced Deals table (T13); the rule now lives in the dataset, once, and every surface includes it.'
+  - n: 14
+    step: company dry run · ship · equality
+    gate: LIVE DDL
+    N: 'notebook §1 snapshot via main.HubSpot tiered as deal_tiers_v1 would → §2 the body over UNNEST(@deals_payload) (ARRAY<STRUCT>, statement_type = SELECT asserted; deal-level and company-level CSVs; "0 BigQuery tables written") → §3 ship = sql/company_tiers_v1.sql rendered as apply.sh renders it → §4 equality: the dry run''s rollup vs company_tiers_v1 per sales_region × entity_key × tier'
+    Q: 'sql/apply.sh applies sql/company_tiers_v1.sql when SYNC_COMPANIES_TABLE is set (companies_synced_v1, company_deal_input_v1, company_deals_v1, company_tiers_v1, company_tiers, company_tiers_history, company_tiers_refreshes, company_tiers_summary_v1); skipped with a notice otherwise'
+    W: n/a
+    parity: Conditional
+    artefact: 'INFORMATION_SCHEMA lists the eight objects; §4 prints identical n_deals per group when the snapshot and the sync are of the same state (otherwise differences explained by deals created, edited, deleted or re-associated in between)'
+    notes: 'Same rule, two sources (the API snapshot, the sync); the Companies asset must have transferred once (SYNC_COMPANIES_TABLE) and the ARR staging must be readable (ARR_DATASET).'
+  - n: 15
+    step: company refresh
+    gate: LIVE SCHEDULE
+    N: 'notebook §5: DRYRUN=1 sql/company_tiers_schedule.sh → gate flag → DISABLE_SCHEDULE=1 register (paused) + one manual refresh (the rendered apply with run_time) → §6 probe (company_tiers_refreshes, the summary view, the snapshot CSV) → §7 gate flag → the script without DISABLE_SCHEDULE (auto-scheduling on)'
+    Q: 'sql/company_tiers_apply.sql as the scheduled query company-tiers-refresh (SCHEDULE_UTC_COMPANY_TIERS, default every day 03:37 UTC, refused on the hour; SA new-deals-sql@ with dataEditor on the dataset, dataViewer on the sync and ARR datasets): 36 h freshness guard, TEMP batch from the view, row-count guard, one transaction (snapshot replaced, history slice, refreshes row), EXCEPTION → ROLLBACK + FAILED row + RAISE'
+    W: n/a
+    parity: Divergent
+    artefact: 'bq ls --transfer_config shows company-tiers-refresh; company_tiers_refreshes holds one OK row per run (n_rows, n_companies, n_unresolved, n_deals, duration_ms); company_tiers_history gains one slice per refresh'
+    notes: 'The pass-3 pattern (register paused → one manual run → probe → enable), with the probe on a standalone notebook kernel instead of Cloud Shell. Nothing is written into a sync table.'
 remediation:
   - id: T01
     symptom: 'The operator''s thresholds read "50 % / 75 % / 90 %"; the CRM stores both certainty properties as fractions 0–1'
@@ -370,6 +398,13 @@ remediation:
     cause: Property groups are created through their own endpoint; pass 1 used the built-in group.
     fix: 'group dealinformation (as writeback/bootstrap_property.sh); description, hasUniqueValue:false, formField:false carried like pass 1.'
     verified: this commit (constants, notebook §7)
+  - id: T13
+    symptom: 'The operator''s notebook cell ALTERed the synced Deals table (unified_probability, tier, … added) and MERGEd a CSV into it, then built vw_company_tiers_v1 / mv_company_tiers_v1 on those columns; the next transfer run overwrites the sync table, and the rule existed only in the cell'
+    layer: M7
+    surfaces: N Q
+    cause: Derived columns written into a transfer-owned table; a third copy of the tiering (lab, lane Q, the cell) with no test keeping them equal.
+    fix: 'Pass 2b: the rule once in sql/company_tiers_body.sql, included by the views (Q) and by the notebook''s dry run over @deals_payload (N); the derived columns live in company_tiers (dataset objects, refreshed by sql/company_tiers_apply.sql); tests/test_company_tiers.py asserts no DDL/DML on a sync table and the same input columns on every surface.'
+    verified: this commit — tests green; the notebook has not yet run against wisekeybq
 equality_checks:
   - stage: after the lab snapshot
     compare: per-deal bin_index — numpy.digitize (N) vs RANGE_BUCKET (Q) on deal_tiers_lab
@@ -391,6 +426,11 @@ equality_checks:
     N: query_crm_data — SELECT deal_tier_v1, COUNT(*) FROM DEAL GROUP BY deal_tier_v1
     QW: 'SELECT tier, COUNT(*) FROM deal_tiers GROUP BY tier'
     expected: identical per label
+  - stage: after the company dry run and the ship (pass 2b)
+    compare: n_deals per sales_region × entity_key × tier — the dry run over @deals_payload (N, the API snapshot) vs company_tiers_v1 (Q, the sync)
+    N: notebook §4 (outer join on the three keys; rows where the counts differ listed)
+    QW: 'SELECT sales_region, entity_key, tier, n_deals, resolver FROM company_tiers_v1 ORDER BY 1, 2, 3'
+    expected: identical when the snapshot and the sync are of the same state; otherwise differences explained by deals created, edited, deleted or re-associated between the transfer and the snapshot; the resolver per row equal on both sides
 parity_meanings:
   Parallel: same arithmetic, same result on every surface (one constants file)
   Conditional: same result when the stated condition holds (the sync exists, the property exists, the same snapshot)
